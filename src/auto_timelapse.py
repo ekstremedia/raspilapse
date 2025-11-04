@@ -316,19 +316,26 @@ class AdaptiveTimelapse:
 
         Args:
             mode: Light mode
-            settings: Camera control settings
+            settings: Camera control settings (PascalCase libcamera controls)
 
         Returns:
             Tuple of (image_path, metadata_path)
         """
         logger.info(f"Capturing frame #{self.frame_count} in {mode} mode...")
+        logger.debug(f"Settings: {settings}")
 
-        # Apply settings to camera config
-        self.camera_config.config["camera"]["controls"] = settings
+        # Create ImageCapture instance
+        capture = ImageCapture(self.camera_config)
 
-        # Capture image
-        with ImageCapture(self.camera_config) as capture:
+        # Initialize camera with our custom controls
+        capture.initialize_camera(manual_controls=settings)
+
+        try:
+            # Capture the image
             image_path, metadata_path = capture.capture()
+        finally:
+            # Always close the camera
+            capture.close()
 
         self.frame_count += 1
         return image_path, metadata_path

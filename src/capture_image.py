@@ -107,8 +107,14 @@ class ImageCapture:
         self._counter = 0
         logger.debug("ImageCapture instance created")
 
-    def initialize_camera(self):
-        """Initialize and configure the camera."""
+    def initialize_camera(self, manual_controls: Optional[Dict] = None):
+        """
+        Initialize and configure the camera.
+
+        Args:
+            manual_controls: Optional dict of controls to apply during configuration.
+                           These override config file controls.
+        """
         logger.info("Initializing camera...")
 
         try:
@@ -129,9 +135,29 @@ class ImageCapture:
             # Create camera configuration
             resolution = self.config.get_resolution()
             logger.info(f"Setting camera resolution to {resolution[0]}x{resolution[1]}")
-            camera_config = self.picam2.create_preview_configuration(
-                main={"size": resolution}
-            )
+
+            # Prepare controls - merge manual_controls with config controls
+            controls_to_apply = {}
+            config_controls = self.config.get_controls()
+            if config_controls:
+                controls_to_apply = self._prepare_control_map(config_controls)
+
+            if manual_controls:
+                # Manual controls override config controls
+                manual_map = self._prepare_control_map(manual_controls)
+                controls_to_apply.update(manual_map)
+                logger.debug(f"Applying manual controls: {manual_controls}")
+
+            # Create configuration with controls embedded
+            if controls_to_apply:
+                camera_config = self.picam2.create_still_configuration(
+                    main={"size": resolution}, controls=controls_to_apply
+                )
+                logger.debug(f"Camera configured with controls: {controls_to_apply}")
+            else:
+                camera_config = self.picam2.create_still_configuration(
+                    main={"size": resolution}
+                )
 
             # Apply transforms
             transforms = self.config.get_transforms()
@@ -156,26 +182,23 @@ class ImageCapture:
             logger.debug("Waiting for camera to stabilize (2 seconds)...")
             time.sleep(2)
 
-            # Apply camera controls if specified
-            controls = self.config.get_controls()
-            if controls:
-                logger.debug(f"Applying camera controls: {controls}")
-                self._apply_controls(controls)
-
             logger.info("Camera initialization complete")
 
         except Exception as e:
             logger.error(f"Failed to initialize camera: {e}")
             raise
 
-    def _apply_controls(self, controls: Dict):
+    def _prepare_control_map(self, controls: Dict) -> Dict:
         """
-        Apply camera controls.
+        Prepare control map for libcamera.
 
-        Accepts both snake_case (from config file) and PascalCase (direct control) keys.
+        Converts both snake_case and PascalCase keys to proper libcamera format.
 
         Args:
             controls: Dictionary of control settings
+
+        Returns:
+            Dictionary ready for libcamera
         """
         control_map = {}
 
@@ -215,6 +238,16 @@ class ImageCapture:
         if "AfMode" in controls:
             control_map["AfMode"] = controls["AfMode"]
 
+        return control_map
+
+    def _apply_controls(self, controls: Dict):
+        """
+        Apply camera controls to an already-started camera (legacy method).
+
+        Args:
+            controls: Dictionary of control settings
+        """
+        control_map = self._prepare_control_map(controls)
         if control_map:
             logger.debug(f"Applying controls to camera: {control_map}")
             self.picam2.set_controls(control_map)
@@ -250,11 +283,6 @@ class ImageCapture:
             raise RuntimeError(
                 "Camera not initialized. Call initialize_camera() first."
             )
-
-        # Re-apply controls from config before each capture (in case they changed)
-        controls = self.config.get_controls()
-        if controls:
-            self._apply_controls(controls)
 
         logger.info(f"Starting image capture #{self._counter}")
 
