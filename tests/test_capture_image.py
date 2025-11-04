@@ -10,7 +10,7 @@ import pytest
 import yaml
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.capture_image import CameraConfig, ImageCapture, capture_single_image
 
@@ -25,17 +25,17 @@ def mock_picamera2():
     # Create mock camera instance
     mock_camera = MagicMock()
     mock_camera.create_preview_configuration.return_value = {}
-    mock_camera.capture_metadata.return_value = {'test': 'metadata'}
+    mock_camera.capture_metadata.return_value = {"test": "metadata"}
 
     # Set up the mock modules
     mock_picam2_module.Picamera2.return_value = mock_camera
     mock_libcamera_module.Transform.return_value = MagicMock()
 
     # Patch sys.modules
-    with patch.dict('sys.modules', {
-        'picamera2': mock_picam2_module,
-        'libcamera': mock_libcamera_module
-    }):
+    with patch.dict(
+        "sys.modules",
+        {"picamera2": mock_picam2_module, "libcamera": mock_libcamera_module},
+    ):
         yield mock_camera
 
 
@@ -43,27 +43,27 @@ def mock_picamera2():
 def test_config_file():
     """Create a temporary test configuration file."""
     config_data = {
-        'camera': {
-            'resolution': {'width': 1280, 'height': 720},
-            'transforms': {'horizontal_flip': False, 'vertical_flip': False},
-            'controls': {}
+        "camera": {
+            "resolution": {"width": 1280, "height": 720},
+            "transforms": {"horizontal_flip": False, "vertical_flip": False},
+            "controls": {},
         },
-        'output': {
-            'directory': 'test_photos',
-            'filename_pattern': '{name}_{counter}.jpg',
-            'project_name': 'test_project',
-            'quality': 85,
-            'organize_by_date': False,
-            'date_format': '%Y-%m-%d'
+        "output": {
+            "directory": "test_photos",
+            "filename_pattern": "{name}_{counter}.jpg",
+            "project_name": "test_project",
+            "quality": 85,
+            "organize_by_date": False,
+            "date_format": "%Y-%m-%d",
         },
-        'system': {
-            'create_directories': True,
-            'save_metadata': True,
-            'metadata_filename': '{name}_{counter}_metadata.json'
-        }
+        "system": {
+            "create_directories": True,
+            "save_metadata": True,
+            "metadata_filename": "{name}_{counter}_metadata.json",
+        },
     }
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
         yaml.dump(config_data, f)
         config_path = f.name
 
@@ -89,13 +89,13 @@ class TestCameraConfig:
         """Test successful configuration loading."""
         config = CameraConfig(test_config_file)
         assert config.config is not None
-        assert 'camera' in config.config
-        assert 'output' in config.config
+        assert "camera" in config.config
+        assert "output" in config.config
 
     def test_load_config_missing_file(self):
         """Test error handling for missing config file."""
         with pytest.raises(FileNotFoundError):
-            CameraConfig('nonexistent.yml')
+            CameraConfig("nonexistent.yml")
 
     def test_get_resolution(self, test_config_file):
         """Test resolution retrieval."""
@@ -107,17 +107,17 @@ class TestCameraConfig:
     def test_get_output_directory(self, test_config_file):
         """Test output directory retrieval."""
         config = CameraConfig(test_config_file)
-        assert config.get_output_directory() == 'test_photos'
+        assert config.get_output_directory() == "test_photos"
 
     def test_get_filename_pattern(self, test_config_file):
         """Test filename pattern retrieval."""
         config = CameraConfig(test_config_file)
-        assert config.get_filename_pattern() == '{name}_{counter}.jpg'
+        assert config.get_filename_pattern() == "{name}_{counter}.jpg"
 
     def test_get_project_name(self, test_config_file):
         """Test project name retrieval."""
         config = CameraConfig(test_config_file)
-        assert config.get_project_name() == 'test_project'
+        assert config.get_project_name() == "test_project"
 
     def test_get_quality(self, test_config_file):
         """Test quality setting retrieval."""
@@ -138,8 +138,8 @@ class TestCameraConfig:
         """Test transforms retrieval."""
         config = CameraConfig(test_config_file)
         transforms = config.get_transforms()
-        assert transforms['horizontal_flip'] is False
-        assert transforms['vertical_flip'] is False
+        assert transforms["horizontal_flip"] is False
+        assert transforms["vertical_flip"] is False
 
 
 class TestImageCapture:
@@ -171,7 +171,7 @@ class TestImageCapture:
         config = CameraConfig(test_config_file)
         capture = ImageCapture(config)
 
-        with patch.dict('sys.modules', {'picamera2': None}):
+        with patch.dict("sys.modules", {"picamera2": None}):
             with pytest.raises(ImportError, match="Picamera2 not found"):
                 capture.initialize_camera()
 
@@ -183,11 +183,13 @@ class TestImageCapture:
         with pytest.raises(RuntimeError, match="Camera not initialized"):
             capture.capture()
 
-    def test_capture_creates_directory(self, mock_picamera2, test_config_file, test_output_dir):
+    def test_capture_creates_directory(
+        self, mock_picamera2, test_config_file, test_output_dir
+    ):
         """Test that capture creates output directory."""
         # Modify config to use test directory
         config = CameraConfig(test_config_file)
-        config.config['output']['directory'] = os.path.join(test_output_dir, 'new_dir')
+        config.config["output"]["directory"] = os.path.join(test_output_dir, "new_dir")
 
         capture = ImageCapture(config)
         capture.initialize_camera()
@@ -196,23 +198,27 @@ class TestImageCapture:
         # Verify directory was created
         assert os.path.exists(config.get_output_directory())
 
-    def test_capture_filename_pattern(self, mock_picamera2, test_config_file, test_output_dir):
+    def test_capture_filename_pattern(
+        self, mock_picamera2, test_config_file, test_output_dir
+    ):
         """Test filename pattern generation."""
         # Modify config
         config = CameraConfig(test_config_file)
-        config.config['output']['directory'] = test_output_dir
+        config.config["output"]["directory"] = test_output_dir
 
         capture = ImageCapture(config)
         capture.initialize_camera()
         image_path, _ = capture.capture()
 
         # Verify filename follows pattern
-        assert 'test_project_0000.jpg' in image_path
+        assert "test_project_0000.jpg" in image_path
 
-    def test_capture_counter_increment(self, mock_picamera2, test_config_file, test_output_dir):
+    def test_capture_counter_increment(
+        self, mock_picamera2, test_config_file, test_output_dir
+    ):
         """Test that counter increments with each capture."""
         config = CameraConfig(test_config_file)
-        config.config['output']['directory'] = test_output_dir
+        config.config["output"]["directory"] = test_output_dir
 
         capture = ImageCapture(config)
         capture.initialize_camera()
@@ -223,14 +229,14 @@ class TestImageCapture:
         path3, _ = capture.capture()
 
         # Verify counter increments
-        assert '0000' in path1
-        assert '0001' in path2
-        assert '0002' in path3
+        assert "0000" in path1
+        assert "0001" in path2
+        assert "0002" in path3
 
     def test_metadata_saving(self, mock_picamera2, test_config_file, test_output_dir):
         """Test metadata is saved when enabled."""
         config = CameraConfig(test_config_file)
-        config.config['output']['directory'] = test_output_dir
+        config.config["output"]["directory"] = test_output_dir
 
         capture = ImageCapture(config)
         capture.initialize_camera()
@@ -241,11 +247,11 @@ class TestImageCapture:
         assert os.path.exists(metadata_path)
 
         # Verify metadata content
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, "r") as f:
             metadata = json.load(f)
-            assert 'test' in metadata  # From mock
-            assert 'capture_timestamp' in metadata
-            assert 'resolution' in metadata
+            assert "test" in metadata  # From mock
+            assert "capture_timestamp" in metadata
+            assert "resolution" in metadata
 
     def test_context_manager(self, mock_picamera2, test_config_file):
         """Test ImageCapture as context manager."""
@@ -272,21 +278,23 @@ class TestImageCapture:
 class TestConvenienceFunctions:
     """Tests for convenience functions."""
 
-    def test_capture_single_image(self, mock_picamera2, test_config_file, test_output_dir):
+    def test_capture_single_image(
+        self, mock_picamera2, test_config_file, test_output_dir
+    ):
         """Test capture_single_image convenience function."""
         # Modify config to use test directory
-        with open(test_config_file, 'r') as f:
+        with open(test_config_file, "r") as f:
             config_data = yaml.safe_load(f)
-        config_data['output']['directory'] = test_output_dir
+        config_data["output"]["directory"] = test_output_dir
 
-        with open(test_config_file, 'w') as f:
+        with open(test_config_file, "w") as f:
             yaml.dump(config_data, f)
 
         # Capture image
         image_path, metadata_path = capture_single_image(test_config_file)
 
         assert image_path is not None
-        assert 'test_project_0000.jpg' in image_path
+        assert "test_project_0000.jpg" in image_path
 
 
 # Integration tests (require actual camera hardware)
@@ -294,33 +302,32 @@ class TestIntegration:
     """Integration tests requiring actual camera hardware."""
 
     @pytest.mark.skipif(
-        not os.path.exists('/dev/video0'),
-        reason="Camera hardware not detected"
+        not os.path.exists("/dev/video0"), reason="Camera hardware not detected"
     )
     def test_real_camera_capture(self, test_output_dir):
         """Test actual image capture with real camera (if available)."""
         # Create test config
         config_data = {
-            'camera': {
-                'resolution': {'width': 640, 'height': 480},
-                'transforms': {'horizontal_flip': False, 'vertical_flip': False},
-                'controls': {}
+            "camera": {
+                "resolution": {"width": 640, "height": 480},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
             },
-            'output': {
-                'directory': test_output_dir,
-                'filename_pattern': 'test_{counter}.jpg',
-                'project_name': 'integration_test',
-                'quality': 85,
+            "output": {
+                "directory": test_output_dir,
+                "filename_pattern": "test_{counter}.jpg",
+                "project_name": "integration_test",
+                "quality": 85,
             },
-            'system': {
-                'create_directories': True,
-                'save_metadata': True,
-                'metadata_filename': 'test_{counter}_metadata.json'
-            }
+            "system": {
+                "create_directories": True,
+                "save_metadata": True,
+                "metadata_filename": "test_{counter}_metadata.json",
+            },
         }
 
-        config_file = os.path.join(test_output_dir, 'test_config.yml')
-        with open(config_file, 'w') as f:
+        config_file = os.path.join(test_output_dir, "test_config.yml")
+        with open(config_file, "w") as f:
             yaml.dump(config_data, f)
 
         try:
@@ -333,9 +340,9 @@ class TestIntegration:
 
             if metadata_path:
                 assert os.path.exists(metadata_path)
-                with open(metadata_path, 'r') as f:
+                with open(metadata_path, "r") as f:
                     metadata = json.load(f)
-                    assert 'capture_timestamp' in metadata
+                    assert "capture_timestamp" in metadata
 
         except ImportError:
             pytest.skip("Picamera2 not available")

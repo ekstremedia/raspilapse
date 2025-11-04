@@ -15,7 +15,7 @@ except ImportError:
     from logging_config import get_logger
 
 # Initialize logger
-logger = get_logger('capture_image')
+logger = get_logger("capture_image")
 
 
 class CameraConfig:
@@ -41,7 +41,7 @@ class CameraConfig:
             raise FileNotFoundError(f"Configuration file not found: {self.config_path}")
 
         try:
-            with open(config_file, 'r') as f:
+            with open(config_file, "r") as f:
                 config = yaml.safe_load(f)
                 logger.debug(f"Successfully parsed YAML configuration")
                 return config
@@ -51,44 +51,44 @@ class CameraConfig:
 
     def get_resolution(self) -> Tuple[int, int]:
         """Get camera resolution as (width, height) tuple."""
-        res = self.config['camera']['resolution']
-        return (res['width'], res['height'])
+        res = self.config["camera"]["resolution"]
+        return (res["width"], res["height"])
 
     def get_output_directory(self) -> str:
         """Get output directory path."""
-        return self.config['output']['directory']
+        return self.config["output"]["directory"]
 
     def get_filename_pattern(self) -> str:
         """Get filename pattern."""
-        return self.config['output']['filename_pattern']
+        return self.config["output"]["filename_pattern"]
 
     def get_project_name(self) -> str:
         """Get project name."""
-        return self.config['output']['project_name']
+        return self.config["output"]["project_name"]
 
     def get_quality(self) -> int:
         """Get JPEG quality setting."""
-        return self.config['output']['quality']
+        return self.config["output"]["quality"]
 
     def should_create_directories(self) -> bool:
         """Check if directories should be auto-created."""
-        return self.config['system']['create_directories']
+        return self.config["system"]["create_directories"]
 
     def should_save_metadata(self) -> bool:
         """Check if metadata should be saved."""
-        return self.config['system']['save_metadata']
+        return self.config["system"]["save_metadata"]
 
     def get_metadata_pattern(self) -> str:
         """Get metadata filename pattern."""
-        return self.config['system']['metadata_filename']
+        return self.config["system"]["metadata_filename"]
 
     def get_transforms(self) -> Dict:
         """Get image transform settings."""
-        return self.config['camera']['transforms']
+        return self.config["camera"]["transforms"]
 
     def get_controls(self) -> Optional[Dict]:
         """Get camera control settings if defined."""
-        controls = self.config['camera'].get('controls', {})
+        controls = self.config["camera"].get("controls", {})
         return controls if controls else None
 
 
@@ -115,7 +115,9 @@ class ImageCapture:
             from picamera2 import Picamera2
             import libcamera
         except ImportError as e:
-            logger.error("Picamera2 library not found. Install with: sudo apt install -y python3-picamera2")
+            logger.error(
+                "Picamera2 library not found. Install with: sudo apt install -y python3-picamera2"
+            )
             raise ImportError(
                 "Picamera2 not found. Install with: sudo apt install -y python3-picamera2"
             ) from e
@@ -133,12 +135,15 @@ class ImageCapture:
 
             # Apply transforms
             transforms = self.config.get_transforms()
-            if transforms['horizontal_flip'] or transforms['vertical_flip']:
+            if transforms["horizontal_flip"] or transforms["vertical_flip"]:
                 import libcamera
-                logger.debug(f"Applying transforms: hflip={transforms['horizontal_flip']}, vflip={transforms['vertical_flip']}")
+
+                logger.debug(
+                    f"Applying transforms: hflip={transforms['horizontal_flip']}, vflip={transforms['vertical_flip']}"
+                )
                 camera_config["transform"] = libcamera.Transform(
-                    hflip=1 if transforms['horizontal_flip'] else 0,
-                    vflip=1 if transforms['vertical_flip'] else 0
+                    hflip=1 if transforms["horizontal_flip"] else 0,
+                    vflip=1 if transforms["vertical_flip"] else 0,
                 )
 
             self.picam2.configure(camera_config)
@@ -172,20 +177,20 @@ class ImageCapture:
         """
         control_map = {}
 
-        if 'exposure_time' in controls:
-            control_map['ExposureTime'] = controls['exposure_time']
-        if 'analogue_gain' in controls:
-            control_map['AnalogueGain'] = controls['analogue_gain']
-        if 'awb_enable' in controls:
-            control_map['AwbEnable'] = 1 if controls['awb_enable'] else 0
-        if 'colour_gains' in controls:
-            control_map['ColourGains'] = tuple(controls['colour_gains'])
-        if 'brightness' in controls:
-            control_map['Brightness'] = controls['brightness']
-        if 'contrast' in controls:
-            control_map['Contrast'] = controls['contrast']
-        if 'af_mode' in controls:
-            control_map['AfMode'] = controls['af_mode']
+        if "exposure_time" in controls:
+            control_map["ExposureTime"] = controls["exposure_time"]
+        if "analogue_gain" in controls:
+            control_map["AnalogueGain"] = controls["analogue_gain"]
+        if "awb_enable" in controls:
+            control_map["AwbEnable"] = 1 if controls["awb_enable"] else 0
+        if "colour_gains" in controls:
+            control_map["ColourGains"] = tuple(controls["colour_gains"])
+        if "brightness" in controls:
+            control_map["Brightness"] = controls["brightness"]
+        if "contrast" in controls:
+            control_map["Contrast"] = controls["contrast"]
+        if "af_mode" in controls:
+            control_map["AfMode"] = controls["af_mode"]
 
         if control_map:
             self.picam2.set_controls(control_map)
@@ -202,7 +207,9 @@ class ImageCapture:
         """
         if self.picam2 is None:
             logger.error("Camera not initialized. Call initialize_camera() first.")
-            raise RuntimeError("Camera not initialized. Call initialize_camera() first.")
+            raise RuntimeError(
+                "Camera not initialized. Call initialize_camera() first."
+            )
 
         logger.info(f"Starting image capture #{self._counter}")
 
@@ -219,7 +226,7 @@ class ImageCapture:
                 filename = self.config.get_filename_pattern().format(
                     name=self.config.get_project_name(),
                     counter=f"{self._counter:04d}",
-                    timestamp=timestamp.isoformat()
+                    timestamp=timestamp.isoformat(),
                 )
                 # Support strftime formatting
                 filename = timestamp.strftime(filename)
@@ -265,22 +272,22 @@ class ImageCapture:
         metadata = self.picam2.capture_metadata()
 
         # Add custom metadata
-        metadata['capture_timestamp'] = datetime.now().isoformat()
-        metadata['image_path'] = str(image_path)
-        metadata['resolution'] = self.config.get_resolution()
-        metadata['quality'] = self.config.get_quality()
+        metadata["capture_timestamp"] = datetime.now().isoformat()
+        metadata["image_path"] = str(image_path)
+        metadata["resolution"] = self.config.get_resolution()
+        metadata["quality"] = self.config.get_quality()
 
         # Generate metadata filename
         timestamp = datetime.now()
         metadata_filename = self.config.get_metadata_pattern().format(
             name=self.config.get_project_name(),
             counter=f"{self._counter:04d}",
-            timestamp=timestamp.isoformat()
+            timestamp=timestamp.isoformat(),
         )
 
         metadata_path = image_path.parent / metadata_filename
 
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2, default=str)
 
         return str(metadata_path)
@@ -303,8 +310,9 @@ class ImageCapture:
         self.close()
 
 
-def capture_single_image(config_path: str = "config/config.yml",
-                         output_path: Optional[str] = None) -> Tuple[str, Optional[str]]:
+def capture_single_image(
+    config_path: str = "config/config.yml", output_path: Optional[str] = None
+) -> Tuple[str, Optional[str]]:
     """
     Convenience function to capture a single image.
 
@@ -329,13 +337,13 @@ def main():
         description="Capture an image using Raspberry Pi Camera V3"
     )
     parser.add_argument(
-        '-c', '--config',
-        default='config/config.yml',
-        help='Path to configuration file (default: config/config.yml)'
+        "-c",
+        "--config",
+        default="config/config.yml",
+        help="Path to configuration file (default: config/config.yml)",
     )
     parser.add_argument(
-        '-o', '--output',
-        help='Output file path (overrides config pattern)'
+        "-o", "--output", help="Output file path (overrides config pattern)"
     )
 
     args = parser.parse_args()

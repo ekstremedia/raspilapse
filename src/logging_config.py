@@ -11,7 +11,9 @@ import yaml
 class LoggerConfig:
     """Configure and setup logging for Raspilapse scripts."""
 
-    def __init__(self, config_path: str = "config/config.yml", script_name: Optional[str] = None):
+    def __init__(
+        self, config_path: str = "config/config.yml", script_name: Optional[str] = None
+    ):
         """
         Initialize logger configuration.
 
@@ -31,11 +33,11 @@ class LoggerConfig:
             return self._get_default_config()
 
         try:
-            with open(config_file, 'r') as f:
+            with open(config_file, "r") as f:
                 config = yaml.safe_load(f)
                 # Ensure logging section exists
-                if 'logging' not in config:
-                    config['logging'] = self._get_default_config()['logging']
+                if "logging" not in config:
+                    config["logging"] = self._get_default_config()["logging"]
                 return config
         except Exception:
             return self._get_default_config()
@@ -43,15 +45,15 @@ class LoggerConfig:
     def _get_default_config(self) -> Dict:
         """Get default logging configuration."""
         return {
-            'logging': {
-                'enabled': True,
-                'level': 'INFO',
-                'log_file': 'logs/{script}.log',
-                'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                'date_format': '%Y-%m-%d %H:%M:%S',
-                'console': True,
-                'max_size_mb': 10,
-                'backup_count': 5
+            "logging": {
+                "enabled": True,
+                "level": "INFO",
+                "log_file": "logs/{script}.log",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                "date_format": "%Y-%m-%d %H:%M:%S",
+                "console": True,
+                "max_size_mb": 10,
+                "backup_count": 5,
             }
         }
 
@@ -65,29 +67,31 @@ class LoggerConfig:
         Returns:
             Configured logger instance
         """
-        log_config = self.config['logging']
+        log_config = self.config["logging"]
 
         # Return basic logger if logging is disabled
-        if not log_config.get('enabled', True):
+        if not log_config.get("enabled", True):
             logger = logging.getLogger(name or self.script_name)
             logger.addHandler(logging.NullHandler())
             return logger
 
         # Create logger
         logger = logging.getLogger(name or self.script_name)
-        logger.setLevel(self._get_log_level(log_config.get('level', 'INFO')))
+        logger.setLevel(self._get_log_level(log_config.get("level", "INFO")))
 
         # Remove existing handlers
         logger.handlers.clear()
 
         # Create formatter
         formatter = logging.Formatter(
-            log_config.get('format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s'),
-            datefmt=log_config.get('date_format', '%Y-%m-%d %H:%M:%S')
+            log_config.get(
+                "format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            ),
+            datefmt=log_config.get("date_format", "%Y-%m-%d %H:%M:%S"),
         )
 
         # Add file handler if log_file is specified
-        log_file_path = log_config.get('log_file')
+        log_file_path = log_config.get("log_file")
         if log_file_path:
             log_file_path = log_file_path.format(script=self.script_name)
             log_file = Path(log_file_path)
@@ -96,14 +100,14 @@ class LoggerConfig:
             log_file.parent.mkdir(parents=True, exist_ok=True)
 
             # Use rotating file handler if size limit specified
-            max_size_mb = log_config.get('max_size_mb', 10)
-            backup_count = log_config.get('backup_count', 5)
+            max_size_mb = log_config.get("max_size_mb", 10)
+            backup_count = log_config.get("backup_count", 5)
 
             if max_size_mb > 0:
                 file_handler = logging.handlers.RotatingFileHandler(
                     log_file,
                     maxBytes=max_size_mb * 1024 * 1024,  # Convert MB to bytes
-                    backupCount=backup_count
+                    backupCount=backup_count,
                 )
             else:
                 file_handler = logging.FileHandler(log_file)
@@ -112,7 +116,7 @@ class LoggerConfig:
             logger.addHandler(file_handler)
 
         # Add console handler if enabled
-        if log_config.get('console', True):
+        if log_config.get("console", True):
             console_handler = logging.StreamHandler()
             console_handler.setFormatter(formatter)
             logger.addHandler(console_handler)
@@ -133,16 +137,18 @@ class LoggerConfig:
             Logging level constant
         """
         level_map = {
-            'DEBUG': logging.DEBUG,
-            'INFO': logging.INFO,
-            'WARNING': logging.WARNING,
-            'ERROR': logging.ERROR,
-            'CRITICAL': logging.CRITICAL
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR,
+            "CRITICAL": logging.CRITICAL,
         }
         return level_map.get(level_str.upper(), logging.INFO)
 
 
-def get_logger(script_name: str, config_path: str = "config/config.yml") -> logging.Logger:
+def get_logger(
+    script_name: str, config_path: str = "config/config.yml"
+) -> logging.Logger:
     """
     Convenience function to get a configured logger.
 
