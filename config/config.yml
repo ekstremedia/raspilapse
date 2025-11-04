@@ -1,0 +1,90 @@
+# Raspilapse Configuration File
+
+# Camera Settings
+camera:
+  # Image resolution (width x height)
+  # Common options for Camera V3:
+  # - [4608, 2592] - Full 11.9MP
+  # - [2304, 1296] - 3MP binned
+  # - [1920, 1080] - Full HD
+  # - [1280, 720]  - HD
+  resolution:
+    width: 1920
+    height: 1080
+
+  # Image transforms
+  transforms:
+    horizontal_flip: false
+    vertical_flip: false
+
+  # Camera controls (optional, comment out for auto)
+  controls:
+    # Exposure time in microseconds (e.g., 20000 = 20ms)
+    # exposure_time: 20000
+
+    # Analogue gain (1.0 = normal)
+    # analogue_gain: 1.0
+
+    # Auto white balance enable
+    # awb_enable: true
+
+    # Manual colour gains (if awb disabled)
+    # colour_gains: [1.5, 1.5]
+
+    # Brightness (-1.0 to 1.0, 0 = normal)
+    # brightness: 0.0
+
+    # Contrast (0.0 to 2.0, 1.0 = normal)
+    # contrast: 1.0
+
+    # Autofocus mode (if supported):
+    # 0 = Manual, 1 = Single AF, 2 = Continuous AF
+    # af_mode: 2
+
+# Output Settings
+output:
+  # Base directory for saved images
+  directory: "test_photos"
+
+  # Filename pattern (supports strftime formatting and counter)
+  # Available placeholders:
+  # - {timestamp} - ISO format timestamp
+  # - {counter} - Sequential counter (4 digits, zero-padded)
+  # - {name} - Project name
+  # You can also use strftime directives like %Y%m%d_%H%M%S
+  filename_pattern: "{name}_{counter}.jpg"
+
+  # Project name (used in filename)
+  project_name: "raspilapse"
+
+  # Image quality (0-100, JPEG compression)
+  # Higher = better quality, larger files
+  quality: 95
+
+  # Create subdirectories by date
+  organize_by_date: false
+
+  # Date format for subdirectories (if organize_by_date is true)
+  date_format: "%Y-%m-%d"
+
+# Timelapse Settings (for future timelapse.py script)
+timelapse:
+  # Interval between captures in seconds
+  interval: 3
+
+  # Total number of frames to capture (0 = unlimited)
+  num_frames: 100
+
+  # Stabilization delay after camera start (seconds)
+  stabilization_delay: 2
+
+# System Settings
+system:
+  # Create output directory if it doesn't exist
+  create_directories: true
+
+  # Save metadata with each capture
+  save_metadata: true
+
+  # Metadata filename pattern
+  metadata_filename: "{name}_{counter}_metadata.json"
