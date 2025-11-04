@@ -16,6 +16,8 @@ A simple, user-friendly Python library for creating timelapses with Raspberry Pi
 - **Camera Controls** - Full control over exposure, white balance, focus, and more
 - **Multiple Resolutions** - Support for all Camera V3 resolutions (up to 11.9MP)
 - **Image Transforms** - Horizontal and vertical flipping
+- **Optimized Long Exposures** - Fast 20s exposures (~20-22s capture time) with proper libcamera configuration
+- **Adaptive Timelapse** - Automatically adjusts exposure based on ambient light (day/night/transition)
 - **Open Source** - Free to use and modify
 
 ## Hardware Requirements

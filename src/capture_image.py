@@ -150,7 +150,7 @@ class ImageCapture:
 
             # Create configuration with controls embedded
             # CRITICAL: Set buffer_count=3 and queue=False for long exposures
-            # Also set FrameDurationLimits to match exposure time (prevents pipeline delays)
+            # Set FrameDurationLimits to match exposure time for fast long exposures
             if controls_to_apply:
                 # Add FrameDurationLimits if ExposureTime is set (REQUIRED for fast long exposures!)
                 if "ExposureTime" in controls_to_apply:
@@ -350,17 +350,25 @@ class ImageCapture:
             # Ensure output directory exists
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Capture image using capture_file (recommended for continuous long exposures)
+            # Use capture_request() to get both image and metadata without blocking
+            # This avoids the 20-second delay from capture_metadata() with long exposures
             logger.debug("Capturing image...")
-            self.picam2.capture_file(str(output_path))
-            logger.info(f"Image captured successfully: {output_path}")
+            request = self.picam2.capture_request()
+            try:
+                # Save the image
+                request.save("main", str(output_path))
+                logger.info(f"Image captured successfully: {output_path}")
 
-            # Save metadata if enabled
-            metadata_path = None
-            if self.config.should_save_metadata():
-                logger.debug("Saving metadata...")
-                metadata_path = self._save_metadata(output_path)
-                logger.debug(f"Metadata saved: {metadata_path}")
+                # Save metadata if enabled (from request, no blocking!)
+                metadata_path = None
+                if self.config.should_save_metadata():
+                    logger.debug("Saving metadata...")
+                    metadata_dict = request.get_metadata()
+                    metadata_path = self._save_metadata_from_dict(output_path, metadata_dict)
+                    logger.debug(f"Metadata saved: {metadata_path}")
+            finally:
+                # Always release the request
+                request.release()
 
             self._counter += 1
 

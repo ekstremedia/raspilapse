@@ -332,6 +332,25 @@ class AdaptiveTimelapse:
         self.frame_count += 1
         return image_path, metadata_path
 
+    def _close_camera_fast(self, capture: ImageCapture, last_mode: str):
+        """
+        Close camera properly.
+
+        Args:
+            capture: ImageCapture instance to close
+            last_mode: Last light mode used (for logging)
+        """
+        if capture is None or capture.picam2 is None:
+            return
+
+        try:
+            # Close the camera
+            capture.close()
+            logger.debug("Camera closed successfully")
+
+        except Exception as e:
+            logger.error(f"Error during close: {e}")
+
     def run(self):
         """Run the adaptive timelapse capture loop."""
         adaptive_config = self.config["adaptive_timelapse"]
@@ -359,6 +378,14 @@ class AdaptiveTimelapse:
                 if num_frames > 0 and self.frame_count >= num_frames:
                     logger.info(f"Reached frame limit: {num_frames}")
                     break
+
+                # CRITICAL: Close camera before taking test shot to avoid "Camera in Running state" error
+                # Test shot uses its own context-managed camera instance
+                if capture is not None and adaptive_config["test_shot"]["enabled"]:
+                    logger.debug("Closing camera before test shot...")
+                    self._close_camera_fast(capture, last_mode)
+                    capture = None
+                    last_mode = None
 
                 # Take test shot if enabled
                 if adaptive_config["test_shot"]["enabled"]:
@@ -416,35 +443,10 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
         finally:
-            # Close camera with fast-stop trick if it was initialized
+            # Close camera if it was initialized
             if capture is not None:
                 logger.info("Closing camera...")
-                try:
-                    # If last mode was night (long exposure), use fast-stop to avoid blocking
-                    if last_mode == LightMode.NIGHT:
-                        logger.debug(
-                            "Using fast-stop to prevent blocking on long exposure"
-                        )
-                        # Flush pipeline with a short frame so stop() won't block
-                        capture.picam2.set_controls(
-                            {
-                                "ExposureTime": 1000,
-                                "AnalogueGain": 1.0,
-                                "AeEnable": 0,
-                                "FrameDurationLimits": (10_000, 10_000),
-                            }
-                        )
-                        # Capture and release one quick frame to flush pipeline
-                        try:
-                            request = capture.picam2.capture_request()
-                            request.release()
-                        except Exception as e:
-                            logger.debug(f"Fast-stop capture failed (expected): {e}")
-
-                    capture.close()
-                    logger.info("Camera closed")
-                except Exception as e:
-                    logger.error(f"Error closing camera: {e}")
+                self._close_camera_fast(capture, last_mode)
 
             logger.info(
                 f"=== Adaptive Timelapse Stopped ({self.frame_count} frames) ==="
