@@ -172,17 +172,22 @@ class ImageCapture:
         """
         Apply camera controls.
 
+        Accepts both snake_case (from config file) and PascalCase (direct control) keys.
+
         Args:
             controls: Dictionary of control settings
         """
         control_map = {}
 
+        # Handle snake_case keys (from config file)
         if "exposure_time" in controls:
             control_map["ExposureTime"] = controls["exposure_time"]
         if "analogue_gain" in controls:
             control_map["AnalogueGain"] = controls["analogue_gain"]
         if "awb_enable" in controls:
             control_map["AwbEnable"] = 1 if controls["awb_enable"] else 0
+        if "ae_enable" in controls:
+            control_map["AeEnable"] = 1 if controls["ae_enable"] else 0
         if "colour_gains" in controls:
             control_map["ColourGains"] = tuple(controls["colour_gains"])
         if "brightness" in controls:
@@ -192,8 +197,43 @@ class ImageCapture:
         if "af_mode" in controls:
             control_map["AfMode"] = controls["af_mode"]
 
+        # Handle PascalCase keys (direct libcamera controls)
+        if "ExposureTime" in controls:
+            control_map["ExposureTime"] = controls["ExposureTime"]
+        if "AnalogueGain" in controls:
+            control_map["AnalogueGain"] = controls["AnalogueGain"]
+        if "AwbEnable" in controls:
+            control_map["AwbEnable"] = controls["AwbEnable"]
+        if "AeEnable" in controls:
+            control_map["AeEnable"] = controls["AeEnable"]
+        if "ColourGains" in controls:
+            control_map["ColourGains"] = controls["ColourGains"]
+        if "Brightness" in controls:
+            control_map["Brightness"] = controls["Brightness"]
+        if "Contrast" in controls:
+            control_map["Contrast"] = controls["Contrast"]
+        if "AfMode" in controls:
+            control_map["AfMode"] = controls["AfMode"]
+
         if control_map:
+            logger.debug(f"Applying controls to camera: {control_map}")
             self.picam2.set_controls(control_map)
+
+    def update_controls(self, controls: Dict):
+        """
+        Update camera controls on an already-initialized camera.
+
+        Useful for changing exposure settings between captures.
+
+        Args:
+            controls: Dictionary of camera control settings
+        """
+        if self.picam2 is None:
+            logger.error("Camera not initialized")
+            raise RuntimeError("Camera not initialized")
+
+        logger.debug(f"Updating camera controls: {controls}")
+        self._apply_controls(controls)
 
     def capture(self, output_path: Optional[str] = None) -> Tuple[str, Optional[str]]:
         """
@@ -210,6 +250,11 @@ class ImageCapture:
             raise RuntimeError(
                 "Camera not initialized. Call initialize_camera() first."
             )
+
+        # Re-apply controls from config before each capture (in case they changed)
+        controls = self.config.get_controls()
+        if controls:
+            self._apply_controls(controls)
 
         logger.info(f"Starting image capture #{self._counter}")
 

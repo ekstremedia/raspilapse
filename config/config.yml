@@ -78,6 +78,79 @@ timelapse:
   # Stabilization delay after camera start (seconds)
   stabilization_delay: 2
 
+# Adaptive Timelapse Settings (for auto_timelapse.py)
+adaptive_timelapse:
+  # Enable adaptive exposure based on light conditions
+  enabled: true
+
+  # Interval between captures in seconds
+  interval: 60
+
+  # Total number of frames to capture (0 = unlimited, runs continuously)
+  num_frames: 0
+
+  # Light level thresholds (based on calculated lux from metadata)
+  # These values determine when to switch between day/night/transition modes
+  light_thresholds:
+    # Lux below this = night mode (long exposure)
+    night: 10
+
+    # Lux above this = day mode (normal exposure)
+    day: 100
+
+    # Between night and day = transition mode (gradual adjustment)
+    # Automatically calculated between night and day thresholds
+
+  # Night mode settings (for dark conditions - stars, aurora, etc.)
+  night_mode:
+    # Maximum exposure time in seconds (max 20 seconds to avoid star trails)
+    max_exposure_time: 20.0
+
+    # Minimum exposure time in seconds
+    min_exposure_time: 1.0
+
+    # Analogue gain (ISO equivalent)
+    # Higher = brighter but more noise. Range: 1.0-8.0, recommended max: 4.0
+    analogue_gain: 2.5
+
+    # Use auto white balance in night mode
+    awb_enable: true
+
+    # Manual color gains if awb disabled (red, blue)
+    # colour_gains: [1.8, 1.5]
+
+  # Day mode settings (for bright daylight conditions)
+  day_mode:
+    # Exposure time in seconds (auto if not specified)
+    # exposure_time: 0.01  # 10ms
+
+    # Analogue gain for daylight (lower = less noise)
+    analogue_gain: 1.0
+
+    # Use auto white balance in day mode
+    awb_enable: true
+
+  # Transition mode settings (dawn/dusk)
+  transition_mode:
+    # Gradually adjust between day and night settings
+    # Based on calculated lux value
+    smooth_transition: true
+
+    # Analogue gain range for transition
+    analogue_gain_min: 1.0
+    analogue_gain_max: 2.5
+
+  # Test shot settings (used to measure light levels)
+  test_shot:
+    # Take a test shot before each capture to measure light
+    enabled: true
+
+    # Test shot exposure time in seconds (quick test)
+    exposure_time: 0.1
+
+    # Test shot gain
+    analogue_gain: 1.0
+
 # System Settings
 system:
   # Create output directory if it doesn't exist
