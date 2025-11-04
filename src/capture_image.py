@@ -7,6 +7,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 import yaml
+from logging_config import get_logger
+
+# Initialize logger
+logger = get_logger('capture_image')
 
 
 class CameraConfig:
@@ -20,16 +24,25 @@ class CameraConfig:
             config_path: Path to YAML configuration file
         """
         self.config_path = config_path
+        logger.info(f"Loading configuration from: {config_path}")
         self.config = self._load_config()
+        logger.debug(f"Configuration loaded successfully")
 
     def _load_config(self) -> Dict:
         """Load configuration from YAML file."""
         config_file = Path(self.config_path)
         if not config_file.exists():
+            logger.error(f"Configuration file not found: {self.config_path}")
             raise FileNotFoundError(f"Configuration file not found: {self.config_path}")
 
-        with open(config_file, 'r') as f:
-            return yaml.safe_load(f)
+        try:
+            with open(config_file, 'r') as f:
+                config = yaml.safe_load(f)
+                logger.debug(f"Successfully parsed YAML configuration")
+                return config
+        except yaml.YAMLError as e:
+            logger.error(f"Failed to parse configuration file: {e}")
+            raise
 
     def get_resolution(self) -> Tuple[int, int]:
         """Get camera resolution as (width, height) tuple."""
@@ -87,44 +100,63 @@ class ImageCapture:
         self.config = config
         self.picam2 = None
         self._counter = 0
+        logger.debug("ImageCapture instance created")
 
     def initialize_camera(self):
         """Initialize and configure the camera."""
+        logger.info("Initializing camera...")
+
         try:
             from picamera2 import Picamera2
             import libcamera
         except ImportError as e:
+            logger.error("Picamera2 library not found. Install with: sudo apt install -y python3-picamera2")
             raise ImportError(
                 "Picamera2 not found. Install with: sudo apt install -y python3-picamera2"
             ) from e
 
-        self.picam2 = Picamera2()
+        try:
+            self.picam2 = Picamera2()
+            logger.debug("Picamera2 object created")
 
-        # Create camera configuration
-        resolution = self.config.get_resolution()
-        camera_config = self.picam2.create_preview_configuration(
-            main={"size": resolution}
-        )
-
-        # Apply transforms
-        transforms = self.config.get_transforms()
-        if transforms['horizontal_flip'] or transforms['vertical_flip']:
-            import libcamera
-            camera_config["transform"] = libcamera.Transform(
-                hflip=1 if transforms['horizontal_flip'] else 0,
-                vflip=1 if transforms['vertical_flip'] else 0
+            # Create camera configuration
+            resolution = self.config.get_resolution()
+            logger.info(f"Setting camera resolution to {resolution[0]}x{resolution[1]}")
+            camera_config = self.picam2.create_preview_configuration(
+                main={"size": resolution}
             )
 
-        self.picam2.configure(camera_config)
-        self.picam2.start()
+            # Apply transforms
+            transforms = self.config.get_transforms()
+            if transforms['horizontal_flip'] or transforms['vertical_flip']:
+                import libcamera
+                logger.debug(f"Applying transforms: hflip={transforms['horizontal_flip']}, vflip={transforms['vertical_flip']}")
+                camera_config["transform"] = libcamera.Transform(
+                    hflip=1 if transforms['horizontal_flip'] else 0,
+                    vflip=1 if transforms['vertical_flip'] else 0
+                )
 
-        # Allow camera to stabilize
-        time.sleep(2)
+            self.picam2.configure(camera_config)
+            logger.debug("Camera configured")
 
-        # Apply camera controls if specified
-        controls = self.config.get_controls()
-        if controls:
-            self._apply_controls(controls)
+            self.picam2.start()
+            logger.info("Camera started")
+
+            # Allow camera to stabilize
+            logger.debug("Waiting for camera to stabilize (2 seconds)...")
+            time.sleep(2)
+
+            # Apply camera controls if specified
+            controls = self.config.get_controls()
+            if controls:
+                logger.debug(f"Applying camera controls: {controls}")
+                self._apply_controls(controls)
+
+            logger.info("Camera initialization complete")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize camera: {e}")
+            raise
 
     def _apply_controls(self, controls: Dict):
         """
@@ -164,41 +196,56 @@ class ImageCapture:
             Tuple of (image_path, metadata_path)
         """
         if self.picam2 is None:
+            logger.error("Camera not initialized. Call initialize_camera() first.")
             raise RuntimeError("Camera not initialized. Call initialize_camera() first.")
 
-        # Prepare output directory
-        output_dir = Path(self.config.get_output_directory())
-        if self.config.should_create_directories():
-            output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Starting image capture #{self._counter}")
 
-        # Generate filename
-        if output_path is None:
-            timestamp = datetime.now()
-            filename = self.config.get_filename_pattern().format(
-                name=self.config.get_project_name(),
-                counter=f"{self._counter:04d}",
-                timestamp=timestamp.isoformat()
-            )
-            # Support strftime formatting
-            filename = timestamp.strftime(filename)
-            output_path = output_dir / filename
-        else:
-            output_path = Path(output_path)
+        try:
+            # Prepare output directory
+            output_dir = Path(self.config.get_output_directory())
+            if self.config.should_create_directories():
+                output_dir.mkdir(parents=True, exist_ok=True)
+                logger.debug(f"Output directory: {output_dir}")
 
-        # Ensure output directory exists
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+            # Generate filename
+            if output_path is None:
+                timestamp = datetime.now()
+                filename = self.config.get_filename_pattern().format(
+                    name=self.config.get_project_name(),
+                    counter=f"{self._counter:04d}",
+                    timestamp=timestamp.isoformat()
+                )
+                # Support strftime formatting
+                filename = timestamp.strftime(filename)
+                output_path = output_dir / filename
+            else:
+                output_path = Path(output_path)
 
-        # Capture image
-        self.picam2.capture_file(str(output_path))
+            logger.debug(f"Output path: {output_path}")
 
-        # Save metadata if enabled
-        metadata_path = None
-        if self.config.should_save_metadata():
-            metadata_path = self._save_metadata(output_path)
+            # Ensure output directory exists
+            output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self._counter += 1
+            # Capture image
+            logger.debug("Capturing image...")
+            self.picam2.capture_file(str(output_path))
+            logger.info(f"Image captured successfully: {output_path}")
 
-        return str(output_path), metadata_path
+            # Save metadata if enabled
+            metadata_path = None
+            if self.config.should_save_metadata():
+                logger.debug("Saving metadata...")
+                metadata_path = self._save_metadata(output_path)
+                logger.debug(f"Metadata saved: {metadata_path}")
+
+            self._counter += 1
+
+            return str(output_path), metadata_path
+
+        except Exception as e:
+            logger.error(f"Failed to capture image: {e}")
+            raise
 
     def _save_metadata(self, image_path: Path) -> str:
         """
@@ -236,8 +283,10 @@ class ImageCapture:
     def close(self):
         """Close and cleanup camera resources."""
         if self.picam2:
+            logger.info("Closing camera...")
             self.picam2.close()
             self.picam2 = None
+            logger.debug("Camera closed successfully")
 
     def __enter__(self):
         """Context manager entry."""
@@ -286,13 +335,22 @@ def main():
 
     args = parser.parse_args()
 
+    logger.info("=== Raspilapse Image Capture Started ===")
+    logger.debug(f"Config file: {args.config}")
+    if args.output:
+        logger.debug(f"Custom output path: {args.output}")
+
     try:
         image_path, metadata_path = capture_single_image(args.config, args.output)
         print(f"Image captured: {image_path}")
+        logger.info(f"Image captured: {image_path}")
         if metadata_path:
             print(f"Metadata saved: {metadata_path}")
+            logger.info(f"Metadata saved: {metadata_path}")
+        logger.info("=== Capture Complete ===")
     except Exception as e:
         print(f"Error: {e}")
+        logger.error(f"Capture failed: {e}", exc_info=True)
         return 1
 
     return 0

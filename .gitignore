@@ -18,3 +18,10 @@ test_photos/
 *.png
 *.mp4
 *.h264
+
+# Logs
+logs/
+*.log
+
+# Metadata
+*_metadata.json

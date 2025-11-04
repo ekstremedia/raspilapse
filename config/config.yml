@@ -88,3 +88,31 @@ system:
 
   # Metadata filename pattern
   metadata_filename: "{name}_{counter}_metadata.json"
+
+# Logging Settings
+logging:
+  # Enable/disable logging
+  enabled: true
+
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+
+  # Log file path (relative to project root)
+  # Use {script} placeholder for script name
+  log_file: "logs/{script}.log"
+
+  # Log format
+  # Available placeholders: %(asctime)s, %(name)s, %(levelname)s, %(message)s
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # Date format for timestamps
+  date_format: "%Y-%m-%d %H:%M:%S"
+
+  # Also log to console
+  console: true
+
+  # Maximum log file size in MB (0 = unlimited)
+  max_size_mb: 10
+
+  # Number of backup log files to keep
+  backup_count: 5
