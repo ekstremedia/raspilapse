@@ -149,14 +149,36 @@ class ImageCapture:
                 logger.debug(f"Applying manual controls: {manual_controls}")
 
             # Create configuration with controls embedded
+            # CRITICAL: Set buffer_count=3 and queue=False for long exposures
+            # Also set FrameDurationLimits to match exposure time (prevents pipeline delays)
             if controls_to_apply:
+                # Add FrameDurationLimits if ExposureTime is set (REQUIRED for fast long exposures!)
+                if "ExposureTime" in controls_to_apply:
+                    exposure_us = controls_to_apply["ExposureTime"]
+                    # Frame period = exposure + 100ms slack
+                    frame_duration_us = exposure_us + 100_000
+                    controls_to_apply["FrameDurationLimits"] = (
+                        frame_duration_us,
+                        frame_duration_us,
+                    )
+                    controls_to_apply["NoiseReductionMode"] = 0  # Keep pipeline light
+                    logger.debug(
+                        f"Set FrameDurationLimits to {frame_duration_us}µs for {exposure_us}µs exposure"
+                    )
+
                 camera_config = self.picam2.create_still_configuration(
-                    main={"size": resolution}, controls=controls_to_apply
+                    main={"size": resolution, "format": "YUV420"},  # Native JPEG path
+                    raw=None,  # Disable RAW for performance
+                    buffer_count=3,  # CRITICAL: prevents frame queuing delays
+                    queue=False,  # Ensures fresh frame after request
+                    display=None,
+                    controls=controls_to_apply,
                 )
                 logger.debug(f"Camera configured with controls: {controls_to_apply}")
             else:
                 camera_config = self.picam2.create_still_configuration(
-                    main={"size": resolution}
+                    main={"size": resolution},
+                    display=None,
                 )
 
             # Apply transforms
@@ -256,7 +278,7 @@ class ImageCapture:
         """
         Update camera controls on an already-initialized camera.
 
-        Useful for changing exposure settings between captures.
+        Useful for changing exposure settings between captures without reinitializing.
 
         Args:
             controls: Dictionary of camera control settings
@@ -266,7 +288,23 @@ class ImageCapture:
             raise RuntimeError("Camera not initialized")
 
         logger.debug(f"Updating camera controls: {controls}")
-        self._apply_controls(controls)
+
+        # Prepare control map
+        control_map = self._prepare_control_map(controls)
+
+        # Add FrameDurationLimits if ExposureTime is being updated (REQUIRED for fast long exposures!)
+        if "ExposureTime" in control_map:
+            exposure_us = control_map["ExposureTime"]
+            frame_duration_us = exposure_us + 100_000
+            control_map["FrameDurationLimits"] = (frame_duration_us, frame_duration_us)
+            control_map["NoiseReductionMode"] = 0  # Keep pipeline light
+            logger.debug(
+                f"Updated FrameDurationLimits to {frame_duration_us}µs for {exposure_us}µs exposure"
+            )
+
+        if control_map:
+            logger.debug(f"Applying controls to camera: {control_map}")
+            self.picam2.set_controls(control_map)
 
     def capture(self, output_path: Optional[str] = None) -> Tuple[str, Optional[str]]:
         """
@@ -312,7 +350,7 @@ class ImageCapture:
             # Ensure output directory exists
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Capture image
+            # Capture image using capture_file (recommended for continuous long exposures)
             logger.debug("Capturing image...")
             self.picam2.capture_file(str(output_path))
             logger.info(f"Image captured successfully: {output_path}")
@@ -332,18 +370,17 @@ class ImageCapture:
             logger.error(f"Failed to capture image: {e}")
             raise
 
-    def _save_metadata(self, image_path: Path) -> str:
+    def _save_metadata_from_dict(self, image_path: Path, metadata: Dict) -> str:
         """
-        Save capture metadata.
+        Save capture metadata from a metadata dictionary.
 
         Args:
             image_path: Path to captured image
+            metadata: Metadata dictionary from capture_request
 
         Returns:
             Path to metadata file
         """
-        metadata = self.picam2.capture_metadata()
-
         # Add custom metadata
         metadata["capture_timestamp"] = datetime.now().isoformat()
         metadata["image_path"] = str(image_path)
@@ -364,6 +401,19 @@ class ImageCapture:
             json.dump(metadata, f, indent=2, default=str)
 
         return str(metadata_path)
+
+    def _save_metadata(self, image_path: Path) -> str:
+        """
+        Save capture metadata (legacy method using capture_metadata()).
+
+        Args:
+            image_path: Path to captured image
+
+        Returns:
+            Path to metadata file
+        """
+        metadata = self.picam2.capture_metadata()
+        return self._save_metadata_from_dict(image_path, metadata)
 
     def close(self):
         """Close and cleanup camera resources."""

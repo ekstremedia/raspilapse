@@ -190,11 +190,12 @@ class AdaptiveTimelapse:
 
         if mode == LightMode.NIGHT:
             night = adaptive_config["night_mode"]
-            # Disable auto-exposure and auto-gain to use manual settings
+            # Disable auto-exposure, auto-gain, and auto-white-balance for manual control
             settings["AeEnable"] = 0
             settings["ExposureTime"] = int(night["max_exposure_time"] * 1_000_000)
             settings["AnalogueGain"] = night["analogue_gain"]
-            settings["AwbEnable"] = 1 if night.get("awb_enable", True) else 0
+            # Lock AWB for long exposures - AWB causes 5x slowdown!
+            settings["AwbEnable"] = 0
 
             if "colour_gains" in night:
                 settings["ColourGains"] = tuple(night["colour_gains"])
@@ -310,32 +311,23 @@ class AdaptiveTimelapse:
         logger.debug(f"Test shot saved: {image_path}")
         return image_path, metadata
 
-    def capture_frame(self, mode: str, settings: Dict) -> Tuple[str, Optional[str]]:
+    def capture_frame(
+        self, capture: ImageCapture, mode: str
+    ) -> Tuple[str, Optional[str]]:
         """
-        Capture a single frame with the specified settings.
+        Capture a single frame with the camera's current settings.
 
         Args:
+            capture: ImageCapture instance with initialized camera
             mode: Light mode
-            settings: Camera control settings (PascalCase libcamera controls)
 
         Returns:
             Tuple of (image_path, metadata_path)
         """
         logger.info(f"Capturing frame #{self.frame_count} in {mode} mode...")
-        logger.debug(f"Settings: {settings}")
 
-        # Create ImageCapture instance
-        capture = ImageCapture(self.camera_config)
-
-        # Initialize camera with our custom controls
-        capture.initialize_camera(manual_controls=settings)
-
-        try:
-            # Capture the image
-            image_path, metadata_path = capture.capture()
-        finally:
-            # Always close the camera
-            capture.close()
+        # Capture the image (controls were set during initialization)
+        image_path, metadata_path = capture.capture()
 
         self.frame_count += 1
         return image_path, metadata_path
@@ -354,6 +346,10 @@ class AdaptiveTimelapse:
         logger.info("=== Adaptive Timelapse Started ===")
         logger.info(f"Interval: {interval} seconds")
         logger.info(f"Frames: {'unlimited' if num_frames == 0 else num_frames}")
+
+        # Initialize camera once at the start
+        capture = None
+        last_mode = None
 
         try:
             while self.running:
@@ -388,9 +384,16 @@ class AdaptiveTimelapse:
                     mode = LightMode.DAY
                     settings = self.get_camera_settings(mode)
 
+                # Initialize camera on first frame or if it was closed
+                if capture is None:
+                    logger.info("Initializing camera for timelapse...")
+                    capture = ImageCapture(self.camera_config)
+                    capture.initialize_camera(manual_controls=settings)
+                    last_mode = mode
+
                 # Capture actual frame
                 try:
-                    image_path, metadata_path = self.capture_frame(mode, settings)
+                    image_path, metadata_path = self.capture_frame(capture, mode)
                     logger.info(f"Frame captured: {image_path}")
 
                 except Exception as e:
@@ -413,6 +416,36 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
         finally:
+            # Close camera with fast-stop trick if it was initialized
+            if capture is not None:
+                logger.info("Closing camera...")
+                try:
+                    # If last mode was night (long exposure), use fast-stop to avoid blocking
+                    if last_mode == LightMode.NIGHT:
+                        logger.debug(
+                            "Using fast-stop to prevent blocking on long exposure"
+                        )
+                        # Flush pipeline with a short frame so stop() won't block
+                        capture.picam2.set_controls(
+                            {
+                                "ExposureTime": 1000,
+                                "AnalogueGain": 1.0,
+                                "AeEnable": 0,
+                                "FrameDurationLimits": (10_000, 10_000),
+                            }
+                        )
+                        # Capture and release one quick frame to flush pipeline
+                        try:
+                            request = capture.picam2.capture_request()
+                            request.release()
+                        except Exception as e:
+                            logger.debug(f"Fast-stop capture failed (expected): {e}")
+
+                    capture.close()
+                    logger.info("Camera closed")
+                except Exception as e:
+                    logger.error(f"Error closing camera: {e}")
+
             logger.info(
                 f"=== Adaptive Timelapse Stopped ({self.frame_count} frames) ==="
             )
