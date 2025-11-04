@@ -1,0 +1,17 @@
+# Development and testing dependencies for Raspilapse
+
+# Include production dependencies
+-r requirements.txt
+
+# Testing framework
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+
+# Code quality
+flake8>=6.0.0
+black>=23.0.0
+pylint>=2.15.0
+
+# Type checking
+mypy>=1.0.0

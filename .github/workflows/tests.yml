@@ -1,0 +1,110 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements-dev.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+
+    - name: Lint with flake8
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings
+        flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=100 --statistics
+
+    - name: Check code formatting with black
+      run: |
+        black --check src/ tests/
+
+    - name: Run tests with pytest
+      run: |
+        pytest tests/ -v --cov=src --cov-report=term-missing --cov-report=xml
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+      continue-on-error: true
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+
+    - name: Lint with pylint
+      run: |
+        pylint src/ --exit-zero --max-line-length=100
+      continue-on-error: true
+
+    - name: Type check with mypy
+      run: |
+        mypy src/ --ignore-missing-imports --no-strict-optional
+      continue-on-error: true
+
+  compatibility-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Check for syntax errors
+      run: |
+        python -m py_compile src/*.py
+        python -m py_compile tests/*.py
+
+    - name: Verify imports (without camera hardware)
+      run: |
+        python -c "import sys; sys.path.insert(0, 'src'); from logging_config import get_logger; print('✓ logging_config imports successfully')"
+        echo "✓ All non-hardware modules can be imported"

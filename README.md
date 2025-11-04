@@ -1,5 +1,10 @@
 # Raspilapse
 
+![Tests](https://github.com/ekstremedia/raspilapse/workflows/Tests/badge.svg)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi-red)
+
 A simple, user-friendly Python library for creating timelapses with Raspberry Pi and Camera Module V3.
 
 ## Features
@@ -33,7 +38,7 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install -y python3-picamera2 python3-yaml
 
 # Clone repository
-git clone https://github.com/YOUR_USERNAME/raspilapse.git
+git clone https://github.com/ekstremedia/raspilapse.git
 cd raspilapse
 
 # Test installation
@@ -259,9 +264,48 @@ sudo usermod -aG video $USER
 - **Security monitoring** - Periodic image capture
 - **Scientific research** - Document experiments
 
+## Development & Testing
+
+### Running Tests
+
+The project includes comprehensive unit tests that run without requiring camera hardware (using mocks).
+
+```bash
+# Install development dependencies
+sudo apt install -y python3-pytest
+
+# Run all tests
+python3 -m pytest tests/ -v
+
+# Run with coverage
+python3 -m pytest tests/ -v --cov=src --cov-report=term-missing
+```
+
+### Continuous Integration
+
+GitHub Actions automatically runs tests on every push and pull request across multiple Python versions (3.9, 3.10, 3.11, 3.12). The pipeline includes:
+
+- Unit tests with mocking (no hardware required)
+- Code linting with flake8
+- Code formatting checks with black
+- Type checking with mypy
+- Coverage reporting
+
+All tests can run in CI/CD without requiring actual camera hardware.
+
 ## Contributing
 
 Contributions are welcome! This is a free, open-source project.
+
+### How to Contribute
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Run tests (`python3 -m pytest tests/`)
+5. Commit your changes (`git commit -m 'Add amazing feature'`)
+6. Push to the branch (`git push origin feature/amazing-feature`)
+7. Open a Pull Request
 
 ## License
 

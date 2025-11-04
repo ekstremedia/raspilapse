@@ -7,7 +7,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 import yaml
-from logging_config import get_logger
+
+# Handle imports for both module and script execution
+try:
+    from src.logging_config import get_logger
+except ImportError:
+    from logging_config import get_logger
 
 # Initialize logger
 logger = get_logger('capture_image')

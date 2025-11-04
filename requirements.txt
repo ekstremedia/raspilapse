@@ -1,0 +1,6 @@
+# Production dependencies for Raspilapse
+# Note: picamera2 must be installed via apt, not pip
+# sudo apt install -y python3-picamera2
+
+# YAML configuration parsing
+PyYAML>=6.0
