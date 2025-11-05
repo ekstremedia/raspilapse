@@ -516,4 +516,3 @@ class TestTimelapseCaptureFlow:
         timelapse.capture_frame(mock_capture, "day")
 
         assert timelapse.frame_count == 3
-
