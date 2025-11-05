@@ -52,6 +52,7 @@ output:
   # - {counter} - Sequential counter (4 digits, zero-padded)
   # - {name} - Project name
   # You can also use strftime directives like %Y%m%d_%H%M%S
+  #filename_pattern: "{name}_{timestamp}.jpg"
   filename_pattern: "{name}_{counter}.jpg"
 
   # Project name (used in filename)
@@ -59,7 +60,7 @@ output:
 
   # Image quality (0-100, JPEG compression)
   # Higher = better quality, larger files
-  quality: 95
+  quality: 75
 
   # Create subdirectories by date
   organize_by_date: false
@@ -73,7 +74,7 @@ timelapse:
   interval: 3
 
   # Total number of frames to capture (0 = unlimited)
-  num_frames: 100
+  num_frames: 0
 
   # Stabilization delay after camera start (seconds)
   stabilization_delay: 2
@@ -84,7 +85,7 @@ adaptive_timelapse:
   enabled: true
 
   # Interval between captures in seconds
-  interval: 60
+  interval: 30
 
   # Total number of frames to capture (0 = unlimited, runs continuously)
   num_frames: 0
@@ -111,13 +112,13 @@ adaptive_timelapse:
 
     # Analogue gain (ISO equivalent)
     # Higher = brighter but more noise. Range: 1.0-8.0, recommended max: 4.0
-    analogue_gain: 2.5
+    analogue_gain: 6
 
     # Use auto white balance in night mode
-    awb_enable: true
+    awb_enable: false
 
     # Manual color gains if awb disabled (red, blue)
-    # colour_gains: [1.8, 1.5]
+    colour_gains: [1.8, 1.5]
 
   # Day mode settings (for bright daylight conditions)
   day_mode:
