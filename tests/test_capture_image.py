@@ -25,9 +25,7 @@ def mock_picamera2():
     # Create mock camera instance
     mock_camera = MagicMock()
     mock_camera.create_still_configuration.return_value = {}
-    mock_camera.create_preview_configuration.return_value = (
-        {}
-    )  # Keep for backwards compat
+    mock_camera.create_preview_configuration.return_value = {}  # Keep for backwards compat
 
     # Mock capture_request() to return a request object
     mock_request = MagicMock()
@@ -201,9 +199,7 @@ class TestImageCapture:
         with pytest.raises(RuntimeError, match="Camera not initialized"):
             capture.capture()
 
-    def test_capture_creates_directory(
-        self, mock_picamera2, test_config_file, test_output_dir
-    ):
+    def test_capture_creates_directory(self, mock_picamera2, test_config_file, test_output_dir):
         """Test that capture creates output directory."""
         # Modify config to use test directory
         config = CameraConfig(test_config_file)
@@ -216,9 +212,7 @@ class TestImageCapture:
         # Verify directory was created
         assert os.path.exists(config.get_output_directory())
 
-    def test_capture_filename_pattern(
-        self, mock_picamera2, test_config_file, test_output_dir
-    ):
+    def test_capture_filename_pattern(self, mock_picamera2, test_config_file, test_output_dir):
         """Test filename pattern generation."""
         # Modify config
         config = CameraConfig(test_config_file)
@@ -231,9 +225,7 @@ class TestImageCapture:
         # Verify filename follows pattern
         assert "test_project_0000.jpg" in image_path
 
-    def test_capture_counter_increment(
-        self, mock_picamera2, test_config_file, test_output_dir
-    ):
+    def test_capture_counter_increment(self, mock_picamera2, test_config_file, test_output_dir):
         """Test that counter increments with each capture."""
         config = CameraConfig(test_config_file)
         config.config["output"]["directory"] = test_output_dir
@@ -296,9 +288,7 @@ class TestImageCapture:
 class TestConvenienceFunctions:
     """Tests for convenience functions."""
 
-    def test_capture_single_image(
-        self, mock_picamera2, test_config_file, test_output_dir
-    ):
+    def test_capture_single_image(self, mock_picamera2, test_config_file, test_output_dir):
         """Test capture_single_image convenience function."""
         # Modify config to use test directory
         with open(test_config_file, "r") as f:
@@ -319,9 +309,7 @@ class TestConvenienceFunctions:
 class TestIntegration:
     """Integration tests requiring actual camera hardware."""
 
-    @pytest.mark.skipif(
-        not os.path.exists("/dev/video0"), reason="Camera hardware not detected"
-    )
+    @pytest.mark.skipif(not os.path.exists("/dev/video0"), reason="Camera hardware not detected")
     def test_real_camera_capture(self, test_output_dir):
         """Test actual image capture with real camera (if available)."""
         # Create test config

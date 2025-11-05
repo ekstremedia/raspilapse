@@ -185,9 +185,7 @@ class TestImageOverlay:
         # Cleanup
         os.unlink(output_path)
 
-    def test_apply_overlay_topbar_mode(
-        self, test_overlay_config, test_image, test_metadata
-    ):
+    def test_apply_overlay_topbar_mode(self, test_overlay_config, test_image, test_metadata):
         """Test overlay with top-bar position."""
         test_overlay_config["overlay"]["position"] = "top-bar"
         overlay = ImageOverlay(test_overlay_config)

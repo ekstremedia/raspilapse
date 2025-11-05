@@ -89,9 +89,7 @@ class ImageOverlay:
             except (OSError, IOError):
                 continue
 
-        logger.warning(
-            f"Could not load font '{font_family}', falling back to default font"
-        )
+        logger.warning(f"Could not load font '{font_family}', falling back to default font")
         return None
 
     def _format_exposure_time(self, exposure_us: int) -> str:
@@ -206,9 +204,7 @@ class ImageOverlay:
             return f"({gains[0]:.2f}, {gains[1]:.2f})"
         return "N/A"
 
-    def _prepare_overlay_data(
-        self, metadata: Dict, mode: Optional[str] = None
-    ) -> Dict[str, str]:
+    def _prepare_overlay_data(self, metadata: Dict, mode: Optional[str] = None) -> Dict[str, str]:
         """
         Prepare data dictionary for overlay formatting.
 
@@ -366,9 +362,7 @@ class ImageOverlay:
             # Default to bottom-left
             return (margin, img_height - text_height - margin)
 
-    def _draw_gradient_bar(
-        self, draw, img_width: int, bar_height: int, base_color: List[int]
-    ):
+    def _draw_gradient_bar(self, draw, img_width: int, bar_height: int, base_color: List[int]):
         """
         Draw a gradient background bar that fades from solid to transparent.
 
@@ -433,9 +427,7 @@ class ImageOverlay:
                     font_bold = ImageFont.truetype(self.font, font_size)
 
                     # Load regular font (for details)
-                    regular_font_path = self.font.replace("-Bold", "").replace(
-                        "-bold", ""
-                    )
+                    regular_font_path = self.font.replace("-Bold", "").replace("-bold", "")
                     try:
                         font_regular = ImageFont.truetype(regular_font_path, font_size)
                     except Exception:
@@ -474,16 +466,10 @@ class ImageOverlay:
 
                 # Get bottom padding multiplier for extra spacing
                 layout_config = self.overlay_config.get("layout", {})
-                bottom_padding_mult = layout_config.get(
-                    "bottom_padding_multiplier", 1.3
-                )
+                bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
 
                 # Total bar height for 2 lines with extra bottom spacing
-                bar_height = (
-                    (line_height * 2)
-                    + (padding * 2)
-                    + int(padding * bottom_padding_mult)
-                )
+                bar_height = (line_height * 2) + (padding * 2) + int(padding * bottom_padding_mult)
 
                 # Draw gradient background
                 bg_config = self.overlay_config.get("background", {})
@@ -507,12 +493,8 @@ class ImageOverlay:
                 draw.text((left_x, y1), camera_name, fill=font_color, font=font_bold)
 
                 # Line 2 Left: Date and time (regular, localized if enabled)
-                datetime_text = data.get(
-                    "datetime_localized", f"{data['date']} {data['time']}"
-                )
-                draw.text(
-                    (left_x, y2), datetime_text, fill=font_color, font=font_regular
-                )
+                datetime_text = data.get("datetime_localized", f"{data['date']} {data['time']}")
+                draw.text((left_x, y2), datetime_text, fill=font_color, font=font_regular)
 
                 # RIGHT SIDE (use config content, regular font)
                 content_config = self.overlay_config.get("content", {})

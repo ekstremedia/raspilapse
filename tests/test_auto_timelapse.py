@@ -305,7 +305,5 @@ class TestAdaptiveTimelapse:
         assert "AnalogueGain" in settings
 
         # Transition should have intermediate values
-        night_gain = timelapse.config["adaptive_timelapse"]["night_mode"][
-            "analogue_gain"
-        ]
+        night_gain = timelapse.config["adaptive_timelapse"]["night_mode"]["analogue_gain"]
         assert settings["AnalogueGain"] <= night_gain

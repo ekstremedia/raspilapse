@@ -129,9 +129,7 @@ Examples:
             # Look for {image}_metadata.json
             metadata_path = image_path.parent / f"{image_path.stem}_metadata.json"
             if not metadata_path.exists():
-                logger.warning(
-                    f"Metadata not found: {metadata_path}, using empty metadata"
-                )
+                logger.warning(f"Metadata not found: {metadata_path}, using empty metadata")
                 metadata_path = None
 
         # Determine output path

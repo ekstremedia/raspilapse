@@ -154,9 +154,7 @@ class TestLoggerConfig:
         # Modify config to use temp directory
         with open(test_config_with_logging, "r") as f:
             config_data = yaml.safe_load(f)
-        config_data["logging"]["log_file"] = os.path.join(
-            temp_log_dir, "test_{script}.log"
-        )
+        config_data["logging"]["log_file"] = os.path.join(temp_log_dir, "test_{script}.log")
 
         with open(test_config_with_logging, "w") as f:
             yaml.dump(config_data, f)
@@ -183,8 +181,7 @@ class TestLoggerConfig:
 
         # Check for StreamHandler (console handler)
         has_console_handler = any(
-            isinstance(h, logging.StreamHandler)
-            and not isinstance(h, logging.FileHandler)
+            isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
             for h in logger.handlers
         )
         assert has_console_handler

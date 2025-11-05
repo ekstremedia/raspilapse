@@ -304,11 +304,30 @@ GitHub Actions automatically runs tests on every push and pull request across mu
 
 - Unit tests with mocking (no hardware required)
 - Code linting with flake8
-- Code formatting checks with black
+- **Code formatting checks with Black** (must pass!)
 - Type checking with mypy
 - Coverage reporting
 
 All tests can run in CI/CD without requiring actual camera hardware.
+
+### Development Workflow
+
+```bash
+# Quick way: Use Makefile commands
+make format    # Format code with Black
+make test      # Run tests
+make all       # Format, check, and test (recommended before commit!)
+
+# Manual way:
+black src/ tests/ --line-length=100
+python3 -m pytest tests/ -v
+
+# Pre-commit hooks (automatic formatting on git commit):
+pip3 install pre-commit
+pre-commit install
+```
+
+**IMPORTANT**: Always run `make format` or `black src/ tests/ --line-length=100` before committing to avoid CI failures!
 
 ## Roadmap to 1.0.0
 

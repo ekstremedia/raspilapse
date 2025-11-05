@@ -294,9 +294,7 @@ class AdaptiveTimelapse:
         }
 
         # Create metadata directory (files get overwritten, not accumulated)
-        metadata_dir = Path(
-            self.config.get("system", {}).get("metadata_folder", "metadata")
-        )
+        metadata_dir = Path(self.config.get("system", {}).get("metadata_folder", "metadata"))
         metadata_dir.mkdir(exist_ok=True)
 
         # Capture test image (overwritten each time - no timestamps)
@@ -355,9 +353,7 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.error(f"Failed to create symlink: {e}")
 
-    def capture_frame(
-        self, capture: ImageCapture, mode: str
-    ) -> Tuple[str, Optional[str]]:
+    def capture_frame(self, capture: ImageCapture, mode: str) -> Tuple[str, Optional[str]]:
         """
         Capture a single frame with the camera's current settings.
 
@@ -500,9 +496,7 @@ class AdaptiveTimelapse:
                 logger.info("Closing camera...")
                 self._close_camera_fast(capture, last_mode)
 
-            logger.info(
-                f"=== Adaptive Timelapse Stopped ({self.frame_count} frames) ==="
-            )
+            logger.info(f"=== Adaptive Timelapse Stopped ({self.frame_count} frames) ===")
 
 
 def main():

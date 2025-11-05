@@ -11,9 +11,7 @@ import yaml
 class LoggerConfig:
     """Configure and setup logging for Raspilapse scripts."""
 
-    def __init__(
-        self, config_path: str = "config/config.yml", script_name: Optional[str] = None
-    ):
+    def __init__(self, config_path: str = "config/config.yml", script_name: Optional[str] = None):
         """
         Initialize logger configuration.
 
@@ -84,9 +82,7 @@ class LoggerConfig:
 
         # Create formatter
         formatter = logging.Formatter(
-            log_config.get(
-                "format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            ),
+            log_config.get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"),
             datefmt=log_config.get("date_format", "%Y-%m-%d %H:%M:%S"),
         )
 
@@ -146,9 +142,7 @@ class LoggerConfig:
         return level_map.get(level_str.upper(), logging.INFO)
 
 
-def get_logger(
-    script_name: str, config_path: str = "config/config.yml"
-) -> logging.Logger:
+def get_logger(script_name: str, config_path: str = "config/config.yml") -> logging.Logger:
     """
     Convenience function to get a configured logger.
 

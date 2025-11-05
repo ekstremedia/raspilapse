@@ -331,9 +331,7 @@ class ImageCapture:
         """
         if self.picam2 is None:
             logger.error("Camera not initialized. Call initialize_camera() first.")
-            raise RuntimeError(
-                "Camera not initialized. Call initialize_camera() first."
-            )
+            raise RuntimeError("Camera not initialized. Call initialize_camera() first.")
 
         logger.info(f"Starting image capture #{self._counter}")
 
@@ -379,9 +377,7 @@ class ImageCapture:
                 metadata_path = None
                 if self.config.should_save_metadata():
                     logger.debug("Saving metadata...")
-                    metadata_path = self._save_metadata_from_dict(
-                        output_path, metadata_dict
-                    )
+                    metadata_path = self._save_metadata_from_dict(output_path, metadata_dict)
                     logger.debug(f"Metadata saved: {metadata_path}")
             finally:
                 # Always release the request
@@ -488,18 +484,14 @@ def main():
     """CLI entry point for capturing a single image."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Capture an image using Raspberry Pi Camera V3"
-    )
+    parser = argparse.ArgumentParser(description="Capture an image using Raspberry Pi Camera V3")
     parser.add_argument(
         "-c",
         "--config",
         default="config/config.yml",
         help="Path to configuration file (default: config/config.yml)",
     )
-    parser.add_argument(
-        "-o", "--output", help="Output file path (overrides config pattern)"
-    )
+    parser.add_argument("-o", "--output", help="Output file path (overrides config pattern)")
 
     args = parser.parse_args()
 
