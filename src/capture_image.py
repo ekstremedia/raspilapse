@@ -11,8 +11,10 @@ import yaml
 # Handle imports for both module and script execution
 try:
     from src.logging_config import get_logger
+    from src.overlay import ImageOverlay
 except ImportError:
     from logging_config import get_logger
+    from overlay import ImageOverlay
 
 # Initialize logger
 logger = get_logger("capture_image")
@@ -105,6 +107,10 @@ class ImageCapture:
         self.config = config
         self.picam2 = None
         self._counter = 0
+
+        # Initialize overlay handler
+        self.overlay = ImageOverlay(config.config)
+
         logger.debug("ImageCapture instance created")
 
     def initialize_camera(self, manual_controls: Optional[Dict] = None):
@@ -310,12 +316,15 @@ class ImageCapture:
             logger.debug(f"Applying controls to camera: {control_map}")
             self.picam2.set_controls(control_map)
 
-    def capture(self, output_path: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    def capture(
+        self, output_path: Optional[str] = None, mode: Optional[str] = None
+    ) -> Tuple[str, Optional[str]]:
         """
         Capture an image.
 
         Args:
             output_path: Optional custom output path. If None, uses config pattern.
+            mode: Optional light mode (day/night/transition) for overlay display
 
         Returns:
             Tuple of (image_path, metadata_path)
@@ -363,16 +372,23 @@ class ImageCapture:
                 request.save("main", str(output_path))
                 logger.info(f"Image captured successfully: {output_path}")
 
+                # Get metadata from request (always, for overlay)
+                metadata_dict = request.get_metadata()
+
                 # Save metadata if enabled (from request, no blocking!)
                 metadata_path = None
                 if self.config.should_save_metadata():
                     logger.debug("Saving metadata...")
-                    metadata_dict = request.get_metadata()
                     metadata_path = self._save_metadata_from_dict(output_path, metadata_dict)
                     logger.debug(f"Metadata saved: {metadata_path}")
             finally:
                 # Always release the request
                 request.release()
+
+            # Apply overlay if enabled (do this after release to avoid holding camera)
+            if self.overlay.enabled and metadata_dict is not None:
+                logger.debug("Applying overlay...")
+                self.overlay.apply_overlay(str(output_path), metadata_dict, mode)
 
             self._counter += 1
 
@@ -406,6 +422,8 @@ class ImageCapture:
             counter=f"{self._counter:04d}",
             timestamp=timestamp.isoformat(),
         )
+        # Support strftime formatting (e.g., %Y_%m_%d_%H_%M_%S)
+        metadata_filename = timestamp.strftime(metadata_filename)
 
         metadata_path = image_path.parent / metadata_filename
 

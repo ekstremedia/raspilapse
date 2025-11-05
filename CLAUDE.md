@@ -469,10 +469,10 @@ picam2.close()
 The adaptive timelapse (`src/auto_timelapse.py`) automatically adjusts exposure settings for 24/7 capture:
 
 **Per-Frame Process:**
-1. **Test Shot** → Measure light (saves to `test_shots/` with metadata)
+1. **Test Shot** → Measure light (saves to `metadata/test_shot.jpg`, overwritten each time)
 2. **Calculate Lux** → Determine day/night/transition mode
 3. **Close Camera** → Release test shot camera instance
-4. **Actual Capture** → Apply adaptive settings, save to `test_photos/` with metadata
+4. **Actual Capture** → Apply adaptive settings, save to `test_photos/kringelen_YYYY_MM_DD_HH_MM_SS.jpg` with metadata
 5. **Wait** → Sleep until next interval
 
 **Metadata Handling:**
@@ -481,11 +481,13 @@ The adaptive timelapse (`src/auto_timelapse.py`) automatically adjusts exposure 
 - ✅ Non-blocking - no delays waiting for metadata
 - ❌ Does NOT close/reopen camera between image and metadata
 
-**Test Shots:**
-- Stored in `test_shots/` directory for debugging
+**Metadata Directory:**
+- Stored in `metadata/` directory with fixed filenames (overwritten each time)
+- `metadata/test_shot.jpg` - Latest test shot for light measurement
+- `metadata/test_shot_metadata.json` - Latest test metadata
 - Fixed settings (0.1s exposure, gain 1.0) for consistent light measurement
 - NOT part of your timelapse output
-- Can be deleted anytime (directory will be recreated)
+- Only 2 files (never accumulates)
 
 **Camera State:**
 - Hardware limitation: Only ONE camera instance at a time
@@ -499,6 +501,34 @@ python3 src/auto_timelapse.py --test  # Capture one image then exit
 ```
 
 For detailed flow documentation, see `ADAPTIVE_TIMELAPSE_FLOW.md`.
+
+### Overlay System
+
+Modern text overlay system for adding camera information to images:
+
+**Features:**
+- ✅ Configurable content (timestamps, camera settings, debug info)
+- ✅ Semi-transparent backgrounds for readability
+- ✅ Resolution-independent sizing
+- ✅ Flexible positioning (corners or custom)
+- ✅ Automatic during capture OR standalone script
+
+**Quick Enable:**
+```yaml
+# config/config.yml
+overlay:
+  enabled: true
+  position: "bottom-left"
+  camera_name: "My Timelapse"
+```
+
+**Standalone Usage:**
+```bash
+# Apply to existing images
+python3 src/apply_overlay.py test_photos/*.jpg --output-dir overlayed/
+```
+
+**Documentation:** See `OVERLAY.md` for complete configuration reference.
 
 ---
 

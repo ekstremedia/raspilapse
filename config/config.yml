@@ -52,11 +52,10 @@ output:
   # - {counter} - Sequential counter (4 digits, zero-padded)
   # - {name} - Project name
   # You can also use strftime directives like %Y%m%d_%H%M%S
-  filename_pattern: "{name}_{timestamp}.jpg"
-  #filename_pattern: "{name}_{counter}.jpg"
+  filename_pattern: "{name}_%Y_%m_%d_%H_%M_%S.jpg"
 
   # Project name (used in filename)
-  project_name: "raspilapse"
+  project_name: "kringelen"
 
   # Image quality (0-100, JPEG compression)
   # Higher = better quality, larger files
@@ -67,6 +66,11 @@ output:
 
   # Date format for subdirectories (if organize_by_date is true)
   date_format: "%Y-%m-%d"
+
+  # Symlink latest image (for web status display)
+  symlink_latest:
+    enabled: true
+    path: "/var/www/html/status.jpg"
 
 # Timelapse Settings (for future timelapse.py script)
 timelapse:
@@ -167,7 +171,122 @@ system:
   save_metadata: true
 
   # Metadata filename pattern
-  metadata_filename: "{name}_{counter}_metadata.json"
+  metadata_filename: "{name}_%Y_%m_%d_%H_%M_%S_metadata.json"
+
+  # Metadata folder for test shots (overwritten each time)
+  metadata_folder: "metadata"
+
+# Overlay Settings
+overlay:
+  # Enable/disable overlay
+  enabled: true
+
+  # Font settings
+  font:
+    # Font family (system font name or path to .ttf file)
+    # Common: "DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "Arial.ttf"
+    # Leave as "default" to use PIL default font
+    family: "DejaVuSans-Bold.ttf"  # Bold for sharper, clearer text
+
+    # Font size relative to image height (0.02 = 2% of image height)
+    size_ratio: 0.020  # Slightly larger for bar mode
+
+    # Font color (RGB or RGBA)
+    color: [255, 255, 255, 255]  # Pure white with full opacity
+
+  # Background settings for text
+  background:
+    # Enable semi-transparent background behind text
+    enabled: true
+
+    # Background color (RGBA - last value is opacity: 0=transparent, 255=opaque)
+    # For top-bar mode, this creates a gradient that fades out at the bottom
+    color: [0, 0, 0, 110]  # Black with 43% opacity (very transparent with gradient)
+
+    # Padding around text (relative to font size)
+    padding: 0.6  # Extra padding for more breathing room
+
+  # Position presets: "top-left", "top-right", "bottom-left", "bottom-right", "top-bar", "custom"
+  # "top-bar" creates a full-width navbar at top with centered text
+  position: "top-bar"
+
+  # Custom position (only used if position = "custom")
+  # Values are percentages of image dimensions (0-100)
+  custom_position:
+    x: 5  # 5% from left
+    y: 95  # 95% from top (near bottom)
+
+  # Margin from edges (pixels)
+  margin: 10  # Small margin for top-bar mode
+
+  # Content to display (each item is a line of text)
+  # Available variables:
+  #   {date} - Date (YYYY-MM-DD)
+  #   {time} - Time (HH:MM:SS)
+  #   {datetime} - Full datetime
+  #   {camera_name} - Camera name from config
+  #   {mode} - Light mode (day/night/transition)
+  #   {exposure} - Exposure time (human readable)
+  #   {exposure_ms} - Exposure time in milliseconds
+  #   {exposure_us} - Exposure time in microseconds
+  #   {iso} - ISO/Analogue gain
+  #   {gain} - Analogue gain (raw value)
+  #   {wb} - White balance mode (auto/manual)
+  #   {wb_gains} - White balance gains (R, B)
+  #   {lux} - Calculated lux value
+  #   {resolution} - Image resolution
+  #   {temperature} - Camera sensor temperature (hardware, NOT ambient)
+  content:
+    # Main info (always visible) - centered in bar
+    main:
+      - "{camera_name}"
+      - "{date} {time}"
+
+    # Camera settings (optional) - in bar layout
+    camera_settings:
+      enabled: true
+      lines:
+        - "Mode: {mode} | Exposure: {exposure} | ISO: {iso} | Lux: {lux}"
+
+    # Debug info (optional - shows all metadata)
+    debug:
+      enabled: true
+      lines:
+        - "Gain: {gain} | Sensor: {temperature}°C | Color: {color_gains}"
+
+  # Camera name (displayed in overlay)
+  camera_name: "Kringelen Timelapse"
+
+  # DateTime formatting
+  datetime:
+    # Use localized date/time format (day name, month name in local language)
+    localized: true
+
+    # Locale for date/time formatting (e.g., "nb_NO" for Norwegian, "en_US" for English)
+    # Must be installed on system: locale -a to list available
+    locale: "nb_NO.UTF-8"
+
+    # Show seconds in time
+    show_seconds: false
+
+    # Date format (when localized=false)
+    # Strftime format: %Y-%m-%d = 2025-11-05
+    date_format: "%Y-%m-%d"
+
+    # Time format (when localized=false)
+    # Strftime format: %H:%M:%S = 15:45:30, %H:%M = 15:45
+    time_format: "%H:%M"
+
+  # Layout options
+  layout:
+    # Line spacing multiplier (1.0 = normal, 1.5 = 1.5x spacing)
+    line_spacing: 1.2  # Tighter spacing for bar mode
+
+    # Separate sections with blank line
+    section_spacing: false  # No blank lines in compact bar
+
+    # Extra bottom spacing for bar (adds padding below text)
+    bottom_padding_multiplier: 1.3  # 30% more space at bottom
 
 # Logging Settings
 logging:

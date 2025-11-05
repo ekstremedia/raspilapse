@@ -37,9 +37,9 @@ The adaptive timelapse automatically adjusts camera settings based on ambient li
    - Camera closes automatically (uses context manager: `with ImageCapture(...)`)
    - **CRITICAL:** Camera MUST close before Step 2 to avoid "Camera in Running state" error
 
-**Files created:**
-- `test_shots/test_20251105_103045.jpg` (test image)
-- `test_shots/test_20251105_103045_metadata.json` (test metadata)
+**Files created (overwritten each time):**
+- `metadata/test_shot.jpg` (test image - overwritten)
+- `metadata/test_shot_metadata.json` (test metadata - overwritten)
 
 ---
 
@@ -77,14 +77,14 @@ The adaptive timelapse automatically adjusts camera settings based on ambient li
    ```
 
 2. **Capture:**
-   - Saves to: `test_photos/{project_name}_{timestamp}.jpg`
+   - Saves to: `test_photos/{project_name}_YYYY_MM_DD_HH_MM_SS.jpg`
    - Uses `capture_request()` method - **ONE operation gets both image AND metadata**
    - **NO camera close/reopen** between image and metadata
    - **NO blocking delays** (unlike old `capture_metadata()` method)
 
 3. **Metadata saved:**
    - Extracted from SAME request (line 370: `request.get_metadata()`)
-   - Saves to: `test_photos/{project_name}_{timestamp}_metadata.json`
+   - Saves to: `test_photos/{project_name}_YYYY_MM_DD_HH_MM_SS_metadata.json`
    - Contains:
      - Actual exposure time used
      - Actual analogue gain used
@@ -98,8 +98,8 @@ The adaptive timelapse automatically adjusts camera settings based on ambient li
    - Camera stays open (reused for next frame if mode unchanged)
 
 **Files created:**
-- `test_photos/raspilapse_2025-11-05T10:30:45.123456.jpg` (timelapse frame)
-- `test_photos/raspilapse_2025-11-05T10:30:45.123456_metadata.json` (frame metadata)
+- `test_photos/kringelen_2025_11_05_10_30_45.jpg` (timelapse frame)
+- `test_photos/kringelen_2025_11_05_10_30_45_metadata.json` (frame metadata)
 
 ---
 
@@ -148,19 +148,20 @@ finally:
 
 ---
 
-## Debugging: Test Shots Directory
+## Metadata Directory
 
-**Purpose:** `test_shots/` contains diagnostic images used ONLY for light measurement
+**Purpose:** `metadata/` contains the most recent test shot used ONLY for light measurement
 
-**Files stored:**
-- Test images: `test_shots/test_YYYYMMDD_HHMMSS.jpg`
-- Test metadata: `test_shots/test_YYYYMMDD_HHMMSS_metadata.json`
+**Files stored (overwritten each time):**
+- Test image: `metadata/test_shot.jpg` (latest test shot, overwritten)
+- Test metadata: `metadata/test_shot_metadata.json` (latest metadata, overwritten)
 
 **These are NOT part of your timelapse** - they're just for calculating lux values.
 
-**Cleanup:** You can delete `test_shots/` anytime (it will be recreated). Or add to `.gitignore`.
-
-**Disable saving test shots?** Modify `auto_timelapse.py:297` to use a temporary file that gets deleted after analysis (future enhancement).
+**Benefits:**
+- No accumulation of files (always just 2 files)
+- Easy to inspect the latest test shot for debugging
+- Minimal disk usage
 
 ---
 
@@ -229,8 +230,8 @@ python3 src/auto_timelapse.py --test
 - Quick exposure checks
 
 **Output:**
-- `test_shots/test_*.jpg` (light measurement)
-- `test_photos/raspilapse_*.jpg` (actual frame with adaptive settings)
+- `metadata/test_shot.jpg` (light measurement - overwritten)
+- `test_photos/kringelen_YYYY_MM_DD_HH_MM_SS.jpg` (actual frame with adaptive settings)
 
 ---
 
@@ -240,10 +241,10 @@ python3 src/auto_timelapse.py --test
 |--------|---------------|
 | **Metadata saved?** | ✅ YES - every shot (test + actual) |
 | **Open/close for metadata?** | ❌ NO - single `capture_request()` call |
-| **Test shots stored?** | ✅ YES - in `test_shots/` directory |
+| **Test shots stored?** | ✅ YES - in `metadata/` directory (overwritten) |
 | **Blocking delays?** | ❌ NO - `capture_request()` is non-blocking |
 | **Long exposure speed** | ⚡ 20s exposure = ~20s total (optimized!) |
 | **Camera instances** | 🔄 Opens/closes between test shot and actual capture |
-| **Filename pattern** | 📅 Timestamp or counter (configurable) |
+| **Filename pattern** | 📅 `kringelen_YYYY_MM_DD_HH_MM_SS.jpg` |
 
 **The system is fully optimized for 24/7 timelapse with adaptive exposure!** 🎉

@@ -19,6 +19,7 @@ htmlcov/
 # Output
 test_photos/
 test_shots/
+metadata/
 *.jpg
 *.jpeg
 *.png

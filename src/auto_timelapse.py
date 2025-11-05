@@ -293,13 +293,13 @@ class AdaptiveTimelapse:
             "awb_enable": True,
         }
 
-        # Create temporary output directory for test shots
-        test_dir = Path("test_shots")
-        test_dir.mkdir(exist_ok=True)
+        # Create metadata directory (files get overwritten, not accumulated)
+        metadata_dir = Path(self.config.get("system", {}).get("metadata_folder", "metadata"))
+        metadata_dir.mkdir(exist_ok=True)
 
-        # Capture test image
+        # Capture test image (overwritten each time - no timestamps)
         with ImageCapture(self.camera_config) as capture:
-            test_path = test_dir / f"test_{datetime.now():%Y%m%d_%H%M%S}.jpg"
+            test_path = metadata_dir / "test_shot.jpg"
             image_path, metadata_path = capture.capture(str(test_path))
 
             # Read metadata
@@ -317,6 +317,42 @@ class AdaptiveTimelapse:
         logger.debug(f"Test shot saved: {image_path}")
         return image_path, metadata
 
+    def _create_latest_symlink(self, image_path: str):
+        """
+        Create a symlink to the latest captured image.
+
+        Args:
+            image_path: Path to the latest image
+        """
+        symlink_config = self.config.get("output", {}).get("symlink_latest", {})
+        if not symlink_config.get("enabled", False):
+            return
+
+        symlink_path = symlink_config.get("path")
+        if not symlink_path:
+            logger.warning("Symlink enabled but no path specified")
+            return
+
+        try:
+            symlink_path = Path(symlink_path)
+            image_path = Path(image_path).resolve()  # Get absolute path
+
+            # Remove existing symlink/file if it exists
+            if symlink_path.exists() or symlink_path.is_symlink():
+                symlink_path.unlink()
+
+            # Create new symlink
+            symlink_path.symlink_to(image_path)
+            logger.debug(f"Created symlink: {symlink_path} -> {image_path}")
+
+        except PermissionError:
+            logger.error(
+                f"Permission denied creating symlink at {symlink_path}. "
+                f"You may need to run with sudo or adjust permissions."
+            )
+        except Exception as e:
+            logger.error(f"Failed to create symlink: {e}")
+
     def capture_frame(
         self, capture: ImageCapture, mode: str
     ) -> Tuple[str, Optional[str]]:
@@ -333,7 +369,11 @@ class AdaptiveTimelapse:
         logger.info(f"Capturing frame #{self.frame_count} in {mode} mode...")
 
         # Capture the image (controls were set during initialization)
-        image_path, metadata_path = capture.capture()
+        # Pass mode so overlay knows the light mode
+        image_path, metadata_path = capture.capture(mode=mode)
+
+        # Create symlink to latest image if enabled
+        self._create_latest_symlink(image_path)
 
         self.frame_count += 1
         return image_path, metadata_path
