@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "Raspilapse: Raspberry Pi Camera Timelapse Library"
+version: 0.9.0-beta
+date-released: 2025-11-05
+url: "https://github.com/ekstremedia/raspilapse"
+repository-code: "https://github.com/ekstremedia/raspilapse"
+license: MIT
+authors:
+  - family-names: "Nesthus"
+    given-names: "Terje"
+    email: "terje@ekstremedia.no"
+    affiliation: "Ekstremedia"
+    orcid: ""
+keywords:
+  - raspberry-pi
+  - camera
+  - timelapse
+  - photography
+  - picamera2
+  - python
+  - image-processing
+  - adaptive-exposure
+abstract: >
+  Raspilapse is a Python library for creating professional timelapses
+  with Raspberry Pi Camera Module. It features adaptive exposure adjustment
+  for day/night photography, configurable image overlays with metadata,
+  optimized long exposures, and comprehensive logging. Designed for
+  construction monitoring, nature photography, astronomy, and scientific
+  research applications.

@@ -1,24 +1,39 @@
 # Raspilapse
 
 ![Tests](https://github.com/ekstremedia/raspilapse/workflows/Tests/badge.svg)
+[![codecov](https://codecov.io/gh/ekstremedia/raspilapse/branch/main/graph/badge.svg)](https://codecov.io/gh/ekstremedia/raspilapse)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![Version](https://img.shields.io/badge/version-0.9.0--beta-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi-red)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-A simple, user-friendly Python library for creating timelapses with Raspberry Pi and Camera Module V3.
+> 🎥 **A Python library for creating professional timelapses with Raspberry Pi Camera**
+>
+> Created by **Terje Nesthus** | Open Source (MIT) | Currently in Beta
+
+A simple, user-friendly Python library for creating timelapses with Raspberry Pi and Camera Module V3. Features adaptive exposure, beautiful overlays, and optimized long exposures for day/night photography.
 
 ## Features
 
-- **Easy to Use** - Simple configuration and command-line interface
-- **Flexible Configuration** - YAML-based config for all camera and output settings
-- **Professional Logging** - Comprehensive logging with automatic rotation
-- **Metadata Capture** - Saves detailed metadata with each image
-- **Camera Controls** - Full control over exposure, white balance, focus, and more
-- **Multiple Resolutions** - Support for all Camera V3 resolutions (up to 11.9MP)
-- **Image Transforms** - Horizontal and vertical flipping
-- **Optimized Long Exposures** - Fast 20s exposures (~20-22s capture time) with proper libcamera configuration
-- **Adaptive Timelapse** - Automatically adjusts exposure based on ambient light (day/night/transition)
-- **Open Source** - Free to use and modify
+### Core Features
+- ✨ **Easy to Use** - Simple configuration and command-line interface
+- 📝 **Flexible Configuration** - YAML-based config for all camera and output settings
+- 📊 **Professional Logging** - Comprehensive logging with automatic rotation
+- 📷 **Metadata Capture** - Saves detailed metadata with each image
+- 🎛️ **Camera Controls** - Full control over exposure, white balance, focus, and more
+- 🖼️ **Multiple Resolutions** - Support for all Camera V3 resolutions (up to 11.9MP)
+- 🔄 **Image Transforms** - Horizontal and vertical flipping
+
+### Advanced Features
+- 🚀 **Optimized Long Exposures** - Fast 20s exposures (~20-22s capture time) with proper libcamera configuration
+- 🌅 **Adaptive Timelapse** - Automatically adjusts exposure based on ambient light (day/night/transition modes)
+- 🎨 **Image Overlay System** - Beautiful, configurable overlays with camera settings, timestamps, and metadata
+- 🌍 **Localized Timestamps** - Multi-language datetime formatting (Norwegian, English, etc.)
+- 🔗 **Web Integration** - Automatic symlink to latest image for web servers
+- 🎭 **Gradient Backgrounds** - Professional semi-transparent overlays that adapt to image brightness
+- 🧪 **Fully Tested** - 64 unit tests with CI/CD integration
+- 🆓 **Open Source** - MIT licensed, free to use and modify
 
 ## Hardware Requirements
 
@@ -295,30 +310,80 @@ GitHub Actions automatically runs tests on every push and pull request across mu
 
 All tests can run in CI/CD without requiring actual camera hardware.
 
-## Contributing
+## Roadmap to 1.0.0
 
-Contributions are welcome! This is a free, open-source project.
+Current version: **0.9.0-beta** 🚧
 
-### How to Contribute
+### What's Working ✅
+- ✅ Core image capture
+- ✅ Adaptive timelapse (day/night/transition)
+- ✅ Image overlay system with localization
+- ✅ Long exposure optimization
+- ✅ Comprehensive logging
+- ✅ Full test coverage (64 tests)
+- ✅ CI/CD pipeline
 
+### Planned for 1.0.0 Stable Release 🎯
+- 🔄 Video compilation script (ffmpeg wrapper)
+- 🌐 Web interface for monitoring
+- 📱 Mobile app integration APIs
+- ⏰ Advanced scheduling (cron-like)
+- ☁️ Cloud storage integration (optional)
+- 📖 Video tutorials and examples
+- 🌍 Multi-language documentation
+
+### How to Contribute 🤝
+
+Contributions are welcome! This is a free, open-source project under the MIT license.
+
+**Ways to contribute:**
+1. 🐛 Report bugs and issues
+2. 💡 Suggest new features
+3. 📝 Improve documentation
+4. 🧪 Add more tests
+5. 💻 Submit pull requests
+
+**Contribution process:**
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Run tests (`python3 -m pytest tests/`)
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+3. Make your changes and add tests
+4. Run the test suite (`python3 -m pytest tests/`)
+5. Format your code (`black src/ tests/`)
+6. Commit your changes (`git commit -m 'Add amazing feature'`)
+7. Push to the branch (`git push origin feature/amazing-feature`)
+8. Open a Pull Request
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## License
 
-Free to use and modify. See LICENSE file for details.
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
 
-## Credits
+Copyright © 2024-2025 Terje Nesthus
 
-Built using:
+You are free to:
+- ✅ Use commercially
+- ✅ Modify and distribute
+- ✅ Use privately
+- ✅ Sublicense
+
+## Author
+
+**Terje Nesthus**
+- 🌐 Website: [ekstremedia.no](https://ekstremedia.no)
+- 💼 Company: Ekstremedia
+- 📧 Email: terje@ekstremedia.no
+- 🐙 GitHub: [@ekstremedia](https://github.com/ekstremedia)
+
+## Credits & Acknowledgments
+
+Built with:
 - [Picamera2](https://github.com/raspberrypi/picamera2) - Official Raspberry Pi camera library
-- Python 3 and PyYAML
-- Raspberry Pi Camera Module V3
+- [Pillow](https://python-pillow.org/) - Python Imaging Library for overlay system
+- [PyYAML](https://pyyaml.org/) - YAML parser for configuration
+- Python 3.9+ and the Raspberry Pi Foundation
+
+Special thanks to the Raspberry Pi community for their excellent documentation and support.
 
 ## Support
 
