@@ -70,16 +70,38 @@ For continuous 24/7 operation as a background service:
 # Install and start service
 ./install_service.sh
 
-# Check status
+# Check status with beautiful colored output
+python3 src/status.py
+
+# Or use systemctl
 sudo systemctl status raspilapse
 
-# View logs
+# View logs in real-time
 sudo journalctl -u raspilapse -f
 ```
 
 Images are automatically saved to `/var/www/html/images/YYYY/MM/DD/` and organized by date.
 
 See [SERVICE.md](SERVICE.md) for complete service documentation.
+
+### Testing & Status
+
+Run comprehensive tests to verify your installation:
+
+```bash
+# Run full test suite (checks dependencies, config, camera, service)
+./test.sh
+
+# Quick status check only
+python3 src/status.py
+```
+
+The status script shows:
+- 📡 Service status (running/stopped/failed)
+- ⚙️ Current configuration settings
+- 🖼️ Overlay configuration
+- 📸 Recent captures with timing info
+- 🔗 Symlink status for web display
 
 ### Manual Capture
 
@@ -224,12 +246,21 @@ raspilapse/
 │   └── config.yml           # Main configuration file
 ├── src/
 │   ├── capture_image.py     # Image capture module
+│   ├── auto_timelapse.py    # Adaptive timelapse (day/night)
+│   ├── overlay.py           # Image overlay system
+│   ├── status.py            # Status display script
 │   └── logging_config.py    # Logging configuration
 ├── logs/                    # Log files (auto-created)
+├── metadata/                # Test shot metadata (not accumulated)
 ├── test_photos/             # Default output directory
 ├── tests/                   # Unit tests
+├── test.sh                  # Comprehensive test script
+├── install_service.sh       # Service installation script
+├── uninstall_service.sh     # Service removal script
 ├── INSTALL.md               # Installation guide
 ├── USAGE.md                 # Usage guide
+├── SERVICE.md               # Service documentation
+├── OVERLAY.md               # Overlay system documentation
 ├── CLAUDE.md                # Technical reference
 └── README.md                # This file
 ```

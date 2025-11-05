@@ -532,6 +532,99 @@ python3 src/apply_overlay.py test_photos/*.jpg --output-dir overlayed/
 
 ---
 
+## Utility Scripts
+
+### Status Display (src/status.py)
+
+Beautiful colored status display showing system state, configuration, and recent captures.
+
+**Features:**
+- ✅ Service status (running/stopped/failed) with color indicators
+- ✅ Configuration summary (resolution, interval, light thresholds)
+- ✅ Overlay settings display
+- ✅ Recent captures with timing analysis
+- ✅ Average interval calculation
+- ✅ Symlink status for web display
+- ✅ ANSI colored output for readability
+
+**Usage:**
+```bash
+# Show full status
+python3 src/status.py
+
+# With custom config
+python3 src/status.py -c config/custom.yml
+```
+
+**Output Example:**
+```
+============================================================
+  🎥  RASPILAPSE STATUS  🎥
+============================================================
+
+📡 SERVICE STATUS
+────────────────────────────────────────────────────────────
+  Status:      ● RUNNING
+  Description: Service is running normally
+
+⚙️  CONFIGURATION
+────────────────────────────────────────────────────────────
+  Resolution:  1920x1080 (2.1MP)
+  Interval:    30s (2.0 captures/min)
+  Day Mode:    >100 lux ☀️
+  Night Mode:  <10 lux 🌙
+  Max Exposure: 20s (ISO 600)
+  Output:      /var/www/html/images
+
+🖼️  OVERLAY
+────────────────────────────────────────────────────────────
+  ✓ Enabled
+  Position:    top-bar
+  Camera Name: Kringelen Timelapse
+  Font:        DejaVuSans-Bold.ttf (size: 0.020)
+  Background:  ✓ (43% opacity)
+
+📸 RECENT CAPTURES
+────────────────────────────────────────────────────────────
+  Average Interval: 30.5s (target: 30s)
+
+  ● kringelen_2025_11_05_18_42_00.jpg (2m ago)
+    2025-11-05 18:42:00 · 440.5 KB
+  ○ kringelen_2025_11_05_18_40_30.jpg (4m ago)
+    2025-11-05 18:40:30 · 439.0 KB
+```
+
+### Test Script (test.sh)
+
+Comprehensive test suite for verifying installation and configuration.
+
+**What it checks:**
+- ✅ Python dependencies (picamera2, yaml, PIL, numpy)
+- ✅ Configuration file syntax
+- ✅ Camera hardware detection
+- ✅ Output directory permissions
+- ✅ Service installation and status
+- ✅ Optional test capture
+- ✅ Full status display
+
+**Usage:**
+```bash
+# Run all tests
+./test.sh
+
+# Tests will prompt for optional camera test
+# (skip if service is running)
+```
+
+**Output includes:**
+- Color-coded pass/fail indicators
+- Missing dependency warnings
+- Permission issues
+- Service status
+- Final status report
+
+---
+
 ## Development Guidelines
 
 - Use Picamera2's native methods rather than shell commands
