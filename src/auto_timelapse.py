@@ -259,16 +259,31 @@ class AdaptiveTimelapse:
 
                 settings["ExposureTime"] = int(interpolated_exposure * 1_000_000)
                 settings["AnalogueGain"] = interpolated_gain
-                settings["AwbEnable"] = 1
+
+                # CRITICAL: Disable AWB for long exposures (>1s) to avoid 5x slowdown
+                # For short exposures, enable AWB for better color accuracy
+                if interpolated_exposure > 1.0:
+                    settings["AwbEnable"] = 0
+                    # Use manual color gains for long exposures
+                    night_config = adaptive_config["night_mode"]
+                    if "colour_gains" in night_config:
+                        settings["ColourGains"] = tuple(night_config["colour_gains"])
+                else:
+                    settings["AwbEnable"] = 1
 
                 logger.info(
-                    f"Transition mode: lux={lux:.2f}, exposure={interpolated_exposure:.2f}s, gain={interpolated_gain:.2f}"
+                    f"Transition mode: lux={lux:.2f}, exposure={interpolated_exposure:.2f}s, gain={interpolated_gain:.2f}, awb={'off' if settings['AwbEnable'] == 0 else 'on'}"
                 )
             else:
                 # Use middle values
-                settings["ExposureTime"] = int(5.0 * 1_000_000)  # 5 seconds
+                exposure_seconds = 5.0
+                settings["ExposureTime"] = int(exposure_seconds * 1_000_000)  # 5 seconds
                 settings["AnalogueGain"] = transition["analogue_gain_max"]
-                settings["AwbEnable"] = 1
+                # CRITICAL: Disable AWB for long exposures to avoid 5x slowdown
+                settings["AwbEnable"] = 0
+                night_config = adaptive_config["night_mode"]
+                if "colour_gains" in night_config:
+                    settings["ColourGains"] = tuple(night_config["colour_gains"])
 
         return settings
 
