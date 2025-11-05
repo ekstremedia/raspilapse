@@ -4,3 +4,6 @@
 
 # YAML configuration parsing
 PyYAML>=6.0
+
+# Image processing for overlay system
+Pillow>=10.0.0
