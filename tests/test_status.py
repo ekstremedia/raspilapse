@@ -159,7 +159,7 @@ def test_get_recent_captures_with_images(temp_config):
     assert all(len(cap) == 3 for cap in captures)  # (path, datetime, size)
 
 
-def test_format_size():
+def test_format_size(temp_config):
     """Test file size formatting."""
     config_path, _ = temp_config
     status = StatusDisplay(config_path)
@@ -170,7 +170,7 @@ def test_format_size():
     assert status._format_size(1024 * 1024 * 1024) == "1.0 GB"
 
 
-def test_format_time_ago():
+def test_format_time_ago(temp_config):
     """Test time ago formatting."""
     config_path, _ = temp_config
     status = StatusDisplay(config_path)

@@ -471,3 +471,325 @@ class TestIntegration:
             pytest.skip("Picamera2 not available")
         except Exception as e:
             pytest.skip(f"Camera test failed: {e}")
+
+
+class TestControlMapping:
+    """Test camera control mapping."""
+
+    def test_prepare_control_map_snake_case(self, test_config_file):
+        """Test snake_case key conversion."""
+        config = CameraConfig(test_config_file)
+        capture = ImageCapture(config)
+
+        controls = {
+            "exposure_time": 10000,
+            "analogue_gain": 2.0,
+            "awb_enable": True,
+            "ae_enable": False,
+            "brightness": 0.5,
+        }
+
+        mapped = capture._prepare_control_map(controls)
+
+        assert mapped["ExposureTime"] == 10000
+        assert mapped["AnalogueGain"] == 2.0
+        assert mapped["AwbEnable"] == 1
+        assert mapped["AeEnable"] == 0
+        assert mapped["Brightness"] == 0.5
+
+    def test_prepare_control_map_pascal_case(self, test_config_file):
+        """Test PascalCase keys pass through."""
+        config = CameraConfig(test_config_file)
+        capture = ImageCapture(config)
+
+        controls = {
+            "ExposureTime": 5000,
+            "AnalogueGain": 1.5,
+            "AwbEnable": 0,
+        }
+
+        mapped = capture._prepare_control_map(controls)
+
+        assert mapped["ExposureTime"] == 5000
+        assert mapped["AnalogueGain"] == 1.5
+        assert mapped["AwbEnable"] == 0
+
+    def test_prepare_control_map_colour_gains(self, test_config_file):
+        """Test colour gains tuple conversion."""
+        config = CameraConfig(test_config_file)
+        capture = ImageCapture(config)
+
+        controls = {"colour_gains": [1.8, 1.5]}
+        mapped = capture._prepare_control_map(controls)
+
+        assert mapped["ColourGains"] == (1.8, 1.5)
+
+    def test_initialize_camera_with_transforms(self, mock_picamera2, test_config_file):
+        """Test camera initialization with image transforms."""
+        config = CameraConfig(test_config_file)
+        config.config["camera"]["transforms"]["horizontal_flip"] = True
+        config.config["camera"]["transforms"]["vertical_flip"] = True
+
+        capture = ImageCapture(config)
+        capture.initialize_camera()
+
+        assert mock_picamera2.configure.called
+
+    def test_initialize_camera_with_manual_controls(self, mock_picamera2, test_config_file):
+        """Test camera initialization with manual controls."""
+        config = CameraConfig(test_config_file)
+        capture = ImageCapture(config)
+
+        manual_controls = {
+            "ExposureTime": 20_000_000,  # 20 seconds
+            "AnalogueGain": 6.0,
+            "AwbEnable": 0,
+        }
+
+        capture.initialize_camera(manual_controls=manual_controls)
+
+        # Verify create_still_configuration was called with controls
+        call_args = mock_picamera2.create_still_configuration.call_args
+        assert "controls" in call_args[1]
+
+        # Verify FrameDurationLimits was added for long exposure
+        controls = call_args[1]["controls"]
+        assert "FrameDurationLimits" in controls
+        assert "NoiseReductionMode" in controls
+
+    def test_initialize_camera_frame_duration_limits(self, mock_picamera2, test_config_file):
+        """Test FrameDurationLimits is set for long exposures."""
+        config = CameraConfig(test_config_file)
+        capture = ImageCapture(config)
+
+        # 10 second exposure
+        manual_controls = {"ExposureTime": 10_000_000}
+        capture.initialize_camera(manual_controls=manual_controls)
+
+        call_args = mock_picamera2.create_still_configuration.call_args
+        controls = call_args[1]["controls"]
+
+        # FrameDurationLimits should be exposure + 100ms
+        expected_duration = 10_000_000 + 100_000
+        assert controls["FrameDurationLimits"] == (expected_duration, expected_duration)
+
+    def test_initialize_camera_buffer_count(self, mock_picamera2, test_config_file):
+        """Test buffer_count is set for long exposures."""
+        config = CameraConfig(test_config_file)
+        capture = ImageCapture(config)
+
+        manual_controls = {"ExposureTime": 5_000_000}
+        capture.initialize_camera(manual_controls=manual_controls)
+
+        call_args = mock_picamera2.create_still_configuration.call_args
+        assert call_args[1]["buffer_count"] == 3
+        assert call_args[1]["queue"] is False
+
+    def test_update_controls(self, mock_picamera2, test_config_file):
+        """Test updating controls on running camera."""
+        config = CameraConfig(test_config_file)
+        capture = ImageCapture(config)
+        capture.initialize_camera()
+
+        new_controls = {
+            "ExposureTime": 15000,
+            "AnalogueGain": 1.2,
+        }
+
+        capture.update_controls(new_controls)
+        mock_picamera2.set_controls.assert_called()
+
+
+class TestOutputPath:
+    """Test output path generation."""
+
+    def test_generate_filename_with_timestamp(self, mock_picamera2, test_output_dir):
+        """Test filename with timestamp pattern."""
+        import tempfile
+        import yaml
+
+        config_data = {
+            "camera": {
+                "resolution": {"width": 640, "height": 480},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": test_output_dir,
+                "filename_pattern": "test_%Y%m%d_%H%M%S.jpg",
+                "project_name": "test",
+                "quality": 85,
+                "organize_by_date": False,
+                "symlink_latest": {"enabled": False},
+            },
+            "system": {
+                "create_directories": True,
+                "save_metadata": False,
+            },
+            "overlay": {"enabled": False},
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            config = CameraConfig(config_path)
+            capture = ImageCapture(config)
+            capture.initialize_camera()
+
+            image_path, _ = capture.capture()
+
+            # Verify timestamp format in filename
+            import re
+
+            assert re.search(r"test_\d{8}_\d{6}\.jpg", os.path.basename(image_path))
+        finally:
+            os.unlink(config_path)
+
+    def test_generate_filename_with_name_placeholder(self, mock_picamera2, test_output_dir):
+        """Test filename with {name} placeholder."""
+        import tempfile
+        import yaml
+
+        config_data = {
+            "camera": {
+                "resolution": {"width": 640, "height": 480},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": test_output_dir,
+                "filename_pattern": "{name}_photo.jpg",
+                "project_name": "myproject",
+                "quality": 85,
+                "organize_by_date": False,
+                "symlink_latest": {"enabled": False},
+            },
+            "system": {
+                "create_directories": True,
+                "save_metadata": False,
+            },
+            "overlay": {"enabled": False},
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            config = CameraConfig(config_path)
+            capture = ImageCapture(config)
+            capture.initialize_camera()
+
+            image_path, _ = capture.capture()
+
+            assert "myproject_photo.jpg" in image_path
+        finally:
+            os.unlink(config_path)
+
+
+class TestMetadataDisabled:
+    """Test behavior when metadata saving is disabled."""
+
+    def test_capture_without_metadata(self, mock_picamera2, test_output_dir):
+        """Test capture when metadata is disabled."""
+        import tempfile
+        import yaml
+
+        config_data = {
+            "camera": {
+                "resolution": {"width": 640, "height": 480},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": test_output_dir,
+                "filename_pattern": "test.jpg",
+                "project_name": "test",
+                "quality": 85,
+                "organize_by_date": False,
+                "symlink_latest": {"enabled": False},
+            },
+            "system": {
+                "create_directories": True,
+                "save_metadata": False,  # Disabled
+            },
+            "overlay": {"enabled": False},
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            config = CameraConfig(config_path)
+            assert config.should_save_metadata() is False
+
+            capture = ImageCapture(config)
+            capture.initialize_camera()
+
+            image_path, metadata_path = capture.capture()
+
+            assert image_path is not None
+            assert metadata_path is None  # No metadata file
+        finally:
+            os.unlink(config_path)
+
+
+class TestOverlayIntegration:
+    """Test capture with overlay enabled."""
+
+    def test_capture_with_overlay(self, mock_picamera2, test_output_dir):
+        """Test capture applies overlay when enabled."""
+        import tempfile
+        import yaml
+
+        config_data = {
+            "camera": {
+                "resolution": {"width": 640, "height": 480},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": test_output_dir,
+                "filename_pattern": "test.jpg",
+                "project_name": "test",
+                "quality": 85,
+                "organize_by_date": False,
+                "symlink_latest": {"enabled": False},
+            },
+            "system": {
+                "create_directories": True,
+                "save_metadata": True,
+            },
+            "overlay": {
+                "enabled": True,
+                "position": "bottom-left",
+                "camera_name": "Test",
+                "font": {"family": "default"},
+                "content": {
+                    "main": ["{camera_name}"],
+                    "camera_settings": {"enabled": False},
+                    "debug": {"enabled": False},
+                },
+            },
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            config = CameraConfig(config_path)
+            capture = ImageCapture(config)
+            capture.initialize_camera()
+
+            with patch.object(capture.overlay, "apply_overlay") as mock_overlay:
+                mock_overlay.return_value = os.path.join(test_output_dir, "test.jpg")
+                image_path, _ = capture.capture()
+
+                # Verify overlay was called
+                mock_overlay.assert_called_once()
+        finally:
+            os.unlink(config_path)

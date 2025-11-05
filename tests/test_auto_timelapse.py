@@ -307,3 +307,168 @@ class TestAdaptiveTimelapse:
         # Transition should have intermediate values
         night_gain = timelapse.config["adaptive_timelapse"]["night_mode"]["analogue_gain"]
         assert settings["AnalogueGain"] <= night_gain
+
+    def test_get_camera_settings_transition_long_exposure(self, test_config_file):
+        """Test transition mode disables AWB for long exposures."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Test long exposure (>1s) - should disable AWB
+        settings_long = timelapse.get_camera_settings(LightMode.TRANSITION, lux=15.0)
+        assert settings_long["AwbEnable"] == 0  # AWB disabled
+        assert "ColourGains" in settings_long  # Manual gains set
+
+        # Test short exposure (<1s) - should enable AWB
+        settings_short = timelapse.get_camera_settings(LightMode.TRANSITION, lux=95.0)
+        # Short exposures should have AWB enabled
+        assert settings_short["AwbEnable"] == 1
+
+    def test_signal_handler(self, test_config_file):
+        """Test signal handler stops the timelapse."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        assert timelapse.running is True
+
+        # Simulate SIGTERM
+        timelapse._signal_handler(15, None)
+        assert timelapse.running is False
+
+    def test_take_test_shot(self, test_config_file):
+        """Test taking a test shot."""
+        with patch("src.capture_image.ImageCapture") as mock_capture:
+            # Mock the capture context manager
+            mock_instance = MagicMock()
+            mock_capture.return_value.__enter__.return_value = mock_instance
+            mock_instance.capture.return_value = ("/tmp/test.jpg", "/tmp/test.json")
+
+            # Mock metadata file
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+                import json
+
+                json.dump({"ExposureTime": 100000, "AnalogueGain": 1.0}, f)
+                metadata_path = f.name
+
+            try:
+                mock_instance.capture.return_value = ("/tmp/test.jpg", metadata_path)
+
+                timelapse = AdaptiveTimelapse(test_config_file)
+                image_path, metadata = timelapse.take_test_shot()
+
+                assert image_path is not None
+                assert isinstance(metadata, dict)
+            finally:
+                os.unlink(metadata_path)
+
+    def test_calculate_lux_no_pil(self, test_config_file):
+        """Test lux calculation fallback when PIL not available."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        metadata = {
+            "ExposureTime": 50000,  # 50ms
+            "AnalogueGain": 1.5,
+        }
+
+        # Mock PIL import error
+        with patch("src.auto_timelapse.Image", side_effect=ImportError):
+            lux = timelapse.calculate_lux("/fake/path.jpg", metadata)
+            assert isinstance(lux, float)
+            assert lux > 0
+
+    def test_get_camera_settings_night_with_colour_gains(self, test_config_file):
+        """Test night mode applies manual colour gains."""
+        with open(test_config_file, "r") as f:
+            config_data = yaml.safe_load(f)
+
+        config_data["adaptive_timelapse"]["night_mode"]["colour_gains"] = [1.8, 1.5]
+
+        with open(test_config_file, "w") as f:
+            yaml.dump(config_data, f)
+
+        timelapse = AdaptiveTimelapse(test_config_file)
+        settings = timelapse.get_camera_settings(LightMode.NIGHT)
+
+        assert "ColourGains" in settings
+        assert settings["ColourGains"] == (1.8, 1.5)
+
+    def test_get_camera_settings_day_manual_exposure(self, test_config_file):
+        """Test day mode with manual exposure."""
+        with open(test_config_file, "r") as f:
+            config_data = yaml.safe_load(f)
+
+        config_data["adaptive_timelapse"]["day_mode"]["exposure_time"] = 0.01  # 10ms
+        config_data["adaptive_timelapse"]["day_mode"]["analogue_gain"] = 1.0
+
+        with open(test_config_file, "w") as f:
+            yaml.dump(config_data, f)
+
+        timelapse = AdaptiveTimelapse(test_config_file)
+        settings = timelapse.get_camera_settings(LightMode.DAY)
+
+        assert settings["AeEnable"] == 0  # Manual mode
+        assert "ExposureTime" in settings
+        assert "AnalogueGain" in settings
+
+    def test_get_camera_settings_day_with_brightness(self, test_config_file):
+        """Test day mode brightness adjustment."""
+        with open(test_config_file, "r") as f:
+            config_data = yaml.safe_load(f)
+
+        config_data["adaptive_timelapse"]["day_mode"]["brightness"] = 0.2
+
+        with open(test_config_file, "w") as f:
+            yaml.dump(config_data, f)
+
+        timelapse = AdaptiveTimelapse(test_config_file)
+        settings = timelapse.get_camera_settings(LightMode.DAY)
+
+        assert "Brightness" in settings
+        assert settings["Brightness"] == 0.2
+
+    def test_get_camera_settings_transition_no_smooth(self, test_config_file):
+        """Test transition mode without smooth transition."""
+        with open(test_config_file, "r") as f:
+            config_data = yaml.safe_load(f)
+
+        config_data["adaptive_timelapse"]["transition_mode"]["smooth_transition"] = False
+
+        with open(test_config_file, "w") as f:
+            yaml.dump(config_data, f)
+
+        timelapse = AdaptiveTimelapse(test_config_file)
+        settings = timelapse.get_camera_settings(LightMode.TRANSITION, lux=50.0)
+
+        # Should use fixed middle values
+        assert "ExposureTime" in settings
+        assert settings["ExposureTime"] == int(5.0 * 1_000_000)
+
+    def test_close_camera_fast(self, test_config_file):
+        """Test fast camera close method."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Mock capture object
+        mock_capture = MagicMock()
+        mock_capture.picam2 = MagicMock()
+
+        # Should not raise exception
+        timelapse._close_camera_fast(mock_capture, "night")
+        mock_capture.close.assert_called_once()
+
+    def test_close_camera_fast_none(self, test_config_file):
+        """Test close with None capture."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        # Should not raise exception
+        timelapse._close_camera_fast(None, "day")
+
+    def test_calculate_lux_error_handling(self, test_config_file):
+        """Test lux calculation handles image read errors."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        metadata = {
+            "ExposureTime": 10000,
+            "AnalogueGain": 1.0,
+        }
+
+        # Non-existent image
+        lux = timelapse.calculate_lux("/nonexistent/image.jpg", metadata)
+        assert isinstance(lux, float)
+        assert lux > 0  # Should return fallback value
