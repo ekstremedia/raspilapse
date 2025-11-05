@@ -52,8 +52,8 @@ output:
   # - {counter} - Sequential counter (4 digits, zero-padded)
   # - {name} - Project name
   # You can also use strftime directives like %Y%m%d_%H%M%S
-  #filename_pattern: "{name}_{timestamp}.jpg"
-  filename_pattern: "{name}_{counter}.jpg"
+  filename_pattern: "{name}_{timestamp}.jpg"
+  #filename_pattern: "{name}_{counter}.jpg"
 
   # Project name (used in filename)
   project_name: "raspilapse"
@@ -126,10 +126,16 @@ adaptive_timelapse:
     # exposure_time: 0.01  # 10ms
 
     # Analogue gain for daylight (lower = less noise)
-    analogue_gain: 1.0
+    # Only used if exposure_time is set (manual mode)
+    # analogue_gain: 1.0  # Commented out - let auto exposure handle this
 
     # Use auto white balance in day mode
     awb_enable: true
+
+    # Brightness adjustment (-1.0 to 1.0)
+    # Negative = darker, positive = brighter
+    # 0.0 = no adjustment (camera default auto-exposure)
+    # brightness: 0.0
 
   # Transition mode settings (dawn/dusk)
   transition_mode:

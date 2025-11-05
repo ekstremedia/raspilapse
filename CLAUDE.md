@@ -462,6 +462,46 @@ picam2.close()
 
 ---
 
+## Adaptive Timelapse Architecture
+
+### How It Works
+
+The adaptive timelapse (`src/auto_timelapse.py`) automatically adjusts exposure settings for 24/7 capture:
+
+**Per-Frame Process:**
+1. **Test Shot** → Measure light (saves to `test_shots/` with metadata)
+2. **Calculate Lux** → Determine day/night/transition mode
+3. **Close Camera** → Release test shot camera instance
+4. **Actual Capture** → Apply adaptive settings, save to `test_photos/` with metadata
+5. **Wait** → Sleep until next interval
+
+**Metadata Handling:**
+- ✅ Saved after EVERY shot (both test shots and actual frames)
+- ✅ Uses `capture_request()` method - gets image + metadata in ONE operation
+- ✅ Non-blocking - no delays waiting for metadata
+- ❌ Does NOT close/reopen camera between image and metadata
+
+**Test Shots:**
+- Stored in `test_shots/` directory for debugging
+- Fixed settings (0.1s exposure, gain 1.0) for consistent light measurement
+- NOT part of your timelapse output
+- Can be deleted anytime (directory will be recreated)
+
+**Camera State:**
+- Hardware limitation: Only ONE camera instance at a time
+- Test shot uses context manager (`with`) → auto-closes
+- Main capture camera stays open if mode unchanged
+- Closes and reinitializes only when switching modes
+
+**Test Mode:**
+```bash
+python3 src/auto_timelapse.py --test  # Capture one image then exit
+```
+
+For detailed flow documentation, see `ADAPTIVE_TIMELAPSE_FLOW.md`.
+
+---
+
 ## Development Guidelines
 
 - Use Picamera2's native methods rather than shell commands

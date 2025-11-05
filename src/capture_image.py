@@ -241,6 +241,8 @@ class ImageCapture:
             control_map["Contrast"] = controls["contrast"]
         if "af_mode" in controls:
             control_map["AfMode"] = controls["af_mode"]
+        if "exposure_value" in controls:
+            control_map["ExposureValue"] = controls["exposure_value"]
 
         # Handle PascalCase keys (direct libcamera controls)
         if "ExposureTime" in controls:
@@ -259,6 +261,8 @@ class ImageCapture:
             control_map["Contrast"] = controls["Contrast"]
         if "AfMode" in controls:
             control_map["AfMode"] = controls["AfMode"]
+        if "ExposureValue" in controls:
+            control_map["ExposureValue"] = controls["ExposureValue"]
 
         return control_map
 

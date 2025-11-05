@@ -211,15 +211,21 @@ class AdaptiveTimelapse:
                 # Manual exposure mode
                 settings["AeEnable"] = 0
                 settings["ExposureTime"] = int(day["exposure_time"] * 1_000_000)
-                settings["AnalogueGain"] = day["analogue_gain"]
+                if "analogue_gain" in day:
+                    settings["AnalogueGain"] = day["analogue_gain"]
             else:
                 # Auto exposure mode for day (let camera optimize)
                 settings["AeEnable"] = 1
+                # Don't set AnalogueGain - let auto exposure handle it
 
             settings["AwbEnable"] = 1 if day.get("awb_enable", True) else 0
 
+            # Apply brightness adjustment if specified
+            if "brightness" in day:
+                settings["Brightness"] = day["brightness"]
+
             logger.info(
-                f"Day mode: auto_exposure={'on' if settings.get('AeEnable', 1) else 'off'}, gain={day.get('analogue_gain', 'auto')}"
+                f"Day mode: auto_exposure={'on' if settings.get('AeEnable', 1) else 'off'}, gain={'auto' if settings.get('AeEnable', 1) else day.get('analogue_gain', 'auto')}, brightness={day.get('brightness', 0.0)}"
             )
 
         elif mode == LightMode.TRANSITION:
@@ -351,8 +357,12 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.error(f"Error during close: {e}")
 
-    def run(self):
-        """Run the adaptive timelapse capture loop."""
+    def run(self, test_mode: bool = False):
+        """Run the adaptive timelapse capture loop.
+
+        Args:
+            test_mode: If True, capture one image then exit
+        """
         adaptive_config = self.config["adaptive_timelapse"]
 
         if not adaptive_config.get("enabled", True):
@@ -360,7 +370,7 @@ class AdaptiveTimelapse:
             return
 
         interval = adaptive_config["interval"]
-        num_frames = adaptive_config["num_frames"]
+        num_frames = 1 if test_mode else adaptive_config["num_frames"]
 
         logger.info("=== Adaptive Timelapse Started ===")
         logger.info(f"Interval: {interval} seconds")
@@ -466,6 +476,11 @@ def main():
         default="config/config.yml",
         help="Path to configuration file (default: config/config.yml)",
     )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Test mode: capture one image then exit",
+    )
 
     args = parser.parse_args()
 
@@ -473,7 +488,11 @@ def main():
 
     try:
         timelapse = AdaptiveTimelapse(args.config)
-        timelapse.run()
+        if args.test:
+            logger.info("TEST MODE: Capturing single image then exiting")
+            timelapse.run(test_mode=True)
+        else:
+            timelapse.run()
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         return 1
