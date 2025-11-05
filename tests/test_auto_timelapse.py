@@ -484,3 +484,36 @@ class TestAdaptiveTimelapse:
         lux = timelapse.calculate_lux("/nonexistent/image.jpg", metadata)
         assert isinstance(lux, float)
         assert lux > 0  # Should return fallback value
+
+
+class TestTimelapseCaptureFlow:
+    """Test the main timelapse capture flow."""
+
+    def test_capture_frame(self, test_config_file):
+        """Test single frame capture."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Mock ImageCapture
+        mock_capture = MagicMock()
+        mock_capture.capture.return_value = ("/tmp/frame.jpg", "/tmp/frame_metadata.json")
+
+        # Test capture
+        image_path, metadata_path = timelapse.capture_frame(mock_capture, "night")
+
+        assert image_path == "/tmp/frame.jpg"
+        assert timelapse.frame_count == 1
+        mock_capture.capture.assert_called_once()
+
+    def test_capture_frame_increments_counter(self, test_config_file):
+        """Test that frame counter increments."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        mock_capture = MagicMock()
+        mock_capture.capture.return_value = ("/tmp/frame.jpg", None)
+
+        # Capture multiple frames
+        timelapse.capture_frame(mock_capture, "day")
+        timelapse.capture_frame(mock_capture, "day")
+        timelapse.capture_frame(mock_capture, "day")
+
+        assert timelapse.frame_count == 3
+
