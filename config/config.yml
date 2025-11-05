@@ -44,7 +44,9 @@ camera:
 # Output Settings
 output:
   # Base directory for saved images
-  directory: "test_photos"
+  # For production timelapse, use: /var/www/html/images
+  # For testing, use: test_photos
+  directory: "/var/www/html/images"
 
   # Filename pattern (supports strftime formatting and counter)
   # Available placeholders:
@@ -61,11 +63,14 @@ output:
   # Higher = better quality, larger files
   quality: 75
 
-  # Create subdirectories by date
-  organize_by_date: false
+  # Create subdirectories by date (YEAR/MONTH/DAY structure)
+  # When enabled, images are organized as: directory/YYYY/MM/DD/filename.jpg
+  # Example: /var/www/html/images/2025/11/05/kringelen_2025_11_05_14_30_00.jpg
+  organize_by_date: true
 
   # Date format for subdirectories (if organize_by_date is true)
-  date_format: "%Y-%m-%d"
+  # %Y = 4-digit year, %m = 2-digit month, %d = 2-digit day
+  date_format: "%Y/%m/%d"
 
   # Symlink latest image (for web status display)
   symlink_latest:

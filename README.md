@@ -52,7 +52,7 @@ sudo raspi-config
 
 # Install dependencies
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-picamera2 python3-yaml
+sudo apt install -y python3-picamera2 python3-yaml python3-pil
 
 # Clone repository
 git clone https://github.com/ekstremedia/raspilapse.git
@@ -62,19 +62,43 @@ cd raspilapse
 python3 src/capture_image.py
 ```
 
-### Capture an Image
+### Production Setup (Continuous Timelapse)
+
+For continuous 24/7 operation as a background service:
+
+```bash
+# Install and start service
+./install_service.sh
+
+# Check status
+sudo systemctl status raspilapse
+
+# View logs
+sudo journalctl -u raspilapse -f
+```
+
+Images are automatically saved to `/var/www/html/images/YYYY/MM/DD/` and organized by date.
+
+See [SERVICE.md](SERVICE.md) for complete service documentation.
+
+### Manual Capture
+
+For one-off captures or testing:
 
 ```bash
 python3 src/capture_image.py
 ```
 
-Images are saved to `test_photos/` by default with metadata and logs.
+Images are saved to the directory specified in `config/config.yml`.
 
 ## Documentation
 
+- **[SERVICE.md](SERVICE.md)** - Running as a background service (systemd)
 - **[INSTALL.md](INSTALL.md)** - Complete installation guide
 - **[USAGE.md](USAGE.md)** - Usage guide and configuration reference
+- **[OVERLAY.md](OVERLAY.md)** - Image overlay system documentation
 - **[CLAUDE.md](CLAUDE.md)** - Technical reference for Picamera2
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history
 
 ## Configuration
 

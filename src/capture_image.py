@@ -93,6 +93,14 @@ class CameraConfig:
         controls = self.config["camera"].get("controls", {})
         return controls if controls else None
 
+    def should_organize_by_date(self) -> bool:
+        """Check if images should be organized by date."""
+        return self.config["output"].get("organize_by_date", False)
+
+    def get_date_format(self) -> str:
+        """Get date format for subdirectories."""
+        return self.config["output"].get("date_format", "%Y-%m-%d")
+
 
 class ImageCapture:
     """Handles image capture using Picamera2."""
@@ -338,6 +346,14 @@ class ImageCapture:
         try:
             # Prepare output directory
             output_dir = Path(self.config.get_output_directory())
+
+            # Add date subdirectories if organize_by_date is enabled
+            if self.config.should_organize_by_date():
+                timestamp = datetime.now()
+                date_subdir = timestamp.strftime(self.config.get_date_format())
+                output_dir = output_dir / date_subdir
+                logger.debug(f"Date-organized directory: {output_dir}")
+
             if self.config.should_create_directories():
                 output_dir.mkdir(parents=True, exist_ok=True)
                 logger.debug(f"Output directory: {output_dir}")

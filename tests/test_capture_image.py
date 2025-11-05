@@ -285,6 +285,123 @@ class TestImageCapture:
         assert capture.picam2 is None
 
 
+class TestDateOrganization:
+    """Test date-organized folder structure."""
+
+    def test_organize_by_date_disabled(self, mock_picamera2, test_config_file):
+        """Test capture without date organization."""
+        config = CameraConfig(test_config_file)
+        assert config.should_organize_by_date() is False
+
+    def test_organize_by_date_enabled(self, mock_picamera2, test_output_dir):
+        """Test capture with date organization."""
+        from datetime import datetime
+        import tempfile
+
+        # Create config with date organization
+        config_data = {
+            "camera": {
+                "resolution": {"width": 1280, "height": 720},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": test_output_dir,
+                "filename_pattern": "{name}_{counter}.jpg",
+                "project_name": "test_project",
+                "quality": 85,
+                "organize_by_date": True,
+                "date_format": "%Y/%m/%d",
+                "symlink_latest": {"enabled": False, "path": "/tmp/test_status.jpg"},
+            },
+            "system": {
+                "create_directories": True,
+                "save_metadata": True,
+                "metadata_filename": "{name}_{counter}_metadata.json",
+            },
+            "overlay": {"enabled": False},
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            import yaml
+
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            config = CameraConfig(config_path)
+            assert config.should_organize_by_date() is True
+            assert config.get_date_format() == "%Y/%m/%d"
+
+            # Test capture creates date subdirectories
+            capture = ImageCapture(config)
+            capture.initialize_camera()
+
+            # Mock the save method to actually create the file
+            def mock_save(stream, path):
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                Path(path).touch()
+
+            mock_picamera2.capture_request.return_value.save.side_effect = mock_save
+
+            image_path, metadata_path = capture.capture()
+
+            # Verify path contains date subdirectories
+            today = datetime.now()
+            expected_subdir = today.strftime("%Y/%m/%d")
+            assert expected_subdir in image_path
+
+            # Verify directory structure was created
+            assert Path(image_path).parent.exists()
+
+        finally:
+            os.unlink(config_path)
+
+    def test_date_format_variations(self, test_output_dir):
+        """Test different date format options."""
+        import tempfile
+        import yaml
+
+        formats = [
+            "%Y/%m/%d",  # 2025/11/05
+            "%Y-%m-%d",  # 2025-11-05
+            "%Y%m%d",  # 20251105
+        ]
+
+        for date_format in formats:
+            config_data = {
+                "camera": {
+                    "resolution": {"width": 640, "height": 480},
+                    "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                    "controls": {},
+                },
+                "output": {
+                    "directory": test_output_dir,
+                    "filename_pattern": "test.jpg",
+                    "project_name": "test",
+                    "quality": 85,
+                    "organize_by_date": True,
+                    "date_format": date_format,
+                    "symlink_latest": {"enabled": False},
+                },
+                "system": {
+                    "create_directories": True,
+                    "save_metadata": False,
+                },
+                "overlay": {"enabled": False},
+            }
+
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+                yaml.dump(config_data, f)
+                config_path = f.name
+
+            try:
+                config = CameraConfig(config_path)
+                assert config.get_date_format() == date_format
+            finally:
+                os.unlink(config_path)
+
+
 class TestConvenienceFunctions:
     """Tests for convenience functions."""
 
