@@ -762,6 +762,7 @@ class TestOverlayIntegration:
             "system": {
                 "create_directories": True,
                 "save_metadata": True,
+                "metadata_filename": "test_metadata.json",
             },
             "overlay": {
                 "enabled": True,

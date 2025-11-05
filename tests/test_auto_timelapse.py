@@ -310,6 +310,15 @@ class TestAdaptiveTimelapse:
 
     def test_get_camera_settings_transition_long_exposure(self, test_config_file):
         """Test transition mode disables AWB for long exposures."""
+        # Add colour_gains to night_mode config
+        with open(test_config_file, "r") as f:
+            config_data = yaml.safe_load(f)
+
+        config_data["adaptive_timelapse"]["night_mode"]["colour_gains"] = [1.8, 1.5]
+
+        with open(test_config_file, "w") as f:
+            yaml.dump(config_data, f)
+
         timelapse = AdaptiveTimelapse(test_config_file)
 
         # Test long exposure (>1s) - should disable AWB
@@ -318,7 +327,8 @@ class TestAdaptiveTimelapse:
         assert "ColourGains" in settings_long  # Manual gains set
 
         # Test short exposure (<1s) - should enable AWB
-        settings_short = timelapse.get_camera_settings(LightMode.TRANSITION, lux=95.0)
+        # Use lux=98 which gives exposure ~0.6s (definitely < 1s)
+        settings_short = timelapse.get_camera_settings(LightMode.TRANSITION, lux=98.0)
         # Short exposures should have AWB enabled
         assert settings_short["AwbEnable"] == 1
 
@@ -333,22 +343,23 @@ class TestAdaptiveTimelapse:
 
     def test_take_test_shot(self, test_config_file):
         """Test taking a test shot."""
-        with patch("src.capture_image.ImageCapture") as mock_capture:
-            # Mock the capture context manager
-            mock_instance = MagicMock()
-            mock_capture.return_value.__enter__.return_value = mock_instance
-            mock_instance.capture.return_value = ("/tmp/test.jpg", "/tmp/test.json")
+        import tempfile
+        import json
 
-            # Mock metadata file
-            import tempfile
+        # Create metadata file
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"ExposureTime": 100000, "AnalogueGain": 1.0}, f)
+            metadata_path = f.name
 
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-                import json
+        try:
+            # Mock ImageCapture class completely
+            with patch("src.auto_timelapse.ImageCapture") as mock_capture_class:
+                # Mock the context manager
+                mock_instance = MagicMock()
+                mock_capture_class.return_value.__enter__.return_value = mock_instance
+                mock_capture_class.return_value.__exit__.return_value = None
 
-                json.dump({"ExposureTime": 100000, "AnalogueGain": 1.0}, f)
-                metadata_path = f.name
-
-            try:
+                # Mock capture method to return paths
                 mock_instance.capture.return_value = ("/tmp/test.jpg", metadata_path)
 
                 timelapse = AdaptiveTimelapse(test_config_file)
@@ -356,8 +367,9 @@ class TestAdaptiveTimelapse:
 
                 assert image_path is not None
                 assert isinstance(metadata, dict)
-            finally:
-                os.unlink(metadata_path)
+                assert "ExposureTime" in metadata
+        finally:
+            os.unlink(metadata_path)
 
     def test_calculate_lux_no_pil(self, test_config_file):
         """Test lux calculation fallback when PIL not available."""
@@ -368,8 +380,8 @@ class TestAdaptiveTimelapse:
             "AnalogueGain": 1.5,
         }
 
-        # Mock PIL import error
-        with patch("src.auto_timelapse.Image", side_effect=ImportError):
+        # Mock PIL.Image.open to raise ImportError
+        with patch("PIL.Image.open", side_effect=ImportError("PIL not available")):
             lux = timelapse.calculate_lux("/fake/path.jpg", metadata)
             assert isinstance(lux, float)
             assert lux > 0
