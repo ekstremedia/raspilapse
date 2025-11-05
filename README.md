@@ -120,6 +120,8 @@ Images are saved to the directory specified in `config/config.yml`.
 - **[USAGE.md](USAGE.md)** - Usage guide and configuration reference
 - **[OVERLAY.md](OVERLAY.md)** - Image overlay system documentation
 - **[CLAUDE.md](CLAUDE.md)** - Technical reference for Picamera2
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - How to contribute to the project
+- **[MAINTAINER.md](MAINTAINER.md)** - Maintainer guide (Codecov setup, releases, CI/CD)
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history
 
 ## Configuration
