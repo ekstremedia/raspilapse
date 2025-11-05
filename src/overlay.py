@@ -72,11 +72,13 @@ class ImageOverlay:
         # If bold requested but not found, try regular as fallback
         if "Bold" in font_family or "bold" in font_family:
             fallback_regular = font_family.replace("-Bold", "").replace("-bold", "")
-            font_paths.extend([
-                fallback_regular,
-                f"/usr/share/fonts/truetype/dejavu/{fallback_regular}",
-                f"/usr/share/fonts/truetype/{fallback_regular}",
-            ])
+            font_paths.extend(
+                [
+                    fallback_regular,
+                    f"/usr/share/fonts/truetype/dejavu/{fallback_regular}",
+                    f"/usr/share/fonts/truetype/{fallback_regular}",
+                ]
+            )
 
         for font_path in font_paths:
             try:
@@ -472,10 +474,16 @@ class ImageOverlay:
 
                 # Get bottom padding multiplier for extra spacing
                 layout_config = self.overlay_config.get("layout", {})
-                bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
+                bottom_padding_mult = layout_config.get(
+                    "bottom_padding_multiplier", 1.3
+                )
 
                 # Total bar height for 2 lines with extra bottom spacing
-                bar_height = (line_height * 2) + (padding * 2) + int(padding * bottom_padding_mult)
+                bar_height = (
+                    (line_height * 2)
+                    + (padding * 2)
+                    + int(padding * bottom_padding_mult)
+                )
 
                 # Draw gradient background
                 bg_config = self.overlay_config.get("background", {})
@@ -499,7 +507,9 @@ class ImageOverlay:
                 draw.text((left_x, y1), camera_name, fill=font_color, font=font_bold)
 
                 # Line 2 Left: Date and time (regular, localized if enabled)
-                datetime_text = data.get("datetime_localized", f"{data['date']} {data['time']}")
+                datetime_text = data.get(
+                    "datetime_localized", f"{data['date']} {data['time']}"
+                )
                 draw.text(
                     (left_x, y2), datetime_text, fill=font_color, font=font_regular
                 )
@@ -529,7 +539,10 @@ class ImageOverlay:
 
                         right_x = img_width - text_width - margin - padding
                         draw.text(
-                            (right_x, y1), line1_right, fill=font_color, font=font_regular
+                            (right_x, y1),
+                            line1_right,
+                            fill=font_color,
+                            font=font_regular,
                         )
 
                 # Line 2 Right: Debug info (if enabled)
@@ -553,7 +566,10 @@ class ImageOverlay:
 
                         right_x = img_width - text_width - margin - padding
                         draw.text(
-                            (right_x, y2), line2_right, fill=font_color, font=font_regular
+                            (right_x, y2),
+                            line2_right,
+                            fill=font_color,
+                            font=font_regular,
                         )
 
             else:
@@ -611,9 +627,7 @@ class ImageOverlay:
                 current_y = y
                 for line in lines:
                     if line:
-                        draw.text(
-                            (x, current_y), line, fill=font_color, font=font_bold
-                        )
+                        draw.text((x, current_y), line, fill=font_color, font=font_bold)
                     current_y += line_height
 
             # Save image

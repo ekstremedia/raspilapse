@@ -294,7 +294,9 @@ class AdaptiveTimelapse:
         }
 
         # Create metadata directory (files get overwritten, not accumulated)
-        metadata_dir = Path(self.config.get("system", {}).get("metadata_folder", "metadata"))
+        metadata_dir = Path(
+            self.config.get("system", {}).get("metadata_folder", "metadata")
+        )
         metadata_dir.mkdir(exist_ok=True)
 
         # Capture test image (overwritten each time - no timestamps)

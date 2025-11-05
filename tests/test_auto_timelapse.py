@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.auto_timelapse import AdaptiveTimelapse, LightMode
@@ -27,10 +28,7 @@ def test_config_file():
             "filename_pattern": "{name}_{counter}.jpg",
             "project_name": "test_project",
             "quality": 85,
-            "symlink_latest": {
-                "enabled": True,
-                "path": "/tmp/test_status.jpg"
-            },
+            "symlink_latest": {"enabled": True, "path": "/tmp/test_status.jpg"},
         },
         "system": {
             "create_directories": True,
@@ -247,6 +245,7 @@ class TestAdaptiveTimelapse:
         try:
             # Create a dummy image
             from PIL import Image
+
             img = Image.new("RGB", (100, 100), color=(128, 128, 128))
             img.save(test_image)
 
@@ -306,5 +305,7 @@ class TestAdaptiveTimelapse:
         assert "AnalogueGain" in settings
 
         # Transition should have intermediate values
-        night_gain = timelapse.config["adaptive_timelapse"]["night_mode"]["analogue_gain"]
+        night_gain = timelapse.config["adaptive_timelapse"]["night_mode"][
+            "analogue_gain"
+        ]
         assert settings["AnalogueGain"] <= night_gain

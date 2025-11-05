@@ -25,7 +25,9 @@ def mock_picamera2():
     # Create mock camera instance
     mock_camera = MagicMock()
     mock_camera.create_still_configuration.return_value = {}
-    mock_camera.create_preview_configuration.return_value = {}  # Keep for backwards compat
+    mock_camera.create_preview_configuration.return_value = (
+        {}
+    )  # Keep for backwards compat
 
     # Mock capture_request() to return a request object
     mock_request = MagicMock()
@@ -65,10 +67,7 @@ def test_config_file():
             "quality": 85,
             "organize_by_date": False,
             "date_format": "%Y-%m-%d",
-            "symlink_latest": {
-                "enabled": False,
-                "path": "/tmp/test_status.jpg"
-            },
+            "symlink_latest": {"enabled": False, "path": "/tmp/test_status.jpg"},
         },
         "system": {
             "create_directories": True,

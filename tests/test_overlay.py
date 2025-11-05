@@ -10,6 +10,7 @@ import yaml
 from PIL import Image
 
 import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.overlay import ImageOverlay, apply_overlay_to_image
@@ -184,7 +185,9 @@ class TestImageOverlay:
         # Cleanup
         os.unlink(output_path)
 
-    def test_apply_overlay_topbar_mode(self, test_overlay_config, test_image, test_metadata):
+    def test_apply_overlay_topbar_mode(
+        self, test_overlay_config, test_image, test_metadata
+    ):
         """Test overlay with top-bar position."""
         test_overlay_config["overlay"]["position"] = "top-bar"
         overlay = ImageOverlay(test_overlay_config)
@@ -275,6 +278,7 @@ class TestGradientBackground:
         # Create test image
         img = Image.new("RGBA", (800, 100), color=(255, 255, 255, 0))
         from PIL import ImageDraw
+
         draw = ImageDraw.Draw(img, "RGBA")
 
         # Draw gradient

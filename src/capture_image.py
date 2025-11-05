@@ -379,7 +379,9 @@ class ImageCapture:
                 metadata_path = None
                 if self.config.should_save_metadata():
                     logger.debug("Saving metadata...")
-                    metadata_path = self._save_metadata_from_dict(output_path, metadata_dict)
+                    metadata_path = self._save_metadata_from_dict(
+                        output_path, metadata_dict
+                    )
                     logger.debug(f"Metadata saved: {metadata_path}")
             finally:
                 # Always release the request
