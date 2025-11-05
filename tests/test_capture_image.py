@@ -24,7 +24,17 @@ def mock_picamera2():
 
     # Create mock camera instance
     mock_camera = MagicMock()
-    mock_camera.create_preview_configuration.return_value = {}
+    mock_camera.create_still_configuration.return_value = {}
+    mock_camera.create_preview_configuration.return_value = {}  # Keep for backwards compat
+
+    # Mock capture_request() to return a request object
+    mock_request = MagicMock()
+    mock_request.get_metadata.return_value = {"test": "metadata"}
+    mock_request.save.return_value = None
+    mock_request.release.return_value = None
+    mock_camera.capture_request.return_value = mock_request
+
+    # Keep old metadata method for backwards compat
     mock_camera.capture_metadata.return_value = {"test": "metadata"}
 
     # Set up the mock modules
@@ -55,11 +65,20 @@ def test_config_file():
             "quality": 85,
             "organize_by_date": False,
             "date_format": "%Y-%m-%d",
+            "symlink_latest": {
+                "enabled": False,
+                "path": "/tmp/test_status.jpg"
+            },
         },
         "system": {
             "create_directories": True,
             "save_metadata": True,
             "metadata_filename": "{name}_{counter}_metadata.json",
+        },
+        "overlay": {
+            "enabled": False,
+            "position": "bottom-left",
+            "camera_name": "Test Camera",
         },
     }
 
@@ -162,7 +181,7 @@ class TestImageCapture:
         capture.initialize_camera()
 
         # Verify camera was configured and started
-        assert mock_picamera2.create_preview_configuration.called
+        assert mock_picamera2.create_still_configuration.called
         assert mock_picamera2.configure.called
         assert mock_picamera2.start.called
 
