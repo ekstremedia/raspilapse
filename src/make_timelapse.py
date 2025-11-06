@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""
+Generate timelapse video from captured images using ffmpeg.
+
+This script collects images from a specified time range and creates a timelapse video
+with configurable framerate and quality settings.
+"""
+
+import os
+import sys
+import argparse
+import yaml
+from datetime import datetime, timedelta
+from pathlib import Path
+import subprocess
+import tempfile
+from typing import List, Tuple
+import logging
+
+# Add project root to path for imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+try:
+    from src.logging_config import get_logger
+except ModuleNotFoundError:
+    from logging_config import get_logger
+
+
+# ANSI color codes for pretty output
+class Colors:
+    """ANSI color codes for terminal output."""
+
+    HEADER = "\033[95m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    UNDERLINE = "\033[4m"
+    END = "\033[0m"
+
+    @staticmethod
+    def header(text: str) -> str:
+        return f"{Colors.BOLD}{Colors.CYAN}{text}{Colors.END}"
+
+    @staticmethod
+    def success(text: str) -> str:
+        return f"{Colors.GREEN}{text}{Colors.END}"
+
+    @staticmethod
+    def error(text: str) -> str:
+        return f"{Colors.RED}{text}{Colors.END}"
+
+    @staticmethod
+    def warning(text: str) -> str:
+        return f"{Colors.YELLOW}{text}{Colors.END}"
+
+    @staticmethod
+    def info(text: str) -> str:
+        return f"{Colors.BLUE}{text}{Colors.END}"
+
+    @staticmethod
+    def bold(text: str) -> str:
+        return f"{Colors.BOLD}{text}{Colors.END}"
+
+
+def print_section(title: str):
+    """Print a section header."""
+    print(f"\n{Colors.header('═' * 70)}")
+    print(f"{Colors.header(f'  {title}')}")
+    print(f"{Colors.header('═' * 70)}")
+
+
+def print_subsection(title: str):
+    """Print a subsection header."""
+    print(f"\n{Colors.bold(title)}")
+    print(Colors.CYAN + "─" * 70 + Colors.END)
+
+
+def print_info(label: str, value: str):
+    """Print an info line with label and value."""
+    print(f"  {Colors.BOLD}{label}:{Colors.END} {value}")
+
+
+def load_config(config_path: str = "config/config.yml") -> dict:
+    """Load configuration from YAML file."""
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+def parse_time(time_str: str) -> Tuple[int, int]:
+    """
+    Parse time string in HH:MM format.
+
+    Args:
+        time_str: Time in "HH:MM" format
+
+    Returns:
+        Tuple of (hour, minute)
+    """
+    try:
+        hour, minute = map(int, time_str.split(":"))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError("Invalid time range")
+        return hour, minute
+    except ValueError as e:
+        raise ValueError(f"Invalid time format '{time_str}'. Expected HH:MM (e.g., '04:00')") from e
+
+
+def find_images_in_range(
+    base_dir: str,
+    project_name: str,
+    start_datetime: datetime,
+    end_datetime: datetime,
+    organize_by_date: bool = True,
+    date_format: str = "%Y/%m/%d",
+) -> List[Path]:
+    """
+    Find all images within the specified datetime range.
+
+    Args:
+        base_dir: Base directory containing images
+        project_name: Project name used in filenames
+        start_datetime: Start datetime (inclusive)
+        end_datetime: End datetime (inclusive)
+        organize_by_date: Whether images are organized in date subdirectories
+        date_format: Date format for subdirectories
+
+    Returns:
+        List of image paths sorted by filename
+    """
+    images = []
+    base_path = Path(base_dir)
+
+    if not base_path.exists():
+        raise ValueError(f"Image directory not found: {base_dir}")
+
+    # Generate list of dates to search
+    current_date = start_datetime.date()
+    end_date = end_datetime.date()
+
+    while current_date <= end_date:
+        if organize_by_date:
+            # Search in date-organized subdirectories
+            date_subdir = current_date.strftime(date_format)
+            search_dir = base_path / date_subdir
+        else:
+            # Search in base directory
+            search_dir = base_path
+
+        if search_dir.exists():
+            # Find all images for this date
+            pattern = f"{project_name}_{current_date.strftime('%Y_%m_%d')}_*.jpg"
+            for img_path in search_dir.glob(pattern):
+                # Parse timestamp from filename
+                try:
+                    # Extract timestamp from filename: project_YYYY_MM_DD_HH_MM_SS.jpg
+                    parts = img_path.stem.split("_")
+                    if len(parts) >= 6:
+                        img_datetime = datetime(
+                            int(parts[-6]),  # year
+                            int(parts[-5]),  # month
+                            int(parts[-4]),  # day
+                            int(parts[-3]),  # hour
+                            int(parts[-2]),  # minute
+                            int(parts[-1]),  # second
+                        )
+
+                        # Check if within time range
+                        if start_datetime <= img_datetime <= end_datetime:
+                            images.append(img_path)
+                except (ValueError, IndexError):
+                    # Skip files that don't match expected format
+                    continue
+
+        current_date += timedelta(days=1)
+
+    # Sort by filename (which includes timestamp)
+    images.sort()
+    return images
+
+
+def create_video(
+    image_list: List[Path],
+    output_path: Path,
+    fps: int = 25,
+    codec: str = "libx264",
+    pixel_format: str = "yuv420p",
+    crf: int = 20,
+    resolution: Tuple[int, int] = None,
+    logger: logging.Logger = None,
+) -> bool:
+    """
+    Create timelapse video from image list using ffmpeg.
+
+    Args:
+        image_list: List of image paths
+        output_path: Output video path
+        fps: Frames per second
+        codec: Video codec (e.g., "libx264")
+        pixel_format: Pixel format (e.g., "yuv420p")
+        crf: Constant Rate Factor (quality, 0-51, lower = better)
+        resolution: Optional (width, height) to scale video
+        logger: Optional logger instance
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if not image_list:
+        msg = "No images to process"
+        print(Colors.error(f"✗ {msg}"))
+        if logger:
+            logger.error(msg)
+        return False
+
+    # Create temporary file with list of images
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        list_file = f.name
+        for img_path in image_list:
+            # ffmpeg concat demuxer format: file 'path'
+            f.write(f"file '{img_path.absolute()}'\n")
+
+    if logger:
+        logger.info(f"Created image list file: {list_file}")
+
+    try:
+        # Build ffmpeg command
+        cmd = [
+            "ffmpeg",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            list_file,
+            "-r",
+            str(fps),
+            "-vcodec",
+            codec,
+            "-pix_fmt",
+            pixel_format,
+            "-crf",
+            str(crf),
+        ]
+
+        # Add resolution scaling if specified
+        if resolution:
+            width, height = resolution
+            cmd.extend(["-vf", f"scale={width}:{height}"])
+
+        # Add output path (overwrite if exists)
+        cmd.extend(["-y", str(output_path)])
+
+        print_subsection("🎬 Generating Video")
+        print_info("Images", f"{Colors.bold(str(len(image_list)))} frames")
+        print_info("Frame rate", f"{Colors.bold(str(fps))} fps")
+        print_info("Codec", f"{Colors.bold(codec)} (CRF {crf})")
+        print_info("Pixel format", Colors.bold(pixel_format))
+
+        duration_seconds = len(image_list) / fps
+        print_info(
+            "Video duration",
+            f"{Colors.bold(f'{duration_seconds:.1f}s')} ({duration_seconds/60:.2f} minutes)",
+        )
+
+        if logger:
+            logger.info(f"Running ffmpeg: {' '.join(cmd)}")
+
+        print(f"\n{Colors.CYAN}⏳ Processing video with ffmpeg...{Colors.END}")
+        print(f"{Colors.YELLOW}   (This may take a few minutes for large timelapses){Colors.END}")
+
+        # Run ffmpeg
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            # Show file size
+            size_mb = output_path.stat().st_size / (1024 * 1024)
+
+            print(f"\n{Colors.success('✓ Video created successfully!')}")
+            print_info("Output file", Colors.bold(str(output_path)))
+            print_info("File size", Colors.bold(f"{size_mb:.2f} MB"))
+
+            if logger:
+                logger.info(f"Video created: {output_path} ({size_mb:.2f} MB)")
+            return True
+        else:
+            print(f"\n{Colors.error('✗ ffmpeg error:')}")
+            print(Colors.RED + result.stderr + Colors.END)
+
+            if logger:
+                logger.error(f"ffmpeg failed: {result.stderr}")
+            return False
+
+    finally:
+        # Clean up temporary file
+        try:
+            os.unlink(list_file)
+            if logger:
+                logger.debug(f"Cleaned up temporary file: {list_file}")
+        except Exception as e:
+            if logger:
+                logger.warning(f"Failed to clean up temp file {list_file}: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate timelapse video from captured images",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Create video from 04:00 yesterday to 04:00 today
+  python3 src/make_timelapse.py --start 04:00 --end 04:00
+
+  # Create video from 20:00 yesterday to 08:00 today (test)
+  python3 src/make_timelapse.py --start 20:00 --end 08:00
+
+  # Use first 100 images only (for testing)
+  python3 src/make_timelapse.py --start 20:00 --end 08:00 --limit 100
+
+  # Custom config file
+  python3 src/make_timelapse.py --start 04:00 --end 04:00 -c config/custom.yml
+        """,
+    )
+
+    parser.add_argument(
+        "--start",
+        required=True,
+        help="Start time in HH:MM format (e.g., 04:00). If end time is same or earlier, assumes previous day.",
+    )
+    parser.add_argument("--end", required=True, help="End time in HH:MM format (e.g., 04:00)")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Limit number of images to process (0 = all images, useful for testing)",
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        default="config/config.yml",
+        help="Path to configuration file (default: config/config.yml)",
+    )
+    parser.add_argument(
+        "--fps", type=int, help="Override frame rate from config (frames per second)"
+    )
+    parser.add_argument("--output", help="Override output filename")
+
+    args = parser.parse_args()
+
+    # Load configuration
+    try:
+        config = load_config(args.config)
+    except FileNotFoundError:
+        print(Colors.error(f"✗ Config file not found: {args.config}"))
+        return 1
+    except yaml.YAMLError as e:
+        print(Colors.error(f"✗ Invalid YAML in config file: {e}"))
+        return 1
+
+    # Setup logger
+    logger = get_logger("make_timelapse", args.config)
+
+    # Parse times
+    try:
+        start_hour, start_min = parse_time(args.start)
+        end_hour, end_min = parse_time(args.end)
+    except ValueError as e:
+        print(Colors.error(f"✗ {e}"))
+        logger.error(str(e))
+        return 1
+
+    # Calculate datetime range
+    now = datetime.now()
+    end_datetime = now.replace(hour=end_hour, minute=end_min, second=0, microsecond=0)
+
+    # If end time is same or earlier than start time, assume start was yesterday
+    if (end_hour < start_hour) or (end_hour == start_hour and end_min <= start_min):
+        start_datetime = (end_datetime - timedelta(days=1)).replace(
+            hour=start_hour, minute=start_min
+        )
+    else:
+        start_datetime = end_datetime.replace(hour=start_hour, minute=start_min)
+
+    logger.info(f"Starting timelapse generation: {start_datetime} to {end_datetime}")
+
+    # Print header
+    print_section("🎥 TIMELAPSE VIDEO GENERATOR")
+    print_subsection("⏰ Time Range")
+    print_info("Start", Colors.bold(start_datetime.strftime("%Y-%m-%d %H:%M")))
+    print_info("End", Colors.bold(end_datetime.strftime("%Y-%m-%d %H:%M")))
+    duration_hours = (end_datetime - start_datetime).total_seconds() / 3600
+    print_info("Duration", Colors.bold(f"{duration_hours:.1f} hours"))
+
+    # Get config values
+    base_dir = config["output"]["directory"]
+    project_name = config["output"]["project_name"]
+    organize_by_date = config["output"].get("organize_by_date", True)
+    date_format = config["output"].get("date_format", "%Y/%m/%d")
+
+    video_dir = config["video"]["directory"]
+    fps = args.fps if args.fps else config["video"]["fps"]
+    codec = config["video"]["codec"]["name"]
+    pixel_format = config["video"]["codec"]["pixel_format"]
+    crf = config["video"]["codec"]["crf"]
+
+    print_subsection("⚙️  Configuration")
+    print_info("Image directory", Colors.bold(base_dir))
+    print_info("Project name", Colors.bold(project_name))
+    print_info("Video settings", f"{Colors.bold(str(fps))} fps, {codec}, CRF {crf}")
+
+    # Find images
+    print_subsection("🔍 Searching for Images")
+    logger.info(f"Searching for images in {base_dir}")
+
+    try:
+        images = find_images_in_range(
+            base_dir, project_name, start_datetime, end_datetime, organize_by_date, date_format
+        )
+    except ValueError as e:
+        print(Colors.error(f"✗ {e}"))
+        logger.error(str(e))
+        return 1
+
+    if not images:
+        msg = "No images found in specified time range"
+        print(Colors.error(f"✗ {msg}"))
+        logger.error(msg)
+        return 1
+
+    print(f"  {Colors.success('✓')} Found {Colors.bold(str(len(images)))} images")
+    logger.info(f"Found {len(images)} images")
+
+    # Apply limit if specified
+    if args.limit > 0 and len(images) > args.limit:
+        print(
+            f"  {Colors.warning('⚠')} Limiting to first {Colors.bold(str(args.limit))} images {Colors.YELLOW}(testing mode){Colors.END}"
+        )
+        logger.info(f"Limiting to {args.limit} images for testing")
+        images = images[: args.limit]
+
+    # Show first and last image
+    print(f"  {Colors.CYAN}→{Colors.END} First: {Colors.bold(images[0].name)}")
+    print(f"  {Colors.CYAN}→{Colors.END} Last:  {Colors.bold(images[-1].name)}")
+
+    # Create output directory
+    video_path = Path(video_dir)
+    video_path.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Output directory: {video_path}")
+
+    # Generate output filename
+    if args.output:
+        output_file = video_path / args.output
+    else:
+        filename_pattern = config["video"]["filename_pattern"]
+        filename = filename_pattern.format(
+            name=project_name,
+            start_date=start_datetime.strftime("%Y-%m-%d"),
+            end_date=end_datetime.strftime("%Y-%m-%d"),
+        )
+        output_file = video_path / filename
+
+    # Create video
+    success = create_video(
+        images,
+        output_file,
+        fps=fps,
+        codec=codec,
+        pixel_format=pixel_format,
+        crf=crf,
+        resolution=None,  # Use original resolution
+        logger=logger,
+    )
+
+    if success:
+        print_section("✓ TIMELAPSE VIDEO CREATED SUCCESSFULLY!")
+        logger.info("Timelapse video generation completed successfully")
+        return 0
+    else:
+        print_section("✗ FAILED TO CREATE VIDEO")
+        logger.error("Timelapse video generation failed")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
