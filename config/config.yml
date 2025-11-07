@@ -351,3 +351,16 @@ logging:
 
   # Number of backup log files to keep
   backup_count: 5
+
+# Analysis and Graphs Settings
+graphs:
+  # Directory for generated analysis graphs
+  directory: "graphs"
+
+  # Graph image settings
+  width: 14  # inches
+  height: 8  # inches
+  dpi: 150   # resolution (dots per inch)
+
+  # Default time window for analysis (hours)
+  default_hours: 24
