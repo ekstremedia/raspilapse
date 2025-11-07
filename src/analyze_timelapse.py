@@ -211,9 +211,7 @@ def analyze_images(image_metadata_pairs: List[Tuple[Path, Path]], hours: int) ->
         # Color gains (red, blue)
         colour_gains = metadata.get("ColourGains", [0, 0])
         data["colour_gains_red"].append(colour_gains[0] if len(colour_gains) > 0 else 0)
-        data["colour_gains_blue"].append(
-            colour_gains[1] if len(colour_gains) > 1 else 0
-        )
+        data["colour_gains_blue"].append(colour_gains[1] if len(colour_gains) > 1 else 0)
 
         data["digital_gain"].append(metadata.get("DigitalGain", 1.0))
 
@@ -267,9 +265,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
     # Night zone (dark blue)
     ax.axhspan(0.01, night_threshold, alpha=0.15, color="midnightblue", zorder=0)
     # Twilight zone (purple)
-    ax.axhspan(
-        night_threshold, day_threshold, alpha=0.15, color="mediumpurple", zorder=0
-    )
+    ax.axhspan(night_threshold, day_threshold, alpha=0.15, color="mediumpurple", zorder=0)
     # Day zone (light yellow)
     ax.axhspan(day_threshold, max_lux * 10, alpha=0.10, color="gold", zorder=0)
 
@@ -285,9 +281,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
     )
 
     # Add fill under the curve for prettier effect
-    ax.fill_between(
-        data["timestamps"], data["lux"], alpha=0.3, color="orange", zorder=4
-    )
+    ax.fill_between(data["timestamps"], data["lux"], alpha=0.3, color="orange", zorder=4)
 
     # Style axes and labels with light colors for dark background
     ax.set_xlabel("Time", fontsize=14, fontweight="bold", color="white")
@@ -374,9 +368,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
 
     fig.tight_layout()
     output_path = output_dir / "lux_levels.png"
-    plt.savefig(
-        output_path, dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor()
-    )
+    plt.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
     print(f"    ✅ Saved: {output_path}")
 
@@ -532,9 +524,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
 
     # 6. Overview Panel (4 key metrics)
     print("  Creating overview panel...")
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(
-        2, 2, figsize=(fig_width * 1.2, fig_height * 1.2)
-    )
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(fig_width * 1.2, fig_height * 1.2))
 
     # Lux (log scale)
     ax1.plot(data["timestamps"], data["lux"], color="tab:orange", linewidth=2)
@@ -645,9 +635,7 @@ def export_to_excel(
     wb.remove(wb.active)
 
     # Header style
-    header_fill = PatternFill(
-        start_color="366092", end_color="366092", fill_type="solid"
-    )
+    header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFF")
     header_alignment = Alignment(horizontal="center", vertical="center")
 
@@ -708,9 +696,7 @@ def export_to_excel(
     # === Sheet 2: Statistics ===
     ws_stats = wb.create_sheet("Statistics")
 
-    ws_stats.cell(row=1, column=1, value="STATISTICAL SUMMARY").font = Font(
-        bold=True, size=14
-    )
+    ws_stats.cell(row=1, column=1, value="STATISTICAL SUMMARY").font = Font(bold=True, size=14)
     ws_stats.cell(row=2, column=1, value=f"Last {hours} hours")
 
     row = 4
@@ -719,14 +705,10 @@ def export_to_excel(
     ws_stats.cell(row=row, column=1, value="TIME RANGE").font = Font(bold=True)
     row += 1
     ws_stats.cell(row=row, column=1, value="From:")
-    ws_stats.cell(
-        row=row, column=2, value=min(data["timestamps"]).strftime("%Y-%m-%d %H:%M:%S")
-    )
+    ws_stats.cell(row=row, column=2, value=min(data["timestamps"]).strftime("%Y-%m-%d %H:%M:%S"))
     row += 1
     ws_stats.cell(row=row, column=1, value="To:")
-    ws_stats.cell(
-        row=row, column=2, value=max(data["timestamps"]).strftime("%Y-%m-%d %H:%M:%S")
-    )
+    ws_stats.cell(row=row, column=2, value=max(data["timestamps"]).strftime("%Y-%m-%d %H:%M:%S"))
     row += 1
     ws_stats.cell(row=row, column=1, value="Total Images:")
     ws_stats.cell(row=row, column=2, value=len(data["timestamps"]))
@@ -735,9 +717,7 @@ def export_to_excel(
     # Lux statistics
     lux_values = [l for l in data["lux"] if l > 0]
     if lux_values:
-        ws_stats.cell(row=row, column=1, value="LIGHT LEVELS (Lux)").font = Font(
-            bold=True
-        )
+        ws_stats.cell(row=row, column=1, value="LIGHT LEVELS (Lux)").font = Font(bold=True)
         row += 1
         ws_stats.cell(row=row, column=1, value="Min:").fill = PatternFill(
             start_color="E0E0E0", fill_type="solid"
@@ -761,9 +741,7 @@ def export_to_excel(
         row += 2
 
     # Exposure statistics
-    ws_stats.cell(row=row, column=1, value="EXPOSURE TIME (seconds)").font = Font(
-        bold=True
-    )
+    ws_stats.cell(row=row, column=1, value="EXPOSURE TIME (seconds)").font = Font(bold=True)
     row += 1
     ws_stats.cell(row=row, column=1, value="Min:").fill = PatternFill(
         start_color="E0E0E0", fill_type="solid"
@@ -811,9 +789,7 @@ def export_to_excel(
     row += 2
 
     # Temperature statistics
-    ws_stats.cell(row=row, column=1, value="SENSOR TEMPERATURE (°C)").font = Font(
-        bold=True
-    )
+    ws_stats.cell(row=row, column=1, value="SENSOR TEMPERATURE (°C)").font = Font(bold=True)
     row += 1
     ws_stats.cell(row=row, column=1, value="Min:").fill = PatternFill(
         start_color="E0E0E0", fill_type="solid"
@@ -885,18 +861,10 @@ def export_to_excel(
                 2,
             ),
         )
-        ws_hourly.cell(
-            row=row_idx, column=3, value=round(np.mean(values["exposure_time"]), 4)
-        )
-        ws_hourly.cell(
-            row=row_idx, column=4, value=round(np.mean(values["analogue_gain"]), 2)
-        )
-        ws_hourly.cell(
-            row=row_idx, column=5, value=round(np.mean(values["sensor_temp"]), 1)
-        )
-        ws_hourly.cell(
-            row=row_idx, column=6, value=round(np.mean(values["colour_temp"]), 0)
-        )
+        ws_hourly.cell(row=row_idx, column=3, value=round(np.mean(values["exposure_time"]), 4))
+        ws_hourly.cell(row=row_idx, column=4, value=round(np.mean(values["analogue_gain"]), 2))
+        ws_hourly.cell(row=row_idx, column=5, value=round(np.mean(values["sensor_temp"]), 1))
+        ws_hourly.cell(row=row_idx, column=6, value=round(np.mean(values["colour_temp"]), 0))
         ws_hourly.cell(row=row_idx, column=7, value=len(values["lux"]))
 
     # Auto-size columns
