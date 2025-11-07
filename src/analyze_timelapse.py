@@ -175,9 +175,8 @@ def analyze_images(image_metadata_pairs: List[Tuple[Path, Path]], hours: int) ->
         "filenames": [],
     }
 
-    print(
-        f"\n📊 Analyzing metadata from {len(image_metadata_pairs)} images from last {hours} hours..."
-    )
+    num_images = len(image_metadata_pairs)
+    print(f"\n📊 Analyzing metadata from {num_images} images from last {hours} hours...")
 
     for i, (img_path, meta_path) in enumerate(image_metadata_pairs, 1):
         if i % 100 == 0:
@@ -287,13 +286,11 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
     # Style axes and labels with light colors for dark background
     ax.set_xlabel("Time", fontsize=14, fontweight="bold", color="white")
     ax.set_ylabel("Light Level (lux)", fontsize=14, fontweight="bold", color="white")
-    ax.set_title(
-        "Light Levels Over Time\n(Lux = unit of illuminance, 1 lux = light from 1 candle at 1 meter)",
-        fontsize=16,
-        fontweight="bold",
-        pad=20,
-        color="white",
+    title_text = (
+        "Light Levels Over Time\n"
+        "(Lux = unit of illuminance, 1 lux = light from 1 candle at 1 meter)"
     )
+    ax.set_title(title_text, fontsize=16, fontweight="bold", pad=20, color="white")
     ax.set_yscale("log")
 
     # Grid styling
@@ -314,7 +311,14 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
 
     for lux_val, label, color in reference_levels:
         if min_lux * 0.5 < lux_val < max_lux * 2:
-            ax.axhline(y=lux_val, color=color, linestyle=":", linewidth=1.5, alpha=0.5, zorder=3)
+            ax.axhline(
+                y=lux_val,
+                color=color,
+                linestyle=":",
+                linewidth=1.5,
+                alpha=0.5,
+                zorder=3,
+            )
             ax.text(
                 ax.get_xlim()[1],
                 lux_val,
@@ -616,7 +620,11 @@ def print_statistics(data: Dict, hours: int):
 
 
 def export_to_excel(
-    data: Dict, output_path: Path, hours: int, config: dict, image_pairs: List[Tuple[Path, Path]]
+    data: Dict,
+    output_path: Path,
+    hours: int,
+    config: dict,
+    image_pairs: List[Tuple[Path, Path]],
 ):
     """Export analysis data to Excel file with multiple sheets."""
     print(f"\n📊 Creating Excel file: {output_path}")
