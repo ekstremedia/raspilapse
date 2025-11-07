@@ -7,3 +7,8 @@ PyYAML>=6.0
 
 # Image processing for overlay system
 Pillow>=10.0.0
+
+# Analysis and visualization (for analyze_timelapse.py)
+matplotlib>=3.5.0
+numpy>=1.21.0
+openpyxl>=3.0.0
