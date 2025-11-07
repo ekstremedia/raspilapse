@@ -623,6 +623,82 @@ Comprehensive test suite for verifying installation and configuration.
 - Service status
 - Final status report
 
+### Analysis Script (src/analyze_timelapse.py)
+
+Powerful analysis tool that generates beautiful graphs and Excel reports from timelapse metadata.
+
+**Features:**
+- ✅ **Fast**: Only reads JSON metadata files (no image processing)
+- ✅ **Beautiful dark-themed lux graph** with day/night zones
+- ✅ **6 detailed graphs**: Lux, Exposure, Gain, Temperature, White Balance, Overview
+- ✅ **Excel export** with 3 sheets: Raw Data, Statistics, Hourly Averages
+- ✅ **Real-world lux references** (sunlight, twilight, full moon, etc.)
+- ✅ **Chronologically sorted** data from earliest to latest
+
+**Usage:**
+```bash
+# Analyze last 24 hours (default)
+python3 src/analyze_timelapse.py
+
+# Analyze last 48 hours
+python3 src/analyze_timelapse.py --hours 48
+
+# Analyze last week
+python3 src/analyze_timelapse.py --hours 168
+
+# Use custom config
+python3 src/analyze_timelapse.py -c config/custom.yml
+```
+
+**Generated Files** (in `graphs/` directory):
+
+1. **`lux_levels.png`** ⭐ Most Important!
+   - Dark-themed graph with colored day/night/twilight zones
+   - Orange glowing line with fill effect
+   - Real-world reference lines (sunlight, twilight, etc.)
+   - Your configured day/night thresholds
+
+2. **`exposure_time.png`** - Camera exposure over time
+   - Shows max night exposure threshold from config
+
+3. **`analogue_gain.png`** - ISO/Gain levels
+
+4. **`temperature.png`** - Sensor temperature tracking
+
+5. **`white_balance.png`** - Color temperature + RGB gains
+   - Two-panel graph
+
+6. **`overview.png`** - 4-panel summary of all key metrics
+
+7. **`timelapse_analysis_24h.xlsx`** - Excel file with:
+   - **Raw Data**: Every image with timestamp, lux, exposure, gain, temp, etc.
+   - **Statistics**: Min/Max/Avg/Median for all metrics
+   - **Hourly Averages**: Data aggregated by hour
+
+**How It Works:**
+
+The script intelligently matches JPG files with their corresponding `_metadata.json` files by modification time (within 60 seconds), handling the ~18 second delay between image capture and metadata save. It then:
+
+1. Loads all metadata files from the time window
+2. Extracts key metrics (lux, exposure, gain, temperature, etc.)
+3. Sorts chronologically from earliest to latest
+4. Generates beautiful themed graphs
+5. Exports to Excel for detailed analysis
+
+**Performance:**
+- **~3 seconds** to analyze 2,880 images (24 hours)
+- Progress updates every 100 files
+
+**Lux Reference Guide:**
+- **100,000 lux**: Direct sunlight
+- **10,000 lux**: Full daylight
+- **1,000 lux**: Overcast day
+- **400 lux**: Sunrise/Sunset
+- **100 lux**: Very dark day
+- **10 lux**: Twilight (your night threshold)
+- **1 lux**: Deep twilight
+- **0.1 lux**: Full moon
+
 ---
 
 ## Development Guidelines
