@@ -77,6 +77,37 @@ output:
     enabled: true
     path: "/var/www/html/status.jpg"
 
+# Video Output Settings
+video:
+  # Directory for generated timelapse videos
+  directory: "videos"
+
+  # Video filename pattern (supports strftime formatting)
+  # Available placeholders:
+  # - {name} - Project name
+  # - {start_date} - Start date (YYYY-MM-DD)
+  # - {end_date} - End date (YYYY-MM-DD)
+  # You can also use strftime directives like %Y%m%d
+  filename_pattern: "{name}_{start_date}_to_{end_date}.mp4"
+
+  # Video codec settings
+  codec:
+    # Video codec (libx264 for H.264, libx265 for H.265/HEVC)
+    name: "libx264"
+
+    # Pixel format (yuv420p for maximum compatibility)
+    pixel_format: "yuv420p"
+
+    # Constant Rate Factor (0-51, lower = better quality, 18-23 recommended)
+    # 18 = visually lossless, 23 = good quality, 28 = acceptable
+    crf: 20
+
+  # Frame rate (frames per second)
+  # 25 fps = smooth European standard
+  # 30 fps = smooth NTSC standard
+  # 24 fps = cinematic
+  fps: 25
+
 # Timelapse Settings (for future timelapse.py script)
 timelapse:
   # Interval between captures in seconds
