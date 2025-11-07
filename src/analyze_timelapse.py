@@ -66,9 +66,8 @@ def find_recent_images(output_dir: Path, hours: int = 24) -> List[Tuple[Path, Pa
     json_files = {}  # {mtime: path}
     for json_path in output_dir.rglob("*_metadata.json"):
         # Skip test shots in metadata folder
-        if (
-            json_path.parent.name != "metadata"
-        ):  # Skip only if parent dir name is exactly "metadata"
+        # Skip only if parent dir name is exactly "metadata"
+        if json_path.parent.name != "metadata":
             mtime = datetime.fromtimestamp(json_path.stat().st_mtime)
             if mtime >= cutoff_time:
                 json_files[mtime] = json_path
