@@ -854,9 +854,11 @@ def export_to_excel(
             row=row_idx,
             column=2,
             value=round(
-                np.mean([l for l in values["lux"] if l > 0])
-                if any(l > 0 for l in values["lux"])
-                else 0,
+                (
+                    np.mean([l for l in values["lux"] if l > 0])
+                    if any(l > 0 for l in values["lux"])
+                    else 0
+                ),
                 2,
             ),
         )
