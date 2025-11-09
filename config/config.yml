@@ -298,7 +298,7 @@ overlay:
 
     # Weather info (optional - requires weather.enabled = true)
     weather:
-      enabled: false
+      enabled: true
       lines:
         - "Temp: {temp} | Humidity: {humidity} | Wind: {wind} | Rain: {rain_24h}"
 

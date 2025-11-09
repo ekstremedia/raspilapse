@@ -517,8 +517,12 @@ class ImageOverlay:
                 margin = self.overlay_config.get("margin", 10)
                 padding = int(font_size * 0.6)
 
+                # Get content config early
+                content_config = self.overlay_config.get("content", {})
+
                 # Line 1 - Left: Camera name (bold), Right: Mode + Exposure + ISO
-                # Line 2 - Left: Date Time, Right: WB + Lux
+                # Line 2 - Left: Date Time, Right: Debug info
+                # Line 3 - Weather info (if enabled)
 
                 # Calculate line height
                 try:
@@ -530,8 +534,13 @@ class ImageOverlay:
                 layout_config = self.overlay_config.get("layout", {})
                 bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
 
-                # Total bar height for 2 lines with extra bottom spacing
-                bar_height = (line_height * 2) + (padding * 2) + int(padding * bottom_padding_mult)
+                # Check if weather is enabled to determine number of lines
+                weather_section = content_config.get("weather", {})
+                weather_enabled = weather_section.get("enabled", False)
+                num_lines = 3 if weather_enabled else 2
+
+                # Total bar height with extra bottom spacing
+                bar_height = (line_height * num_lines) + (padding * 2) + int(padding * bottom_padding_mult)
 
                 # Draw gradient background
                 bg_config = self.overlay_config.get("background", {})
@@ -542,10 +551,10 @@ class ImageOverlay:
                 # Font color
                 font_color = tuple(font_config.get("color", [255, 255, 255, 255]))
 
-                # Line 1 positions
+                # Line positions
                 y1 = margin + padding
-                # Line 2 positions
                 y2 = y1 + line_height
+                y3 = y2 + line_height  # Line 3 for weather
 
                 # LEFT SIDE (bold camera name + date/time)
                 left_x = margin + padding
@@ -559,7 +568,7 @@ class ImageOverlay:
                 draw.text((left_x, y2), datetime_text, fill=font_color, font=font_regular)
 
                 # RIGHT SIDE (use config content, regular font)
-                content_config = self.overlay_config.get("content", {})
+                # content_config already defined earlier
 
                 # Line 1 Right: Camera settings (if enabled)
                 camera_settings = content_config.get("camera_settings", {})
@@ -612,6 +621,35 @@ class ImageOverlay:
                         draw.text(
                             (right_x, y2),
                             line2_right,
+                            fill=font_color,
+                            font=font_regular,
+                        )
+
+                # Line 3: Weather info (if enabled) - full width centered
+                weather_section = content_config.get("weather", {})
+                if weather_section.get("enabled", False):
+                    lines = weather_section.get("lines", [])
+                    if lines:
+                        # Use first line for weather display
+                        weather_template = lines[0]
+                        try:
+                            weather_text = weather_template.format(**data)
+                        except KeyError as e:
+                            logger.warning(f"Unknown variable in weather overlay template: {e}")
+                            weather_text = weather_template
+
+                        # Calculate width to center the text
+                        try:
+                            bbox = draw.textbbox((0, 0), weather_text, font=font_regular)
+                            text_width = bbox[2] - bbox[0]
+                        except Exception:
+                            text_width = len(weather_text) * font_size * 0.6
+
+                        # Center the weather text
+                        center_x = (img_width - text_width) // 2
+                        draw.text(
+                            (center_x, y3),
+                            weather_text,
                             fill=font_color,
                             font=font_regular,
                         )

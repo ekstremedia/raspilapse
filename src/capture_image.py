@@ -401,8 +401,17 @@ class ImageCapture:
 
             # Apply overlay if enabled (do this after release to avoid holding camera)
             if self.overlay.enabled and metadata_dict is not None:
-                logger.debug("Applying overlay...")
-                self.overlay.apply_overlay(str(output_path), metadata_dict, mode)
+                logger.info(f"Applying overlay to {output_path} (mode: {mode})...")
+                result = self.overlay.apply_overlay(str(output_path), metadata_dict, mode)
+                if result:
+                    logger.info(f"Overlay applied successfully")
+                else:
+                    logger.warning(f"Overlay application returned None/False")
+            else:
+                if not self.overlay.enabled:
+                    logger.info("Overlay is disabled")
+                if metadata_dict is None:
+                    logger.warning("No metadata available for overlay")
 
             self._counter += 1
 
