@@ -3,7 +3,7 @@
 ![Tests](https://github.com/ekstremedia/raspilapse/workflows/Tests/badge.svg)
 [![codecov](https://codecov.io/gh/ekstremedia/raspilapse/branch/main/graph/badge.svg)](https://codecov.io/gh/ekstremedia/raspilapse)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Version](https://img.shields.io/badge/version-0.9.0--beta-orange)
+![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi-red)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
@@ -58,6 +58,10 @@ sudo apt install -y python3-picamera2 python3-yaml python3-pil
 git clone https://github.com/ekstremedia/raspilapse.git
 cd raspilapse
 
+# Create your config from template
+cp config/config.example.yml config/config.yml
+nano config/config.yml  # Customize your settings
+
 # Test installation
 python3 src/capture_image.py
 ```
@@ -68,7 +72,7 @@ For continuous 24/7 operation as a background service:
 
 ```bash
 # Install and start service
-./install_service.sh
+./scripts/install.sh
 
 # Check status with beautiful colored output
 python3 src/status.py
@@ -82,7 +86,7 @@ sudo journalctl -u raspilapse -f
 
 Images are automatically saved to `/var/www/html/images/YYYY/MM/DD/` and organized by date.
 
-See [SERVICE.md](SERVICE.md) for complete service documentation.
+See [docs/SERVICE.md](docs/SERVICE.md) for complete service documentation.
 
 ### Testing & Status
 
@@ -90,7 +94,7 @@ Run comprehensive tests to verify your installation:
 
 ```bash
 # Run full test suite (checks dependencies, config, camera, service)
-./test.sh
+./scripts/test.sh
 
 # Quick status check only
 python3 src/status.py
@@ -126,12 +130,24 @@ Images are saved to the directory specified in `config/config.yml`.
 
 ## Configuration
 
-Edit `config/config.yml` to customize:
+Raspilapse uses a YAML configuration file:
 
+- **`config/config.example.yml`** - Template with all available options (tracked in git)
+- **`config/config.yml`** - Your personal config (not tracked, safe to customize)
+
+First-time setup:
+```bash
+cp config/config.example.yml config/config.yml
+nano config/config.yml
+```
+
+Customize these settings:
 - **Camera settings** - Resolution, exposure, white balance, focus
 - **Output settings** - Directory, filename patterns, quality
 - **Logging** - Log levels, file paths, rotation settings
 - **Metadata** - Enable/disable metadata capture
+- **Overlay** - Text overlays with camera info and timestamps
+- **Weather** - Optional weather data integration
 
 ### Example Configuration
 
@@ -244,27 +260,75 @@ Each captured image can have an associated metadata JSON file containing:
 
 ```
 raspilapse/
-├── config/
-│   └── config.yml           # Main configuration file
-├── src/
-│   ├── capture_image.py     # Image capture module
-│   ├── auto_timelapse.py    # Adaptive timelapse (day/night)
-│   ├── overlay.py           # Image overlay system
-│   ├── status.py            # Status display script
-│   └── logging_config.py    # Logging configuration
-├── logs/                    # Log files (auto-created)
-├── metadata/                # Test shot metadata (not accumulated)
-├── test_photos/             # Default output directory
-├── tests/                   # Unit tests
-├── test.sh                  # Comprehensive test script
-├── install_service.sh       # Service installation script
-├── uninstall_service.sh     # Service removal script
-├── INSTALL.md               # Installation guide
-├── USAGE.md                 # Usage guide
-├── SERVICE.md               # Service documentation
-├── OVERLAY.md               # Overlay system documentation
-├── CLAUDE.md                # Technical reference
-└── README.md                # This file
+├── README.md                    # Main documentation
+├── LICENSE                      # MIT License
+├── CHANGELOG.md                 # Version history
+├── requirements.txt             # Python dependencies
+├── pyproject.toml              # Project configuration
+│
+├── src/                         # Source code
+│   ├── auto_timelapse.py       # Adaptive timelapse (day/night automation)
+│   ├── capture_image.py        # Core image capture module
+│   ├── make_timelapse.py       # Video generation from images
+│   ├── make_timelapse_daily.py # Daily video automation
+│   ├── analyze_timelapse.py    # Analysis and graphing
+│   ├── overlay.py              # Image overlay system
+│   ├── apply_overlay.py        # Standalone overlay application
+│   ├── status.py               # Status display script
+│   ├── weather.py              # Weather data integration
+│   └── logging_config.py       # Logging configuration
+│
+├── config/                      # Configuration files
+│   ├── config.example.yml      # Template config (tracked in git)
+│   ├── config.yml              # Your personal config (not tracked)
+│   └── README.md               # Configuration documentation
+│
+├── scripts/                     # Installation and utilities
+│   ├── install.sh              # Main service installer
+│   ├── uninstall.sh            # Service uninstaller
+│   ├── install_daily_video.sh  # Daily video service installer
+│   ├── uninstall_daily_video.sh
+│   ├── test.sh                 # Comprehensive test script
+│   ├── cleanup_old_images.sh   # Automatic cleanup (systemd)
+│   ├── check_disk_space.sh     # Disk monitoring
+│   ├── check_service.sh        # Service health check
+│   └── check_capture_rate.sh   # Capture rate verification
+│
+├── systemd/                     # Systemd service templates
+│   ├── raspilapse.service
+│   ├── raspilapse-daily-video.service
+│   ├── raspilapse-daily-video.timer
+│   ├── raspilapse-cleanup.service
+│   └── raspilapse-cleanup.timer
+│
+├── docs/                        # Documentation
+│   ├── INSTALL.md              # Installation guide
+│   ├── USAGE.md                # Usage guide
+│   ├── SERVICE.md              # Service documentation
+│   ├── SERVICES_OVERVIEW.md    # Systemd services reference
+│   ├── DAILY_VIDEO.md          # Daily video setup
+│   ├── OVERLAY.md              # Overlay configuration
+│   ├── WEATHER.md              # Weather integration
+│   ├── LONG_TERM_STABILITY.md  # Year-long operation guide
+│   ├── MONITORING_SETUP.md     # Monitoring and alerting
+│   ├── YEAR_LONG_CHECKLIST.md  # Maintenance checklist
+│   ├── SETUP_COMPLETE.md       # Setup completion summary
+│   ├── CLAUDE.md               # Technical reference (Picamera2)
+│   ├── CONTRIBUTING.md         # Contribution guidelines
+│   └── MAINTAINER.md           # Maintainer's guide
+│
+├── tests/                       # Unit tests (pytest)
+│   ├── test_*.py               # Test modules
+│   └── conftest.py             # Pytest configuration
+│
+├── examples/                    # Example outputs
+├── manuals/                     # Hardware documentation (PDFs)
+│
+├── logs/                        # Runtime logs (gitignored)
+├── metadata/                    # Test shot metadata (gitignored)
+├── graphs/                      # Analysis graphs (gitignored)
+├── videos/                      # Generated videos (gitignored)
+└── test_photos/                 # Test captures (gitignored)
 ```
 
 ## Advanced Features
@@ -327,7 +391,7 @@ sudo usermod -aG video $USER
 # Log out and back in
 ```
 
-**For more troubleshooting, see [INSTALL.md](INSTALL.md) and check `logs/capture_image.log`**
+**For more troubleshooting, see [docs/INSTALL.md](docs/INSTALL.md) and check `logs/capture_image.log`**
 
 ## Use Cases
 
