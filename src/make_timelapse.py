@@ -335,7 +335,9 @@ Examples:
         "--start",
         help="Start time in HH:MM format (e.g., 04:00). If end time is same or earlier, assumes previous day. Default: 24 hours ago from now.",
     )
-    parser.add_argument("--end", help="End time in HH:MM format (e.g., 04:00). Default: current time.")
+    parser.add_argument(
+        "--end", help="End time in HH:MM format (e.g., 04:00). Default: current time."
+    )
     parser.add_argument(
         "--limit",
         type=int,
@@ -401,7 +403,9 @@ Examples:
             start_datetime = end_datetime.replace(hour=start_hour, minute=start_min)
     else:
         # Only one provided - error
-        print(Colors.error("✗ Must provide both --start and --end, or neither for default 24 hours"))
+        print(
+            Colors.error("✗ Must provide both --start and --end, or neither for default 24 hours")
+        )
         logger.error("Invalid time arguments")
         return 1
 

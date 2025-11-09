@@ -313,6 +313,7 @@ class ImageOverlay:
     def _get_text_lines(self, data: Dict[str, str]) -> List[str]:
         """
         Get all text lines to display based on configuration.
+        Used for corner positions (non-bar modes).
 
         Args:
             data: Formatted data dictionary
@@ -322,57 +323,47 @@ class ImageOverlay:
         """
         lines = []
         content_config = self.overlay_config.get("content", {})
-        layout_config = self.overlay_config.get("layout", {})
-        section_spacing = layout_config.get("section_spacing", True)
 
-        # Main content (always shown)
-        main_lines = content_config.get("main", [])
-        for line_template in main_lines:
+        # For corner modes, stack all configured lines
+        # Line 1 left
+        if content_config.get("line_1_left"):
             try:
-                line = line_template.format(**data)
+                line = content_config["line_1_left"].format(**data)
                 lines.append(line)
             except KeyError as e:
-                logger.warning(f"Unknown variable in overlay template: {e}")
-                lines.append(line_template)
+                logger.warning(f"Unknown variable in line_1_left: {e}")
+                lines.append(content_config["line_1_left"])
 
-        # Camera settings (optional)
-        camera_settings = content_config.get("camera_settings", {})
-        if camera_settings.get("enabled", False):
-            if section_spacing and lines:
-                lines.append("")  # Blank line separator
-            for line_template in camera_settings.get("lines", []):
+        # Line 1 right (if you want it in corner mode)
+        if content_config.get("line_1_right"):
+            try:
+                line = content_config["line_1_right"].format(**data)
+                lines.append(line)
+            except KeyError as e:
+                logger.warning(f"Unknown variable in line_1_right: {e}")
+                lines.append(content_config["line_1_right"])
+
+        # Line 2 left
+        if content_config.get("line_2_left"):
+            # Check if it's date/time to use localized version
+            if content_config["line_2_left"] == "{date} {time}":
+                lines.append(data.get("datetime_localized", f"{data['date']} {data['time']}"))
+            else:
                 try:
-                    line = line_template.format(**data)
+                    line = content_config["line_2_left"].format(**data)
                     lines.append(line)
                 except KeyError as e:
-                    logger.warning(f"Unknown variable in overlay template: {e}")
-                    lines.append(line_template)
+                    logger.warning(f"Unknown variable in line_2_left: {e}")
+                    lines.append(content_config["line_2_left"])
 
-        # Weather info (optional)
-        weather_section = content_config.get("weather", {})
-        if weather_section.get("enabled", False):
-            if section_spacing and lines:
-                lines.append("")  # Blank line separator
-            for line_template in weather_section.get("lines", []):
-                try:
-                    line = line_template.format(**data)
-                    lines.append(line)
-                except KeyError as e:
-                    logger.warning(f"Unknown variable in overlay template: {e}")
-                    lines.append(line_template)
-
-        # Debug info (optional)
-        debug = content_config.get("debug", {})
-        if debug.get("enabled", False):
-            if section_spacing and lines:
-                lines.append("")  # Blank line separator
-            for line_template in debug.get("lines", []):
-                try:
-                    line = line_template.format(**data)
-                    lines.append(line)
-                except KeyError as e:
-                    logger.warning(f"Unknown variable in overlay template: {e}")
-                    lines.append(line_template)
+        # Line 2 right (if you want it in corner mode)
+        if content_config.get("line_2_right"):
+            try:
+                line = content_config["line_2_right"].format(**data)
+                lines.append(line)
+            except KeyError as e:
+                logger.warning(f"Unknown variable in line_2_right: {e}")
+                lines.append(content_config["line_2_right"])
 
         return lines
 
@@ -517,12 +508,8 @@ class ImageOverlay:
                 margin = self.overlay_config.get("margin", 10)
                 padding = int(font_size * 0.6)
 
-                # Get content config early
+                # Get content config
                 content_config = self.overlay_config.get("content", {})
-
-                # Line 1 - Left: Camera name (bold), Right: Mode + Exposure + ISO
-                # Line 2 - Left: Date Time, Right: Debug info
-                # Line 3 - Weather info (if enabled)
 
                 # Calculate line height
                 try:
@@ -534,13 +521,13 @@ class ImageOverlay:
                 layout_config = self.overlay_config.get("layout", {})
                 bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
 
-                # Check if weather is enabled to determine number of lines
-                weather_section = content_config.get("weather", {})
-                weather_enabled = weather_section.get("enabled", False)
-                num_lines = 3 if weather_enabled else 2
+                # Fixed 2 lines for compact bar
+                num_lines = 2
 
                 # Total bar height with extra bottom spacing
-                bar_height = (line_height * num_lines) + (padding * 2) + int(padding * bottom_padding_mult)
+                bar_height = (
+                    (line_height * num_lines) + (padding * 2) + int(padding * bottom_padding_mult)
+                )
 
                 # Draw gradient background
                 bg_config = self.overlay_config.get("background", {})
@@ -554,105 +541,81 @@ class ImageOverlay:
                 # Line positions
                 y1 = margin + padding
                 y2 = y1 + line_height
-                y3 = y2 + line_height  # Line 3 for weather
 
-                # LEFT SIDE (bold camera name + date/time)
+                # LEFT SIDE
                 left_x = margin + padding
 
-                # Line 1 Left: Camera name (bold)
-                camera_name = data.get("camera_name", "Camera")
-                draw.text((left_x, y1), camera_name, fill=font_color, font=font_bold)
+                # Line 1 Left
+                line_1_left_template = content_config.get("line_1_left", "{camera_name}")
+                try:
+                    line_1_left = line_1_left_template.format(**data)
+                except KeyError as e:
+                    logger.warning(f"Unknown variable in line_1_left: {e}")
+                    line_1_left = line_1_left_template
+                draw.text((left_x, y1), line_1_left, fill=font_color, font=font_bold)
 
-                # Line 2 Left: Date and time (regular, localized if enabled)
-                datetime_text = data.get("datetime_localized", f"{data['date']} {data['time']}")
-                draw.text((left_x, y2), datetime_text, fill=font_color, font=font_regular)
+                # Line 2 Left (use localized datetime if it contains date/time variables)
+                line_2_left_template = content_config.get("line_2_left", "{date} {time}")
 
-                # RIGHT SIDE (use config content, regular font)
-                # content_config already defined earlier
+                # Check if it's the default date/time template
+                if line_2_left_template == "{date} {time}":
+                    line_2_left = data.get("datetime_localized", f"{data['date']} {data['time']}")
+                else:
+                    try:
+                        line_2_left = line_2_left_template.format(**data)
+                    except KeyError as e:
+                        logger.warning(f"Unknown variable in line_2_left: {e}")
+                        line_2_left = line_2_left_template
+                draw.text((left_x, y2), line_2_left, fill=font_color, font=font_regular)
 
-                # Line 1 Right: Camera settings (if enabled)
-                camera_settings = content_config.get("camera_settings", {})
-                if camera_settings.get("enabled", False):
-                    lines = camera_settings.get("lines", [])
-                    if lines:
-                        # Use first line for line 1 right
-                        line1_template = lines[0]
-                        try:
-                            line1_right = line1_template.format(**data)
-                        except KeyError as e:
-                            logger.warning(f"Unknown variable in overlay template: {e}")
-                            line1_right = line1_template
+                # RIGHT SIDE
 
-                        # Calculate width to position from right
-                        try:
-                            bbox = draw.textbbox((0, 0), line1_right, font=font_regular)
-                            text_width = bbox[2] - bbox[0]
-                        except Exception:
-                            text_width = len(line1_right) * font_size * 0.6
+                # Line 1 Right
+                line_1_right_template = content_config.get("line_1_right", "")
+                if line_1_right_template:
+                    try:
+                        line_1_right = line_1_right_template.format(**data)
+                    except KeyError as e:
+                        logger.warning(f"Unknown variable in line_1_right: {e}")
+                        line_1_right = line_1_right_template
 
-                        right_x = img_width - text_width - margin - padding
-                        draw.text(
-                            (right_x, y1),
-                            line1_right,
-                            fill=font_color,
-                            font=font_regular,
-                        )
+                    # Calculate width to position from right
+                    try:
+                        bbox = draw.textbbox((0, 0), line_1_right, font=font_regular)
+                        text_width = bbox[2] - bbox[0]
+                    except Exception:
+                        text_width = len(line_1_right) * font_size * 0.6
 
-                # Line 2 Right: Debug info (if enabled)
-                debug = content_config.get("debug", {})
-                if debug.get("enabled", False):
-                    lines = debug.get("lines", [])
-                    if lines:
-                        # Use first line for line 2 right
-                        line2_template = lines[0]
-                        try:
-                            line2_right = line2_template.format(**data)
-                        except KeyError as e:
-                            logger.warning(f"Unknown variable in overlay template: {e}")
-                            line2_right = line2_template
+                    right_x = img_width - text_width - margin - padding
+                    draw.text(
+                        (right_x, y1),
+                        line_1_right,
+                        fill=font_color,
+                        font=font_regular,
+                    )
 
-                        try:
-                            bbox = draw.textbbox((0, 0), line2_right, font=font_regular)
-                            text_width = bbox[2] - bbox[0]
-                        except Exception:
-                            text_width = len(line2_right) * font_size * 0.6
+                # Line 2 Right
+                line_2_right_template = content_config.get("line_2_right", "")
+                if line_2_right_template:
+                    try:
+                        line_2_right = line_2_right_template.format(**data)
+                    except KeyError as e:
+                        logger.warning(f"Unknown variable in line_2_right: {e}")
+                        line_2_right = line_2_right_template
 
-                        right_x = img_width - text_width - margin - padding
-                        draw.text(
-                            (right_x, y2),
-                            line2_right,
-                            fill=font_color,
-                            font=font_regular,
-                        )
+                    try:
+                        bbox = draw.textbbox((0, 0), line_2_right, font=font_regular)
+                        text_width = bbox[2] - bbox[0]
+                    except Exception:
+                        text_width = len(line_2_right) * font_size * 0.6
 
-                # Line 3: Weather info (if enabled) - full width centered
-                weather_section = content_config.get("weather", {})
-                if weather_section.get("enabled", False):
-                    lines = weather_section.get("lines", [])
-                    if lines:
-                        # Use first line for weather display
-                        weather_template = lines[0]
-                        try:
-                            weather_text = weather_template.format(**data)
-                        except KeyError as e:
-                            logger.warning(f"Unknown variable in weather overlay template: {e}")
-                            weather_text = weather_template
-
-                        # Calculate width to center the text
-                        try:
-                            bbox = draw.textbbox((0, 0), weather_text, font=font_regular)
-                            text_width = bbox[2] - bbox[0]
-                        except Exception:
-                            text_width = len(weather_text) * font_size * 0.6
-
-                        # Center the weather text
-                        center_x = (img_width - text_width) // 2
-                        draw.text(
-                            (center_x, y3),
-                            weather_text,
-                            fill=font_color,
-                            font=font_regular,
-                        )
+                    right_x = img_width - text_width - margin - padding
+                    draw.text(
+                        (right_x, y2),
+                        line_2_right,
+                        fill=font_color,
+                        font=font_regular,
+                    )
 
             else:
                 # Original box layout for non-bar modes

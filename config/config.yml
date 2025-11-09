@@ -255,8 +255,11 @@ overlay:
   # Margin from edges (pixels)
   margin: 10  # Small margin for top-bar mode
 
-  # Content to display (each item is a line of text)
-  # Available variables:
+  # Content to display
+  # In top-bar mode: 2 lines with left/right alignment
+  # In corner modes: stacked lines in a box
+  #
+  # Available variables for templates:
   #   {date} - Date (YYYY-MM-DD)
   #   {time} - Time (HH:MM:SS)
   #   {datetime} - Full datetime
@@ -285,28 +288,17 @@ overlay:
   #   {rain_24h} - Rain in last 24 hours
   #   {pressure} - Atmospheric pressure
   content:
-    # Main info (always visible) - centered in bar
-    main:
-      - "{camera_name}"
-      - "{date} {time}"
+    # Line 1 - Left side
+    line_1_left: "{camera_name}"
 
-    # Camera settings (optional) - in bar layout
-    camera_settings:
-      enabled: true
-      lines:
-        - "Exposure: {exposure} | ISO: {iso} | Lux: {lux}"
+    # Line 1 - Right side
+    line_1_right: "{temp}, humidity: {humidity}, wind: {wind} {wind_dir}, rain: {rain} "
 
-    # Weather info (optional - requires weather.enabled = true)
-    weather:
-      enabled: true
-      lines:
-        - "Temp: {temp} | Humidity: {humidity} | Wind: {wind} | Rain: {rain_24h}"
+    # Line 2 - Left side
+    line_2_left: "{date} {time}"
 
-    # Debug info (optional - shows all metadata)
-    debug:
-      enabled: true
-      lines:
-        - "Gain: {gain} | Sensor: {temperature}°C | Color: {color_gains}"
+    # Line 2 - Right side
+    line_2_right: "Exposure: {exposure} {iso} Color: {color_gains} - Lux {lux}"
 
   # Camera name (displayed in overlay)
   camera_name: "Kringelen Timelapse"
