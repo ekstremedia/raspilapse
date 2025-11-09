@@ -95,27 +95,27 @@ class TestImageOverlay:
         """Test exposure time formatting."""
         overlay = ImageOverlay(test_overlay_config)
 
-        # Microseconds
-        assert overlay._format_exposure_time(500) == "500µs"
+        # Microseconds (fixed-width padded)
+        assert overlay._format_exposure_time(500) == " 500µs"
 
-        # Milliseconds
-        assert overlay._format_exposure_time(5000) == "5.0ms"
-        assert overlay._format_exposure_time(2000) == "2.0ms"
+        # Milliseconds (fixed-width padded)
+        assert overlay._format_exposure_time(5000) == "  5.0ms"
+        assert overlay._format_exposure_time(2000) == "  2.0ms"
         assert overlay._format_exposure_time(100_000) == "100.0ms"
 
-        # Seconds (>= 1 second)
-        assert overlay._format_exposure_time(1_000_000) == "1.0s"
-        assert overlay._format_exposure_time(1_500_000) == "1.5s"
-        assert overlay._format_exposure_time(2_000_000) == "2.0s"
-        assert overlay._format_exposure_time(10_000_000) == "10.0s"
-        assert overlay._format_exposure_time(20_000_000) == "20.0s"
+        # Seconds (>= 1 second) (fixed-width padded)
+        assert overlay._format_exposure_time(1_000_000) == "  1.0s"
+        assert overlay._format_exposure_time(1_500_000) == "  1.5s"
+        assert overlay._format_exposure_time(2_000_000) == "  2.0s"
+        assert overlay._format_exposure_time(10_000_000) == " 10.0s"
+        assert overlay._format_exposure_time(20_000_000) == " 20.0s"
 
     def test_format_iso(self, test_overlay_config):
-        """Test ISO formatting."""
+        """Test ISO formatting (fixed-width)."""
         overlay = ImageOverlay(test_overlay_config)
-        assert overlay._format_iso(1.0) == "ISO 100"
-        assert overlay._format_iso(2.5) == "ISO 250"
-        assert overlay._format_iso(8.0) == "ISO 800"
+        assert overlay._format_iso(1.0) == "ISO  100"  # Fixed-width: 4 digits
+        assert overlay._format_iso(2.5) == "ISO  250"  # Fixed-width: 4 digits
+        assert overlay._format_iso(8.0) == "ISO  800"  # Fixed-width: 4 digits
 
     def test_format_wb_gains(self, test_overlay_config):
         """Test white balance gains formatting."""
@@ -124,10 +124,10 @@ class TestImageOverlay:
         assert overlay._format_wb_gains([]) == "N/A"
 
     def test_format_color_gains(self, test_overlay_config):
-        """Test color gains tuple formatting."""
+        """Test color gains tuple formatting (fixed-width)."""
         overlay = ImageOverlay(test_overlay_config)
-        assert overlay._format_color_gains([1.8, 1.5]) == "(1.80, 1.50)"
-        assert overlay._format_color_gains([]) == "N/A"
+        assert overlay._format_color_gains([1.8, 1.5]) == "( 1.80,  1.50)"  # Fixed-width: 5.2f
+        assert overlay._format_color_gains([]) == "(  N/A,   N/A)"  # Fixed-width N/A
 
     def test_prepare_overlay_data(self, test_overlay_config, test_metadata):
         """Test overlay data preparation."""
@@ -136,7 +136,7 @@ class TestImageOverlay:
 
         assert data["camera_name"] == "Test Camera"
         assert data["mode"] == "Day"
-        assert data["iso"] == "ISO 200"
+        assert data["iso"] == "ISO  200"  # Fixed-width: 4 digits
         assert "exposure" in data
         assert "lux" in data
         assert "date" in data
@@ -449,16 +449,16 @@ class TestOverlayContent:
         """Test lux value formatting."""
         overlay = ImageOverlay(test_overlay_config)
 
-        # Test with lux in metadata
+        # Test with lux in metadata (fixed-width: 6.1f)
         data = overlay._prepare_overlay_data(test_metadata, mode="day")
         assert "lux" in data
-        assert data["lux"] == "500.5"
+        assert data["lux"] == " 500.5"  # Fixed-width padding
 
-        # Test without lux - defaults to 0.0
+        # Test without lux - defaults to 0.0 (fixed-width)
         metadata_no_lux = test_metadata.copy()
         del metadata_no_lux["Lux"]
         data = overlay._prepare_overlay_data(metadata_no_lux, mode="day")
-        assert data["lux"] == "0.0"  # Default value when missing
+        assert data["lux"] == "   0.0"  # Fixed-width: 6.1f
 
     def test_temperature_formatting(self, test_overlay_config, test_metadata):
         """Test sensor temperature formatting."""
@@ -466,7 +466,7 @@ class TestOverlayContent:
         data = overlay._prepare_overlay_data(test_metadata, mode="day")
 
         assert "temperature" in data
-        assert data["temperature"] == "35.0"
+        assert data["temperature"] == " 35.0"  # Fixed-width: 5.1f
 
     def test_wb_mode_auto(self, test_overlay_config, test_metadata):
         """Test white balance mode display."""

@@ -240,8 +240,8 @@ class TestWeatherDataFormatting:
         weather = WeatherData(weather_config)
         weather.get_weather_data()  # Fetch data
 
-        assert weather._format_temperature(-0.2) == "-0.2°C"
-        assert weather._format_temperature(None) == "N/A"
+        assert weather._format_temperature(-0.2) == " -0.2°C"  # Fixed-width: 5.1f + °C
+        assert weather._format_temperature(None) == "  N/A"  # Fixed-width
 
     @patch("urllib.request.urlopen")
     def test_format_humidity(self, mock_urlopen, weather_config, sample_netatmo_response):
@@ -255,8 +255,8 @@ class TestWeatherDataFormatting:
         weather = WeatherData(weather_config)
         weather.get_weather_data()
 
-        assert weather._format_humidity(82) == "82%"
-        assert weather._format_humidity(None) == "N/A"
+        assert weather._format_humidity(82) == " 82%"  # Fixed-width: 3d + %
+        assert weather._format_humidity(None) == " N/A"  # Fixed-width
 
     @patch("urllib.request.urlopen")
     def test_format_wind(self, mock_urlopen, weather_config, sample_netatmo_response):
@@ -275,7 +275,7 @@ class TestWeatherDataFormatting:
         assert "5.0 m/s" in formatted
         assert "7.2" in formatted
 
-        assert weather._format_wind(None, None) == "N/A"
+        assert weather._format_wind(None, None) == "  N/A"  # Fixed-width
 
     @patch("urllib.request.urlopen")
     def test_format_wind_direction(self, mock_urlopen, weather_config, sample_netatmo_response):
@@ -289,12 +289,12 @@ class TestWeatherDataFormatting:
         weather = WeatherData(weather_config)
         weather.get_weather_data()
 
-        assert weather._format_wind_direction(0) == "N"
-        assert weather._format_wind_direction(90) == "E"
-        assert weather._format_wind_direction(180) == "S"
-        assert weather._format_wind_direction(270) == "W"
-        assert weather._format_wind_direction(185) == "S"
-        assert weather._format_wind_direction(None) == "N/A"
+        assert weather._format_wind_direction(0) == "N "  # Fixed-width: 2 chars
+        assert weather._format_wind_direction(90) == "E "  # Fixed-width: 2 chars
+        assert weather._format_wind_direction(180) == "S "  # Fixed-width: 2 chars
+        assert weather._format_wind_direction(270) == "W "  # Fixed-width: 2 chars
+        assert weather._format_wind_direction(185) == "S "  # Fixed-width: 2 chars
+        assert weather._format_wind_direction(None) == " N/A"  # Fixed-width
 
     @patch("urllib.request.urlopen")
     def test_format_rain(self, mock_urlopen, weather_config, sample_netatmo_response):
@@ -308,8 +308,8 @@ class TestWeatherDataFormatting:
         weather = WeatherData(weather_config)
         weather.get_weather_data()
 
-        assert weather._format_rain(2.3) == "2.3 mm"
-        assert weather._format_rain(None) == "N/A"
+        assert weather._format_rain(2.3) == " 2.3 mm"  # Fixed-width: 4.1f + mm
+        assert weather._format_rain(None) == "  N/A"  # Fixed-width
 
     @patch("urllib.request.urlopen")
     def test_format_pressure(self, mock_urlopen, weather_config, sample_netatmo_response):
@@ -323,5 +323,5 @@ class TestWeatherDataFormatting:
         weather = WeatherData(weather_config)
         weather.get_weather_data()
 
-        assert weather._format_pressure(1012) == "1012 hPa"
-        assert weather._format_pressure(None) == "N/A"
+        assert weather._format_pressure(1012) == "1012 hPa"  # Fixed-width: 4.0f + hPa
+        assert weather._format_pressure(None) == "  N/A"  # Fixed-width

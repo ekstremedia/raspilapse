@@ -231,57 +231,65 @@ class WeatherData:
             return template
 
     def _format_temperature(self, temp: Optional[float]) -> str:
-        """Format temperature value."""
+        """Format temperature value with fixed width."""
         if temp is None:
-            return "N/A"
-        return f"{temp:.1f}°C"
+            return "  N/A"
+        # Fixed width: -XX.X°C (7 chars total, right-aligned number)
+        return f"{temp:5.1f}°C"
 
     def _format_humidity(self, humidity: Optional[int]) -> str:
-        """Format humidity value."""
+        """Format humidity value with fixed width."""
         if humidity is None:
-            return "N/A"
-        return f"{humidity}%"
+            return " N/A"
+        # Fixed width: XXX% (4 chars total, right-aligned)
+        return f"{humidity:3d}%"
 
     def _format_wind(self, speed: Optional[int], gust: Optional[int]) -> str:
-        """Format wind speed with gust."""
+        """Format wind speed with gust, fixed width."""
         if speed is None:
-            return "N/A"
+            return "  N/A"
 
         # Convert km/h to m/s for more common metric
         speed_ms = speed / 3.6
-        result = f"{speed_ms:.1f} m/s"
+        # Fixed width: XX.X m/s
+        result = f"{speed_ms:4.1f} m/s"
 
         if gust is not None and gust > speed:
             gust_ms = gust / 3.6
-            result += f" (gust {gust_ms:.1f})"
+            # Fixed width for gust too
+            result += f" (gust {gust_ms:4.1f})"
 
         return result
 
     def _format_wind_speed(self, speed: Optional[int]) -> str:
-        """Format wind speed value."""
+        """Format wind speed value with fixed width."""
         if speed is None:
-            return "N/A"
+            return "  N/A"
         speed_ms = speed / 3.6
-        return f"{speed_ms:.1f} m/s"
+        # Fixed width: XX.X m/s
+        return f"{speed_ms:4.1f} m/s"
 
     def _format_wind_direction(self, angle: Optional[int]) -> str:
-        """Format wind direction from angle."""
+        """Format wind direction from angle with fixed width."""
         if angle is None:
-            return "N/A"
+            return " N/A"
 
         # Convert angle to compass direction
         directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
         index = round(angle / 45) % 8
-        return directions[index]
+        # Fixed width: 2 chars, left-aligned (NE, N_, etc)
+        return f"{directions[index]:2s}"
 
     def _format_rain(self, rain: Optional[float]) -> str:
-        """Format rain value."""
+        """Format rain value with fixed width."""
         if rain is None:
-            return "N/A"
-        return f"{rain:.1f} mm"
+            return "  N/A"
+        # Fixed width: XX.X mm
+        return f"{rain:4.1f} mm"
 
     def _format_pressure(self, pressure: Optional[float]) -> str:
-        """Format pressure value."""
+        """Format pressure value with fixed width."""
         if pressure is None:
-            return "N/A"
-        return f"{pressure:.0f} hPa"
+            return "  N/A"
+        # Fixed width: XXXX hPa (4 digits)
+        return f"{pressure:4.0f} hPa"

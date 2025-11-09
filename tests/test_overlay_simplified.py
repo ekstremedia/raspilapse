@@ -154,7 +154,7 @@ class TestSimplifiedStructure:
 
         # Check all fields are formatted
         assert data["mode"] == "Transition"
-        assert data["temperature"] == "40.0"
+        assert data["temperature"] == " 40.0"  # Fixed-width: 5.1f
         assert "time" in data
 
     def test_gradient_bar_with_two_lines(self, simplified_config):
@@ -273,7 +273,7 @@ class TestEdgeCases:
 
         # Should handle special characters
         assert "exposure" in data
-        assert data["exposure"] == "1.0s"
+        assert data["exposure"] == "  1.0s"  # Fixed-width: padded
 
     def test_missing_metadata_values(self, simplified_config):
         """Test with missing values in metadata."""
@@ -284,7 +284,7 @@ class TestEdgeCases:
         # Should handle missing keys gracefully with defaults
         data = overlay._prepare_overlay_data(metadata, mode="day")
         assert data is not None
-        # Default values should be used
-        assert data["lux"] == "0.0"
-        assert data["temperature"] == "0.0"
+        # Default values should be used (with fixed-width formatting)
+        assert data["lux"] == "   0.0"  # Fixed-width: 6.1f
+        assert data["temperature"] == "  0.0"  # Fixed-width: 5.1f
         assert data["wb_gains"] == "N/A"

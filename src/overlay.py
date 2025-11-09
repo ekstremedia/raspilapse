@@ -103,41 +103,45 @@ class ImageOverlay:
 
     def _format_exposure_time(self, exposure_us: int) -> str:
         """
-        Format exposure time in human-readable form.
+        Format exposure time in human-readable form with fixed width.
 
         Args:
             exposure_us: Exposure time in microseconds
 
         Returns:
-            Formatted string (e.g., "1/500s", "2.5s", "15s")
+            Formatted string with consistent width (e.g., "1/500s  ", "  2.5s  ", " 15.0s  ")
         """
         if exposure_us < 1000:
-            return f"{exposure_us}µs"
+            # Microseconds: XXXXµs (6 chars)
+            return f"{exposure_us:4d}µs"
         elif exposure_us < 1_000_000:
             ms = exposure_us / 1000
-            return f"{ms:.1f}ms"
+            # Milliseconds: XXX.Xms (7 chars)
+            return f"{ms:5.1f}ms"
         else:
             seconds = exposure_us / 1_000_000
             if seconds < 1:
-                # Show as fraction for fast speeds
+                # Fraction format: 1/XXXX (7 chars)
                 fraction = int(1 / seconds)
-                return f"1/{fraction}s"
+                return f"1/{fraction:4d}s"
             else:
-                return f"{seconds:.1f}s"
+                # Seconds: XX.Xs (6 chars, right-aligned)
+                return f"{seconds:5.1f}s"
 
     def _format_iso(self, gain: float) -> str:
         """
-        Format analogue gain as ISO equivalent.
+        Format analogue gain as ISO equivalent with fixed width.
 
         Args:
             gain: Analogue gain value
 
         Returns:
-            Formatted ISO string (e.g., "ISO 100", "ISO 800")
+            Formatted ISO string (e.g., "ISO  100", "ISO  800")
         """
         # Rough ISO equivalent (gain 1.0 ≈ ISO 100)
         iso = int(gain * 100)
-        return f"ISO {iso}"
+        # Fixed width: ISO XXXX (4 digits, right-aligned)
+        return f"ISO {iso:4d}"
 
     def _format_wb_gains(self, gains: List[float]) -> str:
         """
@@ -201,17 +205,17 @@ class ImageOverlay:
 
     def _format_color_gains(self, gains: List[float]) -> str:
         """
-        Format color correction gains as tuple.
+        Format color correction gains as tuple with fixed width.
 
         Args:
             gains: List of color gains
 
         Returns:
-            Formatted string (e.g., "(1.80, 1.50)")
+            Formatted string with fixed width (e.g., "( 1.80,  1.50)")
         """
         if len(gains) >= 2:
-            return f"({gains[0]:.2f}, {gains[1]:.2f})"
-        return "N/A"
+            return f"({gains[0]:5.2f}, {gains[1]:5.2f})"
+        return "(  N/A,   N/A)"
 
     def _prepare_overlay_data(self, metadata: Dict, mode: Optional[str] = None) -> Dict[str, str]:
         """
@@ -259,13 +263,13 @@ class ImageOverlay:
             "exposure_ms": f"{exposure_us / 1000:.2f}",
             "exposure_us": str(exposure_us),
             "iso": self._format_iso(gain),
-            "gain": f"{gain:.2f}",
+            "gain": f"{gain:4.2f}",
             "wb": wb_mode,
             "wb_gains": self._format_wb_gains(wb_gains),
             "color_gains": self._format_color_gains(wb_gains),
-            "lux": f"{lux:.1f}",
+            "lux": f"{lux:6.1f}",
             "resolution": f"{resolution[0]}x{resolution[1]}",
-            "temperature": f"{temp:.1f}",
+            "temperature": f"{temp:5.1f}",
         }
 
         # Add weather data if available
