@@ -322,7 +322,6 @@ raspilapse/
 │   └── conftest.py             # Pytest configuration
 │
 ├── examples/                    # Example outputs
-├── manuals/                     # Hardware documentation (PDFs)
 │
 ├── logs/                        # Runtime logs (gitignored)
 ├── metadata/                    # Test shot metadata (gitignored)
