@@ -58,6 +58,10 @@ sudo apt install -y python3-picamera2 python3-yaml python3-pil
 git clone https://github.com/ekstremedia/raspilapse.git
 cd raspilapse
 
+# Create your config from template
+cp config/config.example.yml config/config.yml
+nano config/config.yml  # Customize your settings
+
 # Test installation
 python3 src/capture_image.py
 ```
@@ -126,12 +130,24 @@ Images are saved to the directory specified in `config/config.yml`.
 
 ## Configuration
 
-Edit `config/config.yml` to customize:
+Raspilapse uses a YAML configuration file:
 
+- **`config/config.example.yml`** - Template with all available options (tracked in git)
+- **`config/config.yml`** - Your personal config (not tracked, safe to customize)
+
+First-time setup:
+```bash
+cp config/config.example.yml config/config.yml
+nano config/config.yml
+```
+
+Customize these settings:
 - **Camera settings** - Resolution, exposure, white balance, focus
 - **Output settings** - Directory, filename patterns, quality
 - **Logging** - Log levels, file paths, rotation settings
 - **Metadata** - Enable/disable metadata capture
+- **Overlay** - Text overlays with camera info and timestamps
+- **Weather** - Optional weather data integration
 
 ### Example Configuration
 
@@ -263,7 +279,9 @@ raspilapse/
 │   └── logging_config.py       # Logging configuration
 │
 ├── config/                      # Configuration files
-│   └── config.yml              # Main configuration (YAML)
+│   ├── config.example.yml      # Template config (tracked in git)
+│   ├── config.yml              # Your personal config (not tracked)
+│   └── README.md               # Configuration documentation
 │
 ├── scripts/                     # Installation and utilities
 │   ├── install.sh              # Main service installer

@@ -1,3 +1,6 @@
+# Configuration (personal configs not tracked)
+config/config.yml
+
 # Python
 venv/
 __pycache__/

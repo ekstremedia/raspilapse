@@ -26,6 +26,11 @@ try:
 except ImportError:
     from weather import WeatherData
 
+try:
+    from src.system_monitor import SystemMonitor
+except ImportError:
+    from system_monitor import SystemMonitor
+
 logger = get_logger("overlay")
 
 
@@ -52,6 +57,9 @@ class ImageOverlay:
 
         # Initialize weather data fetcher
         self.weather = WeatherData(config)
+
+        # Initialize system monitor
+        self.system_monitor = SystemMonitor()
 
         logger.info("Overlay initialized")
 
@@ -271,6 +279,62 @@ class ImageOverlay:
             "resolution": f"{resolution[0]}x{resolution[1]}",
             "temperature": f"{temp:5.1f}",
         }
+
+        # Add system monitoring data
+        system_metrics = self.system_monitor.get_all_metrics(
+            disk_path=self.config.get("output", {}).get("directory", "/")
+        )
+        if system_metrics.get("cpu_temp") is not None:
+            data["cpu_temp"] = SystemMonitor.format_cpu_temp(system_metrics["cpu_temp"])
+            data["cpu_temp_raw"] = f"{system_metrics['cpu_temp']:.1f}"
+        else:
+            data["cpu_temp"] = "N/A"
+            data["cpu_temp_raw"] = "N/A"
+
+        if system_metrics.get("disk") is not None:
+            disk = system_metrics["disk"]
+            data["disk_free"] = f"{disk['free']:.1f} GB"
+            data["disk_used"] = f"{disk['used']:.1f} GB"
+            data["disk_total"] = f"{disk['total']:.1f} GB"
+            data["disk_percent"] = f"{disk['percent']:.0f}%"
+            data["disk"] = SystemMonitor.format_disk_space(disk)
+        else:
+            data["disk_free"] = "N/A"
+            data["disk_used"] = "N/A"
+            data["disk_total"] = "N/A"
+            data["disk_percent"] = "N/A"
+            data["disk"] = "N/A"
+
+        if system_metrics.get("memory") is not None:
+            mem = system_metrics["memory"]
+            data["memory_used"] = f"{mem['used']/1024:.1f} GB"
+            data["memory_free"] = f"{mem['free']/1024:.1f} GB"
+            data["memory_total"] = f"{mem['total']/1024:.1f} GB"
+            data["memory_percent"] = f"{mem['percent']:.0f}%"
+            data["memory"] = SystemMonitor.format_memory(mem)
+        else:
+            data["memory_used"] = "N/A"
+            data["memory_free"] = "N/A"
+            data["memory_total"] = "N/A"
+            data["memory_percent"] = "N/A"
+            data["memory"] = "N/A"
+
+        if system_metrics.get("load") is not None:
+            load = system_metrics["load"]
+            data["load_1min"] = f"{load['1min']:.2f}"
+            data["load_5min"] = f"{load['5min']:.2f}"
+            data["load_15min"] = f"{load['15min']:.2f}"
+            data["load"] = SystemMonitor.format_cpu_load(load)
+        else:
+            data["load_1min"] = "N/A"
+            data["load_5min"] = "N/A"
+            data["load_15min"] = "N/A"
+            data["load"] = "N/A"
+
+        if system_metrics.get("uptime") is not None:
+            data["uptime"] = SystemMonitor.format_uptime(system_metrics["uptime"])
+        else:
+            data["uptime"] = "N/A"
 
         # Add weather data if available
         weather_data = self.weather.get_weather_data()

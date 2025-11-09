@@ -41,6 +41,20 @@ echo -e "${GREEN}✓${NC} Created /var/www/html/images"
 # Create logs directory if it doesn't exist
 mkdir -p "$SCRIPT_DIR/logs"
 echo -e "${GREEN}✓${NC} Created logs directory"
+
+# Create config from example if it doesn't exist
+if [ ! -f "$SCRIPT_DIR/config/config.yml" ]; then
+    if [ -f "$SCRIPT_DIR/config/config.example.yml" ]; then
+        cp "$SCRIPT_DIR/config/config.example.yml" "$SCRIPT_DIR/config/config.yml"
+        echo -e "${GREEN}✓${NC} Created config.yml from config.example.yml"
+        echo -e "${YELLOW}⚠${NC}  Please edit config/config.yml with your settings"
+    else
+        echo -e "${RED}✗${NC} ERROR: config.example.yml not found!"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✓${NC} Config file already exists"
+fi
 echo ""
 
 # Step 2: Update service file with correct user and paths

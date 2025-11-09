@@ -140,6 +140,25 @@ Use these placeholders in your content templates:
 - `{lux}` - Calculated lux value
 - `{temperature}` - Camera sensor temperature in °C (internal hardware temp, NOT ambient temperature)
 
+### System Monitoring (Always Available)
+- `{cpu_temp}` - CPU temperature formatted (e.g., "42.5°C")
+- `{cpu_temp_raw}` - CPU temperature raw value (e.g., "42.5")
+- `{disk}` - Disk space formatted (e.g., "50.2 GB free (42% used)")
+- `{disk_free}` - Free disk space (e.g., "50.2 GB")
+- `{disk_used}` - Used disk space (e.g., "36.8 GB")
+- `{disk_total}` - Total disk space (e.g., "116.7 GB")
+- `{disk_percent}` - Disk usage percentage (e.g., "31%")
+- `{memory}` - Memory usage formatted (e.g., "1.2 GB / 4.0 GB (30%)")
+- `{memory_used}` - Used memory (e.g., "1.2 GB")
+- `{memory_free}` - Free memory (e.g., "2.8 GB")
+- `{memory_total}` - Total memory (e.g., "4.0 GB")
+- `{memory_percent}` - Memory usage percentage (e.g., "30%")
+- `{load}` - CPU load averages (e.g., "0.52, 0.48, 0.45")
+- `{load_1min}` - 1-minute load average (e.g., "0.52")
+- `{load_5min}` - 5-minute load average (e.g., "0.48")
+- `{load_15min}` - 15-minute load average (e.g., "0.45")
+- `{uptime}` - System uptime (e.g., "2d 5h 30m")
+
 ---
 
 ## Content Sections
@@ -361,6 +380,36 @@ overlay:
         - "Temp: {temperature}°C"
         - "Resolution: {resolution}"
 ```
+
+### System Monitoring Overlay
+
+```yaml
+overlay:
+  enabled: true
+  position: "top-bar"  # Full width for more info
+  camera_name: "Timelapse with System Stats"
+
+  font:
+    family: "DejaVuSans-Bold.ttf"
+    size_ratio: 0.020
+    color: [255, 255, 255, 255]
+
+  background:
+    enabled: true
+    color: [0, 0, 0, 110]  # Semi-transparent
+    padding: 0.6
+
+  content:
+    # Line 1 - Camera and Time Info
+    line_1_left: "{camera_name}"
+    line_1_right: "{date} {time}"
+
+    # Line 2 - System Health Metrics
+    line_2_left: "CPU: {cpu_temp}, Load: {load_1min}"
+    line_2_right: "Disk: {disk_free}, Memory: {memory_percent}"
+```
+
+This example shows system health metrics alongside camera info, perfect for monitoring long-running timelapses.
 
 ---
 
