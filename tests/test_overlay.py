@@ -142,6 +142,66 @@ class TestImageOverlay:
         assert "date" in data
         assert "time" in data
 
+    def test_prepare_overlay_data_with_lens_position(self, test_overlay_config):
+        """Test overlay data preparation with lens position and autofocus mode."""
+        overlay = ImageOverlay(test_overlay_config)
+
+        # Test with manual focus at infinity
+        metadata_infinity = {
+            "ExposureTime": 10000,
+            "AnalogueGain": 1.0,
+            "Lux": 100.0,
+            "ColourGains": [1.0, 1.0],
+            "SensorTemperature": 30.0,
+            "resolution": [1920, 1080],
+            "LensPosition": 0.0,
+            "AfMode": 0,
+        }
+        data = overlay._prepare_overlay_data(metadata_infinity, mode="day")
+        assert data["af_mode"] == "Manual"
+        assert data["lens_position"] == "0.00"
+        assert data["focus_distance"] == "∞"
+
+        # Test with manual focus at 1 meter
+        metadata_1m = metadata_infinity.copy()
+        metadata_1m["LensPosition"] = 1.0
+        data = overlay._prepare_overlay_data(metadata_1m, mode="day")
+        assert data["lens_position"] == "1.00"
+        assert data["focus_distance"] == "1.0m"
+
+        # Test with manual focus at 10cm
+        metadata_10cm = metadata_infinity.copy()
+        metadata_10cm["LensPosition"] = 10.0
+        data = overlay._prepare_overlay_data(metadata_10cm, mode="day")
+        assert data["lens_position"] == "10.00"
+        assert data["focus_distance"] == "10cm"
+
+        # Test with auto focus mode
+        metadata_auto = metadata_infinity.copy()
+        metadata_auto["AfMode"] = 1
+        data = overlay._prepare_overlay_data(metadata_auto, mode="day")
+        assert data["af_mode"] == "Auto"
+
+        # Test with continuous focus mode
+        metadata_continuous = metadata_infinity.copy()
+        metadata_continuous["AfMode"] = 2
+        data = overlay._prepare_overlay_data(metadata_continuous, mode="day")
+        assert data["af_mode"] == "Continuous"
+
+        # Test without lens position (should show N/A)
+        metadata_no_lens = {
+            "ExposureTime": 10000,
+            "AnalogueGain": 1.0,
+            "Lux": 100.0,
+            "ColourGains": [1.0, 1.0],
+            "SensorTemperature": 30.0,
+            "resolution": [1920, 1080],
+        }
+        data = overlay._prepare_overlay_data(metadata_no_lens, mode="day")
+        assert data["af_mode"] == "N/A"
+        assert data["lens_position"] == "N/A"
+        assert data["focus_distance"] == "N/A"
+
     def test_get_text_lines(self, test_overlay_config, test_metadata):
         """Test text line generation."""
         overlay = ImageOverlay(test_overlay_config)

@@ -243,6 +243,8 @@ class ImageOverlay:
         wb_gains = metadata.get("ColourGains", [])
         temp = metadata.get("SensorTemperature", 0)
         resolution = metadata.get("resolution", [0, 0])
+        lens_position = metadata.get("LensPosition", None)
+        af_mode = metadata.get("AfMode", None)
 
         # Determine white balance mode
         # Note: metadata doesn't always contain control states, infer from config
@@ -259,6 +261,29 @@ class ImageOverlay:
             time_str = now.strftime("%H:%M:%S")
         else:
             time_str = now.strftime("%H:%M")
+
+        # Format autofocus mode
+        af_mode_str = "N/A"
+        if af_mode is not None:
+            af_modes = {0: "Manual", 1: "Auto", 2: "Continuous"}
+            af_mode_str = af_modes.get(af_mode, f"Mode {af_mode}")
+
+        # Format lens position
+        lens_position_str = "N/A"
+        focus_distance_str = "N/A"
+        if lens_position is not None:
+            lens_position_str = f"{lens_position:.2f}"
+            # Calculate approximate focus distance (1 / dioptres)
+            if lens_position > 0:
+                focus_distance = 1.0 / lens_position
+                if focus_distance < 1.0:
+                    focus_distance_str = f"{focus_distance * 100:.0f}cm"
+                elif focus_distance < 10.0:
+                    focus_distance_str = f"{focus_distance:.1f}m"
+                else:
+                    focus_distance_str = f"{focus_distance:.0f}m"
+            else:
+                focus_distance_str = "∞"  # Infinity
 
         data = {
             "date": now.strftime("%Y-%m-%d"),
@@ -278,6 +303,9 @@ class ImageOverlay:
             "lux": f"{lux:6.1f}",
             "resolution": f"{resolution[0]}x{resolution[1]}",
             "temperature": f"{temp:5.1f}",
+            "af_mode": af_mode_str,
+            "lens_position": lens_position_str,
+            "focus_distance": focus_distance_str,
         }
 
         # Add system monitoring data

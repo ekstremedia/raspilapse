@@ -487,6 +487,8 @@ class TestControlMapping:
             "awb_enable": True,
             "ae_enable": False,
             "brightness": 0.5,
+            "af_mode": 0,
+            "lens_position": 0.0,
         }
 
         mapped = capture._prepare_control_map(controls)
@@ -496,6 +498,8 @@ class TestControlMapping:
         assert mapped["AwbEnable"] == 1
         assert mapped["AeEnable"] == 0
         assert mapped["Brightness"] == 0.5
+        assert mapped["AfMode"] == 0
+        assert mapped["LensPosition"] == 0.0
 
     def test_prepare_control_map_pascal_case(self, test_config_file):
         """Test PascalCase keys pass through."""
@@ -506,6 +510,8 @@ class TestControlMapping:
             "ExposureTime": 5000,
             "AnalogueGain": 1.5,
             "AwbEnable": 0,
+            "AfMode": 2,
+            "LensPosition": 10.0,
         }
 
         mapped = capture._prepare_control_map(controls)
@@ -513,6 +519,8 @@ class TestControlMapping:
         assert mapped["ExposureTime"] == 5000
         assert mapped["AnalogueGain"] == 1.5
         assert mapped["AwbEnable"] == 0
+        assert mapped["AfMode"] == 2
+        assert mapped["LensPosition"] == 10.0
 
     def test_prepare_control_map_colour_gains(self, test_config_file):
         """Test colour gains tuple conversion."""
