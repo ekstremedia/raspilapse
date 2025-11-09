@@ -21,6 +21,11 @@ try:
 except ImportError:
     from logging_config import get_logger
 
+try:
+    from src.weather import WeatherData
+except ImportError:
+    from weather import WeatherData
+
 logger = get_logger("overlay")
 
 
@@ -44,6 +49,10 @@ class ImageOverlay:
 
         # Load font
         self.font = self._load_font()
+
+        # Initialize weather data fetcher
+        self.weather = WeatherData(config)
+
         logger.info("Overlay initialized")
 
     def _load_font(self) -> Optional[ImageFont.FreeTypeFont]:
@@ -259,6 +268,46 @@ class ImageOverlay:
             "temperature": f"{temp:.1f}",
         }
 
+        # Add weather data if available
+        weather_data = self.weather.get_weather_data()
+        if weather_data:
+            data.update(
+                {
+                    "temp": self.weather._format_temperature(weather_data.get("temperature")),
+                    "temperature_outdoor": self.weather._format_temperature(
+                        weather_data.get("temperature")
+                    ),
+                    "humidity": self.weather._format_humidity(weather_data.get("humidity")),
+                    "wind": self.weather._format_wind(
+                        weather_data.get("wind_speed"), weather_data.get("wind_gust")
+                    ),
+                    "wind_speed": self.weather._format_wind_speed(weather_data.get("wind_speed")),
+                    "wind_gust": self.weather._format_wind_speed(weather_data.get("wind_gust")),
+                    "wind_dir": self.weather._format_wind_direction(weather_data.get("wind_angle")),
+                    "rain": self.weather._format_rain(weather_data.get("rain")),
+                    "rain_1h": self.weather._format_rain(weather_data.get("rain_1h")),
+                    "rain_24h": self.weather._format_rain(weather_data.get("rain_24h")),
+                    "pressure": self.weather._format_pressure(weather_data.get("pressure")),
+                }
+            )
+        else:
+            # Show "-" for stale/unavailable weather data
+            data.update(
+                {
+                    "temp": "-",
+                    "temperature_outdoor": "-",
+                    "humidity": "-",
+                    "wind": "-",
+                    "wind_speed": "-",
+                    "wind_gust": "-",
+                    "wind_dir": "-",
+                    "rain": "-",
+                    "rain_1h": "-",
+                    "rain_24h": "-",
+                    "pressure": "-",
+                }
+            )
+
         return data
 
     def _get_text_lines(self, data: Dict[str, str]) -> List[str]:
@@ -292,6 +341,19 @@ class ImageOverlay:
             if section_spacing and lines:
                 lines.append("")  # Blank line separator
             for line_template in camera_settings.get("lines", []):
+                try:
+                    line = line_template.format(**data)
+                    lines.append(line)
+                except KeyError as e:
+                    logger.warning(f"Unknown variable in overlay template: {e}")
+                    lines.append(line_template)
+
+        # Weather info (optional)
+        weather_section = content_config.get("weather", {})
+        if weather_section.get("enabled", False):
+            if section_spacing and lines:
+                lines.append("")  # Blank line separator
+            for line_template in weather_section.get("lines", []):
                 try:
                     line = line_template.format(**data)
                     lines.append(line)

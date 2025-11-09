@@ -272,6 +272,18 @@ overlay:
   #   {lux} - Calculated lux value
   #   {resolution} - Image resolution
   #   {temperature} - Camera sensor temperature (hardware, NOT ambient)
+  #
+  # Weather variables (requires weather.enabled = true):
+  #   {temp} or {temperature_outdoor} - Outdoor temperature
+  #   {humidity} - Outdoor humidity
+  #   {wind} - Wind speed with gust (e.g., "5.2 m/s (gust 8.1)")
+  #   {wind_speed} - Wind speed only
+  #   {wind_gust} - Wind gust speed
+  #   {wind_dir} - Wind direction (N, NE, E, SE, S, SW, W, NW)
+  #   {rain} - Current rain
+  #   {rain_1h} - Rain in last hour
+  #   {rain_24h} - Rain in last 24 hours
+  #   {pressure} - Atmospheric pressure
   content:
     # Main info (always visible) - centered in bar
     main:
@@ -283,6 +295,12 @@ overlay:
       enabled: true
       lines:
         - "Mode: {mode} | Exposure: {exposure} | ISO: {iso} | Lux: {lux}"
+
+    # Weather info (optional - requires weather.enabled = true)
+    weather:
+      enabled: false
+      lines:
+        - "Temp: {temp} | Humidity: {humidity} | Wind: {wind} | Rain: {rain_24h}"
 
     # Debug info (optional - shows all metadata)
     debug:
@@ -364,3 +382,19 @@ graphs:
 
   # Default time window for analysis (hours)
   default_hours: 24
+
+# Weather Data Settings
+weather:
+  # Enable/disable weather data fetching
+  enabled: true
+
+  # Netatmo API endpoint URL
+  # Example: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
+  endpoint: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
+  #endpoint: ""
+
+  # Cache duration in seconds (how long to keep weather data before refreshing)
+  cache_duration: 300  # 5 minutes
+
+  # Request timeout in seconds
+  timeout: 5
