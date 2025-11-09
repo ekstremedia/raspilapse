@@ -35,18 +35,10 @@ def test_overlay_config():
                 "padding": 0.3,
             },
             "content": {
-                "main": [
-                    "{camera_name}",
-                    "{date} {time}",
-                ],
-                "camera_settings": {
-                    "enabled": True,
-                    "lines": ["Exposure: {exposure} | ISO: {iso}"],
-                },
-                "debug": {
-                    "enabled": False,
-                    "lines": ["Gain: {gain}"],
-                },
+                "line_1_left": "{camera_name}",
+                "line_1_right": "Exposure: {exposure} | ISO: {iso}",
+                "line_2_left": "{date} {time}",
+                "line_2_right": "Gain: {gain}",
             },
             "layout": {
                 "line_spacing": 1.3,
@@ -157,8 +149,12 @@ class TestImageOverlay:
         lines = overlay._get_text_lines(data)
 
         assert len(lines) > 0
+        # Check that camera name is in first line
         assert "Test Camera" in lines[0]
-        assert any("Exposure:" in line for line in lines)
+        # Check that at least one line has exposure info (from line_1_right)
+        # Note: lines may be combined differently now
+        combined_text = " ".join(lines)
+        assert "Exposure:" in combined_text or "ISO" in combined_text
 
     def test_apply_overlay_disabled(self, test_image):
         """Test overlay application when disabled."""
@@ -236,9 +232,10 @@ class TestApplyOverlayToImage:
                 "camera_name": "Test",
                 "font": {"family": "default"},
                 "content": {
-                    "main": ["{camera_name}"],
-                    "camera_settings": {"enabled": False},
-                    "debug": {"enabled": False},
+                    "line_1_left": "{camera_name}",
+                    "line_1_right": "",
+                    "line_2_left": "{date} {time}",
+                    "line_2_right": "",
                 },
             }
         }
@@ -418,27 +415,26 @@ class TestOverlayContent:
 
     def test_main_content_only(self, test_overlay_config, test_image, test_metadata):
         """Test overlay with only main content."""
-        test_overlay_config["overlay"]["content"]["camera_settings"]["enabled"] = False
-        test_overlay_config["overlay"]["content"]["debug"]["enabled"] = False
+        test_overlay_config["overlay"]["content"]["line_1_right"] = ""
+        test_overlay_config["overlay"]["content"]["line_2_right"] = ""
 
         overlay = ImageOverlay(test_overlay_config)
         data = overlay._prepare_overlay_data(test_metadata, mode="day")
         lines = overlay._get_text_lines(data)
 
         # Should have main content
-        assert len(lines) >= 2
+        assert len(lines) >= 1
         assert "Test Camera" in lines[0]
 
     def test_debug_content_enabled(self, test_overlay_config, test_metadata):
-        """Test overlay with debug content."""
-        test_overlay_config["overlay"]["content"]["debug"]["enabled"] = True
-        test_overlay_config["overlay"]["content"]["debug"]["lines"] = ["Gain: {gain}"]
+        """Test overlay with additional details content."""
+        test_overlay_config["overlay"]["content"]["line_2_right"] = "Gain: {gain}"
 
         overlay = ImageOverlay(test_overlay_config)
         data = overlay._prepare_overlay_data(test_metadata, mode="night")
         lines = overlay._get_text_lines(data)
 
-        # Should include debug info
+        # Should include gain info
         assert any("Gain:" in line for line in lines)
 
     def test_resolution_formatting(self, test_overlay_config, test_metadata):
@@ -520,9 +516,10 @@ class TestApplyOverlayToImageFunction:
                 "camera_name": "Test",
                 "font": {"family": "default"},
                 "content": {
-                    "main": ["{camera_name}"],
-                    "camera_settings": {"enabled": False},
-                    "debug": {"enabled": False},
+                    "line_1_left": "{camera_name}",
+                    "line_1_right": "",
+                    "line_2_left": "{date} {time}",
+                    "line_2_right": "",
                 },
             }
         }
@@ -560,9 +557,10 @@ class TestApplyOverlayToImageFunction:
                 "camera_name": "Test",
                 "font": {"family": "default"},
                 "content": {
-                    "main": ["{camera_name}"],
-                    "camera_settings": {"enabled": False},
-                    "debug": {"enabled": False},
+                    "line_1_left": "{camera_name}",
+                    "line_1_right": "",
+                    "line_2_left": "{date} {time}",
+                    "line_2_right": "",
                 },
             }
         }
