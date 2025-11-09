@@ -302,7 +302,7 @@ overlay:
     line_2_right: "Exposure: {exposure}, {iso}, lux: {lux}"
 
   # Camera name (displayed in overlay)
-  camera_name: "Kringelen Timelapse"
+  camera_name: "Kringelen, nord"
 
   # DateTime formatting
   datetime:

@@ -1,5 +1,3 @@
-#CLAUDE.md
-
 # Python
 venv/
 __pycache__/
@@ -16,19 +14,35 @@ htmlcov/
 .mypy_cache/
 .tox/
 
-# Output
+# Output directories (runtime generated)
 test_photos/
-test_shots/
+test_videos/
 metadata/
+graphs/
+videos/
+logs/
+
+# Output files
 *.jpg
 *.jpeg
 *.png
 *.mp4
 *.h264
-
-# Logs
-logs/
 *.log
-
-# Metadata
 *_metadata.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.bak
+*.orig
