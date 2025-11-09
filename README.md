@@ -10,7 +10,7 @@
 
 > 🎥 **A Python library for creating professional timelapses with Raspberry Pi Camera**
 >
-> Created by **Terje Nesthus** | Open Source (MIT) | Currently in Beta
+> Created by **Terje Nesthus** | Open Source (MIT)
 
 A simple, user-friendly Python library for creating timelapses with Raspberry Pi and Camera Module V3. Features adaptive exposure, beautiful overlays, and optimized long exposures for day/night photography.
 
