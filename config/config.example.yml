@@ -64,7 +64,7 @@ output:
   filename_pattern: "{name}_%Y_%m_%d_%H_%M_%S.jpg"
 
   # Project name (used in filename)
-  project_name: "kringelen"
+  project_name: "timelapse"
 
   # Image quality (0-100, JPEG compression)
   # Higher = better quality, larger files
@@ -81,7 +81,7 @@ output:
 
   # Symlink latest image (for web status display)
   symlink_latest:
-    enabled: true
+    enabled: false
     path: "/var/www/html/status.jpg"
 
 # Video Output Settings
@@ -165,7 +165,6 @@ adaptive_timelapse:
     awb_enable: false
 
     # Manual color gains if awb disabled (red, blue)
-    #colour_gains: [1.8, 1.5]
     colour_gains: [1.83, 2.02]
 
   # Day mode settings (for bright daylight conditions)
@@ -319,7 +318,7 @@ overlay:
     line_1_left: "{camera_name}"
 
     # Line 1 - Right side
-    line_1_right: "{temp}, humidity: {humidity}, wind: {wind} {wind_dir}, rain: {rain} "
+    #line_1_right: "{temp}, humidity: {humidity}, wind: {wind} {wind_dir}, rain: {rain} "
 
     # Line 2 - Left side
     line_2_left: "{date} {time}"
@@ -332,7 +331,7 @@ overlay:
     # line_2_right: "Memory: {memory_used}/{memory_total}, Uptime: {uptime}"
 
   # Camera name (displayed in overlay)
-  camera_name: "Kringelen, nord"
+  camera_name: "Raspberry Pi Timelapse Camera 01"
 
   # DateTime formatting
   datetime:
@@ -409,11 +408,11 @@ graphs:
 # Weather Data Settings
 weather:
   # Enable/disable weather data fetching
-  enabled: true
+  enabled: false
 
   # Netatmo API endpoint URL
   # Example: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
-  endpoint: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
+  endpoint:
 
   # Cache duration in seconds (how long to keep weather data before refreshing)
   cache_duration: 300  # 5 minutes
