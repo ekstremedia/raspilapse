@@ -9,8 +9,8 @@ camera:
   # - [1920, 1080] - Full HD
   # - [1280, 720]  - HD
   resolution:
-    width: 1920
-    height: 1080
+    width: 3840
+    height: 2160
 
   # Image transforms
   transforms:
@@ -158,7 +158,8 @@ adaptive_timelapse:
     awb_enable: false
 
     # Manual color gains if awb disabled (red, blue)
-    colour_gains: [1.8, 1.5]
+    #colour_gains: [1.8, 1.5]
+    colour_gains: [1.83, 2.02]
 
   # Day mode settings (for bright daylight conditions)
   day_mode:
@@ -255,8 +256,11 @@ overlay:
   # Margin from edges (pixels)
   margin: 10  # Small margin for top-bar mode
 
-  # Content to display (each item is a line of text)
-  # Available variables:
+  # Content to display
+  # In top-bar mode: 2 lines with left/right alignment
+  # In corner modes: stacked lines in a box
+  #
+  # Available variables for templates:
   #   {date} - Date (YYYY-MM-DD)
   #   {time} - Time (HH:MM:SS)
   #   {datetime} - Full datetime
@@ -272,23 +276,30 @@ overlay:
   #   {lux} - Calculated lux value
   #   {resolution} - Image resolution
   #   {temperature} - Camera sensor temperature (hardware, NOT ambient)
+  #
+  # Weather variables (requires weather.enabled = true):
+  #   {temp} or {temperature_outdoor} - Outdoor temperature
+  #   {humidity} - Outdoor humidity
+  #   {wind} - Wind speed with gust (e.g., "5.2 m/s (gust 8.1)")
+  #   {wind_speed} - Wind speed only
+  #   {wind_gust} - Wind gust speed
+  #   {wind_dir} - Wind direction (N, NE, E, SE, S, SW, W, NW)
+  #   {rain} - Current rain
+  #   {rain_1h} - Rain in last hour
+  #   {rain_24h} - Rain in last 24 hours
+  #   {pressure} - Atmospheric pressure
   content:
-    # Main info (always visible) - centered in bar
-    main:
-      - "{camera_name}"
-      - "{date} {time}"
+    # Line 1 - Left side
+    line_1_left: "{camera_name}"
 
-    # Camera settings (optional) - in bar layout
-    camera_settings:
-      enabled: true
-      lines:
-        - "Mode: {mode} | Exposure: {exposure} | ISO: {iso} | Lux: {lux}"
+    # Line 1 - Right side
+    line_1_right: "{temp}, humidity: {humidity}, wind: {wind} {wind_dir}, rain: {rain} "
 
-    # Debug info (optional - shows all metadata)
-    debug:
-      enabled: true
-      lines:
-        - "Gain: {gain} | Sensor: {temperature}°C | Color: {color_gains}"
+    # Line 2 - Left side
+    line_2_left: "{date} {time}"
+
+    # Line 2 - Right side
+    line_2_right: "Exposure: {exposure}, {iso}, lux: {lux}"
 
   # Camera name (displayed in overlay)
   camera_name: "Kringelen Timelapse"
@@ -364,3 +375,18 @@ graphs:
 
   # Default time window for analysis (hours)
   default_hours: 24
+
+# Weather Data Settings
+weather:
+  # Enable/disable weather data fetching
+  enabled: true
+
+  # Netatmo API endpoint URL
+  # Example: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
+  endpoint: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
+
+  # Cache duration in seconds (how long to keep weather data before refreshing)
+  cache_duration: 300  # 5 minutes
+
+  # Request timeout in seconds
+  timeout: 5

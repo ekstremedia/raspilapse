@@ -311,6 +311,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Create video from last 24 hours (default)
+  python3 src/make_timelapse.py
+
   # Create video from 04:00 yesterday to 04:00 today
   python3 src/make_timelapse.py --start 04:00 --end 04:00
 
@@ -318,19 +321,23 @@ Examples:
   python3 src/make_timelapse.py --start 20:00 --end 08:00
 
   # Use first 100 images only (for testing)
-  python3 src/make_timelapse.py --start 20:00 --end 08:00 --limit 100
+  python3 src/make_timelapse.py --limit 100
 
   # Custom config file
-  python3 src/make_timelapse.py --start 04:00 --end 04:00 -c config/custom.yml
+  python3 src/make_timelapse.py -c config/custom.yml
+
+  # Save to specific output directory (for automated daily videos)
+  python3 src/make_timelapse.py --output-dir /var/www/html/videos
         """,
     )
 
     parser.add_argument(
         "--start",
-        required=True,
-        help="Start time in HH:MM format (e.g., 04:00). If end time is same or earlier, assumes previous day.",
+        help="Start time in HH:MM format (e.g., 04:00). If end time is same or earlier, assumes previous day. Default: 24 hours ago from now.",
     )
-    parser.add_argument("--end", required=True, help="End time in HH:MM format (e.g., 04:00)")
+    parser.add_argument(
+        "--end", help="End time in HH:MM format (e.g., 04:00). Default: current time."
+    )
     parser.add_argument(
         "--limit",
         type=int,
@@ -347,6 +354,9 @@ Examples:
         "--fps", type=int, help="Override frame rate from config (frames per second)"
     )
     parser.add_argument("--output", help="Override output filename")
+    parser.add_argument(
+        "--output-dir", help="Override output directory from config (e.g., /var/www/html/videos)"
+    )
 
     args = parser.parse_args()
 
@@ -363,26 +373,41 @@ Examples:
     # Setup logger
     logger = get_logger("make_timelapse", args.config)
 
-    # Parse times
-    try:
-        start_hour, start_min = parse_time(args.start)
-        end_hour, end_min = parse_time(args.end)
-    except ValueError as e:
-        print(Colors.error(f"✗ {e}"))
-        logger.error(str(e))
-        return 1
-
     # Calculate datetime range
     now = datetime.now()
-    end_datetime = now.replace(hour=end_hour, minute=end_min, second=0, microsecond=0)
 
-    # If end time is same or earlier than start time, assume start was yesterday
-    if (end_hour < start_hour) or (end_hour == start_hour and end_min <= start_min):
-        start_datetime = (end_datetime - timedelta(days=1)).replace(
-            hour=start_hour, minute=start_min
-        )
+    # Default to last 24 hours if no start/end times provided
+    if not args.start and not args.end:
+        # Default: last 24 hours
+        end_datetime = now
+        start_datetime = now - timedelta(hours=24)
+        logger.info("Using default time range: last 24 hours")
+    elif args.start and args.end:
+        # Both start and end provided
+        try:
+            start_hour, start_min = parse_time(args.start)
+            end_hour, end_min = parse_time(args.end)
+        except ValueError as e:
+            print(Colors.error(f"✗ {e}"))
+            logger.error(str(e))
+            return 1
+
+        end_datetime = now.replace(hour=end_hour, minute=end_min, second=0, microsecond=0)
+
+        # If end time is same or earlier than start time, assume start was yesterday
+        if (end_hour < start_hour) or (end_hour == start_hour and end_min <= start_min):
+            start_datetime = (end_datetime - timedelta(days=1)).replace(
+                hour=start_hour, minute=start_min
+            )
+        else:
+            start_datetime = end_datetime.replace(hour=start_hour, minute=start_min)
     else:
-        start_datetime = end_datetime.replace(hour=start_hour, minute=start_min)
+        # Only one provided - error
+        print(
+            Colors.error("✗ Must provide both --start and --end, or neither for default 24 hours")
+        )
+        logger.error("Invalid time arguments")
+        return 1
 
     logger.info(f"Starting timelapse generation: {start_datetime} to {end_datetime}")
 
@@ -400,15 +425,20 @@ Examples:
     organize_by_date = config["output"].get("organize_by_date", True)
     date_format = config["output"].get("date_format", "%Y/%m/%d")
 
-    video_dir = config["video"]["directory"]
+    # Use output-dir override if provided, otherwise use config
+    video_dir = args.output_dir if args.output_dir else config["video"]["directory"]
     fps = args.fps if args.fps else config["video"]["fps"]
     codec = config["video"]["codec"]["name"]
     pixel_format = config["video"]["codec"]["pixel_format"]
     crf = config["video"]["codec"]["crf"]
 
+    # Get camera name from overlay config for better video naming
+    camera_name = config.get("overlay", {}).get("camera_name", project_name)
+
     print_subsection("⚙️  Configuration")
     print_info("Image directory", Colors.bold(base_dir))
     print_info("Project name", Colors.bold(project_name))
+    print_info("Camera name", Colors.bold(camera_name))
     print_info("Video settings", f"{Colors.bold(str(fps))} fps, {codec}, CRF {crf}")
 
     # Find images
@@ -454,12 +484,20 @@ Examples:
     if args.output:
         output_file = video_path / args.output
     else:
-        filename_pattern = config["video"]["filename_pattern"]
-        filename = filename_pattern.format(
-            name=project_name,
-            start_date=start_datetime.strftime("%Y-%m-%d"),
-            end_date=end_datetime.strftime("%Y-%m-%d"),
-        )
+        # Enhanced filename generation for better organization
+        # If it's a 24-hour video (default), use simpler naming
+        if not args.start and not args.end:
+            # For daily videos, use the date of the end time (today)
+            # Format: cameraname_daily_YYYY-MM-DD.mp4
+            filename = f"{project_name}_daily_{end_datetime.strftime('%Y-%m-%d')}.mp4"
+        else:
+            # For custom time ranges, use the pattern from config
+            filename_pattern = config["video"]["filename_pattern"]
+            filename = filename_pattern.format(
+                name=project_name,
+                start_date=start_datetime.strftime("%Y-%m-%d"),
+                end_date=end_datetime.strftime("%Y-%m-%d"),
+            )
         output_file = video_path / filename
 
     # Create video

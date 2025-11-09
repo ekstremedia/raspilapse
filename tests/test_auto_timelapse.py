@@ -359,8 +359,13 @@ class TestAdaptiveTimelapse:
                 mock_capture_class.return_value.__enter__.return_value = mock_instance
                 mock_capture_class.return_value.__exit__.return_value = None
 
-                # Mock capture method to return paths
-                mock_instance.capture.return_value = ("/tmp/test.jpg", metadata_path)
+                # Mock capture_request to return metadata
+                mock_request = MagicMock()
+                mock_request.get_metadata.return_value = {
+                    "ExposureTime": 100000,
+                    "AnalogueGain": 1.0,
+                }
+                mock_instance.picam2.capture_request.return_value = mock_request
 
                 timelapse = AdaptiveTimelapse(test_config_file)
                 image_path, metadata = timelapse.take_test_shot()
@@ -368,6 +373,10 @@ class TestAdaptiveTimelapse:
                 assert image_path is not None
                 assert isinstance(metadata, dict)
                 assert "ExposureTime" in metadata
+                # Verify capture_request was called
+                mock_instance.picam2.capture_request.assert_called_once()
+                # Verify request was released
+                mock_request.release.assert_called_once()
         finally:
             os.unlink(metadata_path)
 

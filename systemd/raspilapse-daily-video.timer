@@ -1,0 +1,17 @@
+[Unit]
+Description=Daily Timelapse Video Generation Timer
+Requires=raspilapse-daily-video.service
+
+[Timer]
+# Run daily at 04:00
+OnCalendar=daily
+OnCalendar=*-*-* 04:00:00
+
+# Run immediately if the system was powered down when the timer should have fired
+Persistent=true
+
+# Randomize the start time by up to 5 minutes to avoid load spikes
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

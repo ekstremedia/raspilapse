@@ -21,6 +21,11 @@ try:
 except ImportError:
     from logging_config import get_logger
 
+try:
+    from src.weather import WeatherData
+except ImportError:
+    from weather import WeatherData
+
 logger = get_logger("overlay")
 
 
@@ -44,6 +49,10 @@ class ImageOverlay:
 
         # Load font
         self.font = self._load_font()
+
+        # Initialize weather data fetcher
+        self.weather = WeatherData(config)
+
         logger.info("Overlay initialized")
 
     def _load_font(self) -> Optional[ImageFont.FreeTypeFont]:
@@ -94,41 +103,45 @@ class ImageOverlay:
 
     def _format_exposure_time(self, exposure_us: int) -> str:
         """
-        Format exposure time in human-readable form.
+        Format exposure time in human-readable form with fixed width.
 
         Args:
             exposure_us: Exposure time in microseconds
 
         Returns:
-            Formatted string (e.g., "1/500s", "2.5s", "15s")
+            Formatted string with consistent width (e.g., "1/500s  ", "  2.5s  ", " 15.0s  ")
         """
         if exposure_us < 1000:
-            return f"{exposure_us}µs"
+            # Microseconds: XXXXµs (6 chars)
+            return f"{exposure_us:4d}µs"
         elif exposure_us < 1_000_000:
             ms = exposure_us / 1000
-            return f"{ms:.1f}ms"
+            # Milliseconds: XXX.Xms (7 chars)
+            return f"{ms:5.1f}ms"
         else:
             seconds = exposure_us / 1_000_000
             if seconds < 1:
-                # Show as fraction for fast speeds
+                # Fraction format: 1/XXXX (7 chars)
                 fraction = int(1 / seconds)
-                return f"1/{fraction}s"
+                return f"1/{fraction:4d}s"
             else:
-                return f"{seconds:.1f}s"
+                # Seconds: XX.Xs (6 chars, right-aligned)
+                return f"{seconds:5.1f}s"
 
     def _format_iso(self, gain: float) -> str:
         """
-        Format analogue gain as ISO equivalent.
+        Format analogue gain as ISO equivalent with fixed width.
 
         Args:
             gain: Analogue gain value
 
         Returns:
-            Formatted ISO string (e.g., "ISO 100", "ISO 800")
+            Formatted ISO string (e.g., "ISO  100", "ISO  800")
         """
         # Rough ISO equivalent (gain 1.0 ≈ ISO 100)
         iso = int(gain * 100)
-        return f"ISO {iso}"
+        # Fixed width: ISO XXXX (4 digits, right-aligned)
+        return f"ISO {iso:4d}"
 
     def _format_wb_gains(self, gains: List[float]) -> str:
         """
@@ -192,17 +205,17 @@ class ImageOverlay:
 
     def _format_color_gains(self, gains: List[float]) -> str:
         """
-        Format color correction gains as tuple.
+        Format color correction gains as tuple with fixed width.
 
         Args:
             gains: List of color gains
 
         Returns:
-            Formatted string (e.g., "(1.80, 1.50)")
+            Formatted string with fixed width (e.g., "( 1.80,  1.50)")
         """
         if len(gains) >= 2:
-            return f"({gains[0]:.2f}, {gains[1]:.2f})"
-        return "N/A"
+            return f"({gains[0]:5.2f}, {gains[1]:5.2f})"
+        return "(  N/A,   N/A)"
 
     def _prepare_overlay_data(self, metadata: Dict, mode: Optional[str] = None) -> Dict[str, str]:
         """
@@ -250,20 +263,61 @@ class ImageOverlay:
             "exposure_ms": f"{exposure_us / 1000:.2f}",
             "exposure_us": str(exposure_us),
             "iso": self._format_iso(gain),
-            "gain": f"{gain:.2f}",
+            "gain": f"{gain:4.2f}",
             "wb": wb_mode,
             "wb_gains": self._format_wb_gains(wb_gains),
             "color_gains": self._format_color_gains(wb_gains),
-            "lux": f"{lux:.1f}",
+            "lux": f"{lux:6.1f}",
             "resolution": f"{resolution[0]}x{resolution[1]}",
-            "temperature": f"{temp:.1f}",
+            "temperature": f"{temp:5.1f}",
         }
+
+        # Add weather data if available
+        weather_data = self.weather.get_weather_data()
+        if weather_data:
+            data.update(
+                {
+                    "temp": self.weather._format_temperature(weather_data.get("temperature")),
+                    "temperature_outdoor": self.weather._format_temperature(
+                        weather_data.get("temperature")
+                    ),
+                    "humidity": self.weather._format_humidity(weather_data.get("humidity")),
+                    "wind": self.weather._format_wind(
+                        weather_data.get("wind_speed"), weather_data.get("wind_gust")
+                    ),
+                    "wind_speed": self.weather._format_wind_speed(weather_data.get("wind_speed")),
+                    "wind_gust": self.weather._format_wind_speed(weather_data.get("wind_gust")),
+                    "wind_dir": self.weather._format_wind_direction(weather_data.get("wind_angle")),
+                    "rain": self.weather._format_rain(weather_data.get("rain")),
+                    "rain_1h": self.weather._format_rain(weather_data.get("rain_1h")),
+                    "rain_24h": self.weather._format_rain(weather_data.get("rain_24h")),
+                    "pressure": self.weather._format_pressure(weather_data.get("pressure")),
+                }
+            )
+        else:
+            # Show "-" for stale/unavailable weather data
+            data.update(
+                {
+                    "temp": "-",
+                    "temperature_outdoor": "-",
+                    "humidity": "-",
+                    "wind": "-",
+                    "wind_speed": "-",
+                    "wind_gust": "-",
+                    "wind_dir": "-",
+                    "rain": "-",
+                    "rain_1h": "-",
+                    "rain_24h": "-",
+                    "pressure": "-",
+                }
+            )
 
         return data
 
     def _get_text_lines(self, data: Dict[str, str]) -> List[str]:
         """
         Get all text lines to display based on configuration.
+        Used for corner positions (non-bar modes).
 
         Args:
             data: Formatted data dictionary
@@ -273,44 +327,47 @@ class ImageOverlay:
         """
         lines = []
         content_config = self.overlay_config.get("content", {})
-        layout_config = self.overlay_config.get("layout", {})
-        section_spacing = layout_config.get("section_spacing", True)
 
-        # Main content (always shown)
-        main_lines = content_config.get("main", [])
-        for line_template in main_lines:
+        # For corner modes, stack all configured lines
+        # Line 1 left
+        if content_config.get("line_1_left"):
             try:
-                line = line_template.format(**data)
+                line = content_config["line_1_left"].format(**data)
                 lines.append(line)
             except KeyError as e:
-                logger.warning(f"Unknown variable in overlay template: {e}")
-                lines.append(line_template)
+                logger.warning(f"Unknown variable in line_1_left: {e}")
+                lines.append(content_config["line_1_left"])
 
-        # Camera settings (optional)
-        camera_settings = content_config.get("camera_settings", {})
-        if camera_settings.get("enabled", False):
-            if section_spacing and lines:
-                lines.append("")  # Blank line separator
-            for line_template in camera_settings.get("lines", []):
+        # Line 1 right (if you want it in corner mode)
+        if content_config.get("line_1_right"):
+            try:
+                line = content_config["line_1_right"].format(**data)
+                lines.append(line)
+            except KeyError as e:
+                logger.warning(f"Unknown variable in line_1_right: {e}")
+                lines.append(content_config["line_1_right"])
+
+        # Line 2 left
+        if content_config.get("line_2_left"):
+            # Check if it's date/time to use localized version
+            if content_config["line_2_left"] == "{date} {time}":
+                lines.append(data.get("datetime_localized", f"{data['date']} {data['time']}"))
+            else:
                 try:
-                    line = line_template.format(**data)
+                    line = content_config["line_2_left"].format(**data)
                     lines.append(line)
                 except KeyError as e:
-                    logger.warning(f"Unknown variable in overlay template: {e}")
-                    lines.append(line_template)
+                    logger.warning(f"Unknown variable in line_2_left: {e}")
+                    lines.append(content_config["line_2_left"])
 
-        # Debug info (optional)
-        debug = content_config.get("debug", {})
-        if debug.get("enabled", False):
-            if section_spacing and lines:
-                lines.append("")  # Blank line separator
-            for line_template in debug.get("lines", []):
-                try:
-                    line = line_template.format(**data)
-                    lines.append(line)
-                except KeyError as e:
-                    logger.warning(f"Unknown variable in overlay template: {e}")
-                    lines.append(line_template)
+        # Line 2 right (if you want it in corner mode)
+        if content_config.get("line_2_right"):
+            try:
+                line = content_config["line_2_right"].format(**data)
+                lines.append(line)
+            except KeyError as e:
+                logger.warning(f"Unknown variable in line_2_right: {e}")
+                lines.append(content_config["line_2_right"])
 
         return lines
 
@@ -455,8 +512,8 @@ class ImageOverlay:
                 margin = self.overlay_config.get("margin", 10)
                 padding = int(font_size * 0.6)
 
-                # Line 1 - Left: Camera name (bold), Right: Mode + Exposure + ISO
-                # Line 2 - Left: Date Time, Right: WB + Lux
+                # Get content config
+                content_config = self.overlay_config.get("content", {})
 
                 # Calculate line height
                 try:
@@ -468,8 +525,13 @@ class ImageOverlay:
                 layout_config = self.overlay_config.get("layout", {})
                 bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
 
-                # Total bar height for 2 lines with extra bottom spacing
-                bar_height = (line_height * 2) + (padding * 2) + int(padding * bottom_padding_mult)
+                # Fixed 2 lines for compact bar
+                num_lines = 2
+
+                # Total bar height with extra bottom spacing
+                bar_height = (
+                    (line_height * num_lines) + (padding * 2) + int(padding * bottom_padding_mult)
+                )
 
                 # Draw gradient background
                 bg_config = self.overlay_config.get("background", {})
@@ -480,79 +542,84 @@ class ImageOverlay:
                 # Font color
                 font_color = tuple(font_config.get("color", [255, 255, 255, 255]))
 
-                # Line 1 positions
+                # Line positions
                 y1 = margin + padding
-                # Line 2 positions
                 y2 = y1 + line_height
 
-                # LEFT SIDE (bold camera name + date/time)
+                # LEFT SIDE
                 left_x = margin + padding
 
-                # Line 1 Left: Camera name (bold)
-                camera_name = data.get("camera_name", "Camera")
-                draw.text((left_x, y1), camera_name, fill=font_color, font=font_bold)
+                # Line 1 Left
+                line_1_left_template = content_config.get("line_1_left", "{camera_name}")
+                try:
+                    line_1_left = line_1_left_template.format(**data)
+                except KeyError as e:
+                    logger.warning(f"Unknown variable in line_1_left: {e}")
+                    line_1_left = line_1_left_template
+                draw.text((left_x, y1), line_1_left, fill=font_color, font=font_bold)
 
-                # Line 2 Left: Date and time (regular, localized if enabled)
-                datetime_text = data.get("datetime_localized", f"{data['date']} {data['time']}")
-                draw.text((left_x, y2), datetime_text, fill=font_color, font=font_regular)
+                # Line 2 Left (use localized datetime if it contains date/time variables)
+                line_2_left_template = content_config.get("line_2_left", "{date} {time}")
 
-                # RIGHT SIDE (use config content, regular font)
-                content_config = self.overlay_config.get("content", {})
+                # Check if it's the default date/time template
+                if line_2_left_template == "{date} {time}":
+                    line_2_left = data.get("datetime_localized", f"{data['date']} {data['time']}")
+                else:
+                    try:
+                        line_2_left = line_2_left_template.format(**data)
+                    except KeyError as e:
+                        logger.warning(f"Unknown variable in line_2_left: {e}")
+                        line_2_left = line_2_left_template
+                draw.text((left_x, y2), line_2_left, fill=font_color, font=font_regular)
 
-                # Line 1 Right: Camera settings (if enabled)
-                camera_settings = content_config.get("camera_settings", {})
-                if camera_settings.get("enabled", False):
-                    lines = camera_settings.get("lines", [])
-                    if lines:
-                        # Use first line for line 1 right
-                        line1_template = lines[0]
-                        try:
-                            line1_right = line1_template.format(**data)
-                        except KeyError as e:
-                            logger.warning(f"Unknown variable in overlay template: {e}")
-                            line1_right = line1_template
+                # RIGHT SIDE
 
-                        # Calculate width to position from right
-                        try:
-                            bbox = draw.textbbox((0, 0), line1_right, font=font_regular)
-                            text_width = bbox[2] - bbox[0]
-                        except Exception:
-                            text_width = len(line1_right) * font_size * 0.6
+                # Line 1 Right
+                line_1_right_template = content_config.get("line_1_right", "")
+                if line_1_right_template:
+                    try:
+                        line_1_right = line_1_right_template.format(**data)
+                    except KeyError as e:
+                        logger.warning(f"Unknown variable in line_1_right: {e}")
+                        line_1_right = line_1_right_template
 
-                        right_x = img_width - text_width - margin - padding
-                        draw.text(
-                            (right_x, y1),
-                            line1_right,
-                            fill=font_color,
-                            font=font_regular,
-                        )
+                    # Calculate width to position from right
+                    try:
+                        bbox = draw.textbbox((0, 0), line_1_right, font=font_regular)
+                        text_width = bbox[2] - bbox[0]
+                    except Exception:
+                        text_width = len(line_1_right) * font_size * 0.6
 
-                # Line 2 Right: Debug info (if enabled)
-                debug = content_config.get("debug", {})
-                if debug.get("enabled", False):
-                    lines = debug.get("lines", [])
-                    if lines:
-                        # Use first line for line 2 right
-                        line2_template = lines[0]
-                        try:
-                            line2_right = line2_template.format(**data)
-                        except KeyError as e:
-                            logger.warning(f"Unknown variable in overlay template: {e}")
-                            line2_right = line2_template
+                    right_x = img_width - text_width - margin - padding
+                    draw.text(
+                        (right_x, y1),
+                        line_1_right,
+                        fill=font_color,
+                        font=font_regular,
+                    )
 
-                        try:
-                            bbox = draw.textbbox((0, 0), line2_right, font=font_regular)
-                            text_width = bbox[2] - bbox[0]
-                        except Exception:
-                            text_width = len(line2_right) * font_size * 0.6
+                # Line 2 Right
+                line_2_right_template = content_config.get("line_2_right", "")
+                if line_2_right_template:
+                    try:
+                        line_2_right = line_2_right_template.format(**data)
+                    except KeyError as e:
+                        logger.warning(f"Unknown variable in line_2_right: {e}")
+                        line_2_right = line_2_right_template
 
-                        right_x = img_width - text_width - margin - padding
-                        draw.text(
-                            (right_x, y2),
-                            line2_right,
-                            fill=font_color,
-                            font=font_regular,
-                        )
+                    try:
+                        bbox = draw.textbbox((0, 0), line_2_right, font=font_regular)
+                        text_width = bbox[2] - bbox[0]
+                    except Exception:
+                        text_width = len(line_2_right) * font_size * 0.6
+
+                    right_x = img_width - text_width - margin - padding
+                    draw.text(
+                        (right_x, y2),
+                        line_2_right,
+                        fill=font_color,
+                        font=font_regular,
+                    )
 
             else:
                 # Original box layout for non-bar modes
