@@ -1,0 +1,23 @@
+[Unit]
+Description=Raspilapse Daily Timelapse Video Generation
+After=network.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/raspilapse
+ExecStart=/usr/bin/python3 /home/pi/raspilapse/src/make_timelapse.py --output-dir /var/www/html/videos
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment="PYTHONUNBUFFERED=1"
+
+# Restart policy (don't restart oneshot services)
+RemainAfterExit=no
+
+# Timeout for the script (10 minutes should be enough for 24h of images)
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

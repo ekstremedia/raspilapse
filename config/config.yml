@@ -294,7 +294,7 @@ overlay:
     camera_settings:
       enabled: true
       lines:
-        - "Mode: {mode} | Exposure: {exposure} | ISO: {iso} | Lux: {lux}"
+        - "Exposure: {exposure} | ISO: {iso} | Lux: {lux}"
 
     # Weather info (optional - requires weather.enabled = true)
     weather:
