@@ -158,7 +158,8 @@ adaptive_timelapse:
     awb_enable: false
 
     # Manual color gains if awb disabled (red, blue)
-    colour_gains: [1.8, 1.5]
+    #colour_gains: [1.8, 1.5]
+    colour_gains: [1.83, 2.02]
 
   # Day mode settings (for bright daylight conditions)
   day_mode:
