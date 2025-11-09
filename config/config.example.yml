@@ -81,7 +81,7 @@ output:
 
   # Symlink latest image (for web status display)
   symlink_latest:
-    enabled: false
+    enabled: true
     path: "/var/www/html/status.jpg"
 
 # Video Output Settings
@@ -165,6 +165,7 @@ adaptive_timelapse:
     awb_enable: false
 
     # Manual color gains if awb disabled (red, blue)
+    #colour_gains: [1.8, 1.5]
     colour_gains: [1.83, 2.02]
 
   # Day mode settings (for bright daylight conditions)
@@ -244,7 +245,7 @@ overlay:
 
     # Background color (RGBA - last value is opacity: 0=transparent, 255=opaque)
     # For top-bar mode, this creates a gradient that fades out at the bottom
-    color: [0, 0, 0, 110]  # Black with 43% opacity (very transparent with gradient)
+    color: [0, 0, 30, 70]  # Black with 43% opacity (very transparent with gradient)
 
     # Padding around text (relative to font size)
     padding: 0.6  # Extra padding for more breathing room
@@ -318,7 +319,7 @@ overlay:
     line_1_left: "{camera_name}"
 
     # Line 1 - Right side
-    #line_1_right: "{temp}, humidity: {humidity}, wind: {wind} {wind_dir}, rain: {rain} "
+    line_1_right: "{temp}, humidity: {humidity}, wind: {wind} {wind_dir}, rain: {rain} "
 
     # Line 2 - Left side
     line_2_left: "{date} {time}"
@@ -362,7 +363,7 @@ overlay:
     section_spacing: false  # No blank lines in compact bar
 
     # Extra bottom spacing for bar (adds padding below text)
-    bottom_padding_multiplier: 1.3  # 30% more space at bottom
+    bottom_padding_multiplier: 0.7  # 30% more space at bottom
 
 # Logging Settings
 logging:
