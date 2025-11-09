@@ -181,7 +181,8 @@ class ImageCapture:
                     )
 
                 camera_config = self.picam2.create_still_configuration(
-                    main={"size": resolution, "format": "YUV420"},  # Native JPEG path
+                    # Use an RGB format that PIL / Picamera2 helpers support
+                    main={"size": resolution, "format": "RGB888"},
                     raw=None,  # Disable RAW for performance
                     buffer_count=3,  # CRITICAL: prevents frame queuing delays
                     queue=False,  # Ensures fresh frame after request
