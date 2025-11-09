@@ -300,6 +300,7 @@ class AdaptiveTimelapse:
 
         # Temporarily modify camera config for test shot
         original_controls = self.camera_config.config["camera"].get("controls", {})
+        original_save_metadata = self.camera_config.config["system"]["save_metadata"]
 
         # Set test shot controls
         self.camera_config.config["camera"]["controls"] = {
@@ -308,26 +309,48 @@ class AdaptiveTimelapse:
             "awb_enable": True,
         }
 
+        # CRITICAL: Disable metadata saving for test shots to prevent timestamped
+        # metadata files from accumulating in metadata/ folder
+        # Test shots are only for measuring light levels, not part of timelapse
+        self.camera_config.config["system"]["save_metadata"] = False
+
         # Create metadata directory (files get overwritten, not accumulated)
         metadata_dir = Path(self.config.get("system", {}).get("metadata_folder", "metadata"))
         metadata_dir.mkdir(exist_ok=True)
 
         # Capture test image (overwritten each time - no timestamps)
+        # Since save_metadata=False, this won't create timestamped metadata files
+        metadata = {}
         with ImageCapture(self.camera_config) as capture:
             test_path = metadata_dir / "test_shot.jpg"
-            image_path, metadata_path = capture.capture(str(test_path))
 
-            # Read metadata
-            if metadata_path and Path(metadata_path).exists():
-                import json
+            # Capture test image using capture_request to get metadata directly
+            import json
 
-                with open(metadata_path, "r") as f:
-                    metadata = json.load(f)
-            else:
+            try:
+                request = capture.picam2.capture_request()
+                try:
+                    # Save image
+                    request.save("main", str(test_path))
+                    # Get metadata from request
+                    metadata = request.get_metadata()
+                    # Save test shot metadata manually with fixed filename (overwritten each time)
+                    test_metadata_path = metadata_dir / "test_shot_metadata.json"
+                    with open(test_metadata_path, "w") as f:
+                        json.dump(metadata, f, indent=2, default=str)
+                    logger.debug(f"Test shot metadata saved: {test_metadata_path}")
+                finally:
+                    request.release()
+            except Exception as e:
+                logger.warning(f"Could not capture test shot with metadata: {e}")
                 metadata = {}
 
-        # Restore original controls
+            # Set image_path for return value
+            image_path = str(test_path)
+
+        # Restore original settings
         self.camera_config.config["camera"]["controls"] = original_controls
+        self.camera_config.config["system"]["save_metadata"] = original_save_metadata
 
         logger.debug(f"Test shot saved: {image_path}")
         return image_path, metadata

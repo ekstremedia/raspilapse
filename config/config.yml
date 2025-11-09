@@ -9,8 +9,8 @@ camera:
   # - [1920, 1080] - Full HD
   # - [1280, 720]  - HD
   resolution:
-    width: 1920
-    height: 1080
+    width: 3840
+    height: 2160
 
   # Image transforms
   transforms:
@@ -299,7 +299,7 @@ overlay:
     line_2_left: "{date} {time}"
 
     # Line 2 - Right side
-    line_2_right: "Exposure: {exposure} {iso} Color: {color_gains} - Lux {lux}"
+    line_2_right: "Exposure: {exposure}, {iso}, lux: {lux}"
 
   # Camera name (displayed in overlay)
   camera_name: "Kringelen Timelapse"
@@ -384,7 +384,6 @@ weather:
   # Netatmo API endpoint URL
   # Example: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
   endpoint: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
-  #endpoint: ""
 
   # Cache duration in seconds (how long to keep weather data before refreshing)
   cache_duration: 300  # 5 minutes
