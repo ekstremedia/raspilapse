@@ -176,24 +176,31 @@ class TestOutputDirectory:
 
     @patch("src.make_timelapse.find_images_in_range")
     @patch("src.make_timelapse.create_video")
-    def test_output_dir_override(self, mock_create_video, mock_find_images, mock_config_file):
+    @patch("os.makedirs")
+    def test_output_dir_override(
+        self, mock_makedirs, mock_create_video, mock_find_images, mock_config_file
+    ):
         """Test --output-dir parameter overrides config."""
         mock_find_images.return_value = [Path("/test/img.jpg")]
         mock_create_video.return_value = True
+        # Mock directory creation to avoid permission issues
+        mock_makedirs.return_value = None
 
-        custom_dir = "/var/www/html/videos"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            custom_dir = os.path.join(tmpdir, "custom_videos")
 
-        # Run with output-dir override
-        with patch(
-            "sys.argv", ["make_timelapse.py", "-c", mock_config_file, "--output-dir", custom_dir]
-        ):
-            main()
+            # Run with output-dir override
+            with patch(
+                "sys.argv",
+                ["make_timelapse.py", "-c", mock_config_file, "--output-dir", custom_dir],
+            ):
+                main()
 
-        # Check that custom directory was used
-        call_args = mock_create_video.call_args[0]
-        output_file = call_args[1]
+            # Check that custom directory was used
+            call_args = mock_create_video.call_args[0]
+            output_file = call_args[1]
 
-        assert str(output_file).startswith(custom_dir)
+            assert str(output_file).startswith(custom_dir)
 
     @patch("src.make_timelapse.find_images_in_range")
     @patch("src.make_timelapse.create_video")
