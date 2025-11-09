@@ -1,0 +1,13 @@
+[Unit]
+Description=Raspilapse Image Cleanup Timer
+Documentation=https://github.com/ekstremedia/raspilapse
+Requires=raspilapse-cleanup.service
+
+[Timer]
+# Run daily at 2:00 AM (after daily video generation at 1:00 AM)
+OnCalendar=daily
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

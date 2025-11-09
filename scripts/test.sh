@@ -14,8 +14,9 @@ BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
 
-# Project root directory
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Project root directory (go up one level from scripts/)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
 
 echo -e "${BOLD}${CYAN}================================${RESET}"
@@ -50,6 +51,15 @@ echo ""
 
 # Test 2: Check configuration file
 echo -e "${BOLD}2. Checking configuration...${RESET}"
+
+# Check if config.example.yml exists
+if [ -f "config/config.example.yml" ]; then
+    echo -e "  ${GREEN}✓${RESET} config.example.yml exists"
+else
+    echo -e "  ${RED}✗${RESET} config.example.yml not found (template missing)"
+fi
+
+# Check if config.yml exists
 if [ -f "config/config.yml" ]; then
     echo -e "  ${GREEN}✓${RESET} config/config.yml exists"
 
@@ -60,7 +70,17 @@ if [ -f "config/config.yml" ]; then
         echo -e "  ${RED}✗${RESET} Invalid YAML syntax"
     fi
 else
-    echo -e "  ${RED}✗${RESET} config/config.yml not found"
+    echo -e "  ${YELLOW}⚠${RESET}  config/config.yml not found"
+
+    # Offer to create it from template
+    if [ -f "config/config.example.yml" ]; then
+        echo -e "     ${DIM}Creating from template...${RESET}"
+        cp config/config.example.yml config/config.yml
+        echo -e "  ${GREEN}✓${RESET} Created config.yml from config.example.yml"
+        echo -e "     ${YELLOW}⚠${RESET}  Please edit config/config.yml with your settings"
+    else
+        echo -e "  ${RED}✗${RESET} Cannot create config.yml (template missing)"
+    fi
 fi
 echo ""
 

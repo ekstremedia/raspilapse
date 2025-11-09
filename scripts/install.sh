@@ -23,12 +23,14 @@ if [ "$EUID" -eq 0 ]; then
     exit 1
 fi
 
-# Get the script directory
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+# Get the script directory and project root
+# This script must be run from within the raspilapse project
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 USER=$(whoami)
 
 echo -e "${GREEN}✓${NC} Running as user: $USER"
-echo -e "${GREEN}✓${NC} Installation directory: $SCRIPT_DIR"
+echo -e "${GREEN}✓${NC} Installation directory: $PROJECT_DIR"
 echo ""
 
 # Step 1: Create directories
@@ -39,27 +41,29 @@ sudo chmod -R 775 /var/www/html/images
 echo -e "${GREEN}✓${NC} Created /var/www/html/images"
 
 # Create logs directory if it doesn't exist
-mkdir -p "$SCRIPT_DIR/logs"
+mkdir -p "$PROJECT_DIR/logs"
 echo -e "${GREEN}✓${NC} Created logs directory"
 
-# Create config from example if it doesn't exist
-if [ ! -f "$SCRIPT_DIR/config/config.yml" ]; then
-    if [ -f "$SCRIPT_DIR/config/config.example.yml" ]; then
-        cp "$SCRIPT_DIR/config/config.example.yml" "$SCRIPT_DIR/config/config.yml"
+# Check config files
+if [ -f "$PROJECT_DIR/config/config.yml" ]; then
+    echo -e "${GREEN}✓${NC} Config file already exists"
+else
+    # Create config from example if it doesn't exist
+    if [ -f "$PROJECT_DIR/config/config.example.yml" ]; then
+        cp "$PROJECT_DIR/config/config.example.yml" "$PROJECT_DIR/config/config.yml"
         echo -e "${GREEN}✓${NC} Created config.yml from config.example.yml"
         echo -e "${YELLOW}⚠${NC}  Please edit config/config.yml with your settings"
     else
         echo -e "${RED}✗${NC} ERROR: config.example.yml not found!"
+        echo -e "${RED}✗${NC} Make sure you're running this script from the raspilapse directory"
         exit 1
     fi
-else
-    echo -e "${GREEN}✓${NC} Config file already exists"
 fi
 echo ""
 
 # Step 2: Update service file with correct user and paths
 echo "Step 2: Configuring service file..."
-SERVICE_FILE="$SCRIPT_DIR/raspilapse.service"
+SERVICE_FILE="$PROJECT_DIR/raspilapse.service"
 
 # Create service file with correct paths
 cat > "$SERVICE_FILE" << EOF
@@ -70,8 +74,8 @@ After=network.target
 [Service]
 Type=simple
 User=$USER
-WorkingDirectory=$SCRIPT_DIR
-ExecStart=/usr/bin/python3 $SCRIPT_DIR/src/auto_timelapse.py
+WorkingDirectory=$PROJECT_DIR
+ExecStart=/usr/bin/python3 $PROJECT_DIR/src/auto_timelapse.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -119,11 +123,11 @@ echo "  Location: /var/www/html/images/YYYY/MM/DD/"
 echo "  Example:  /var/www/html/images/2025/11/05/kringelen_2025_11_05_14_30_00.jpg"
 echo ""
 echo "Configuration:"
-echo "  Edit config: nano $SCRIPT_DIR/config/config.yml"
+echo "  Edit config: nano $PROJECT_DIR/config/config.yml"
 echo "  After editing, restart service: sudo systemctl restart raspilapse"
 echo ""
 echo -e "${YELLOW}Next Steps:${NC}"
-echo "  1. Review/edit config: nano $SCRIPT_DIR/config/config.yml"
+echo "  1. Review/edit config: nano $PROJECT_DIR/config/config.yml"
 echo "  2. Start the service: sudo systemctl start raspilapse"
 echo "  3. Check status: sudo systemctl status raspilapse"
 echo "  4. View logs: sudo journalctl -u raspilapse -f"
