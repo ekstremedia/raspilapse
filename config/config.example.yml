@@ -48,6 +48,14 @@ camera:
     # 0 = Manual, 1 = Single AF, 2 = Continuous AF
     # af_mode: 2
 
+    # Lens position (focus) - only used when af_mode = 0 (Manual)
+    # Value in dioptres (1/distance in meters):
+    # 0.0 = infinity focus (distant objects)
+    # 1.0 = focus at 1 meter
+    # 10.0 = focus at 10cm (close-up)
+    # Note: Values are approximate and vary by module/temperature
+    # lens_position: 0.0
+
 # Output Settings
 output:
   # Base directory for saved images
@@ -283,6 +291,9 @@ overlay:
   #   {lux} - Calculated lux value
   #   {resolution} - Image resolution
   #   {temperature} - Camera sensor temperature (hardware, NOT ambient)
+  #   {af_mode} - Autofocus mode (Manual/Auto/Continuous)
+  #   {lens_position} - Lens position in dioptres (e.g., "0.00", "10.50")
+  #   {focus_distance} - Calculated focus distance (e.g., "∞", "1.5m", "10cm")
   #
   # Weather variables (requires weather.enabled = true):
   #   {temp} or {temperature_outdoor} - Outdoor temperature

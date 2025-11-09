@@ -256,6 +256,8 @@ class ImageCapture:
             control_map["Contrast"] = controls["contrast"]
         if "af_mode" in controls:
             control_map["AfMode"] = controls["af_mode"]
+        if "lens_position" in controls:
+            control_map["LensPosition"] = controls["lens_position"]
         if "exposure_value" in controls:
             control_map["ExposureValue"] = controls["exposure_value"]
 
@@ -276,6 +278,8 @@ class ImageCapture:
             control_map["Contrast"] = controls["Contrast"]
         if "AfMode" in controls:
             control_map["AfMode"] = controls["AfMode"]
+        if "LensPosition" in controls:
+            control_map["LensPosition"] = controls["LensPosition"]
         if "ExposureValue" in controls:
             control_map["ExposureValue"] = controls["ExposureValue"]
 
