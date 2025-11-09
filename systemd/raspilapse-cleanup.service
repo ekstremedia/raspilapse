@@ -1,0 +1,15 @@
+[Unit]
+Description=Raspilapse Image Cleanup Service
+Documentation=https://github.com/ekstremedia/raspilapse
+After=network.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/raspilapse
+ExecStart=/bin/bash /home/pi/raspilapse/scripts/cleanup_old_images.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=Raspilapse Continuous Timelapse Service
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/raspilapse
+ExecStart=/usr/bin/python3 /home/pi/raspilapse/src/auto_timelapse.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target
