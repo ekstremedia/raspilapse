@@ -3,7 +3,7 @@
 ![Tests](https://github.com/ekstremedia/raspilapse/workflows/Tests/badge.svg)
 [![codecov](https://codecov.io/gh/ekstremedia/raspilapse/branch/main/graph/badge.svg)](https://codecov.io/gh/ekstremedia/raspilapse)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Version](https://img.shields.io/badge/version-1.0.1-brightgreen)
+![Version](https://img.shields.io/badge/version-1.0.2-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi-red)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
@@ -322,7 +322,6 @@ raspilapse/
 │   └── conftest.py             # Pytest configuration
 │
 ├── examples/                    # Example outputs
-├── manuals/                     # Hardware documentation (PDFs)
 │
 ├── logs/                        # Runtime logs (gitignored)
 ├── metadata/                    # Test shot metadata (gitignored)
