@@ -230,6 +230,9 @@ def create_video(
         # Build ffmpeg command
         cmd = [
             "ffmpeg",
+            "-stats",  # Show encoding progress
+            "-loglevel",
+            "info",  # Show informational messages
             "-f",
             "concat",
             "-safe",
@@ -251,6 +254,10 @@ def create_video(
             width, height = resolution
             cmd.extend(["-vf", f"scale={width}:{height}"])
 
+        # Add faststart flag for web streaming and better resilience
+        # This writes the moov atom at the beginning of the file
+        cmd.extend(["-movflags", "+faststart"])
+
         # Add output path (overwrite if exists)
         cmd.extend(["-y", str(output_path)])
 
@@ -271,10 +278,13 @@ def create_video(
 
         print(f"\n{Colors.CYAN}⏳ Processing video with ffmpeg...{Colors.END}")
         print(f"{Colors.YELLOW}   (This may take a few minutes for large timelapses){Colors.END}")
+        print()  # Add blank line before ffmpeg output
 
-        # Run ffmpeg
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Run ffmpeg with real-time output
+        # stderr is where ffmpeg writes its progress info
+        result = subprocess.run(cmd, capture_output=False, text=True)
 
+        print()  # Add blank line after ffmpeg output
         if result.returncode == 0:
             # Show file size
             size_mb = output_path.stat().st_size / (1024 * 1024)
@@ -287,11 +297,11 @@ def create_video(
                 logger.info(f"Video created: {output_path} ({size_mb:.2f} MB)")
             return True
         else:
-            print(f"\n{Colors.error('✗ ffmpeg error:')}")
-            print(Colors.RED + result.stderr + Colors.END)
+            print(f"\n{Colors.error('✗ ffmpeg failed with return code ' + str(result.returncode))}")
+            print(f"{Colors.YELLOW}Check the ffmpeg output above for error details{Colors.END}")
 
             if logger:
-                logger.error(f"ffmpeg failed: {result.stderr}")
+                logger.error(f"ffmpeg failed with return code {result.returncode}")
             return False
 
     finally:
