@@ -294,7 +294,10 @@ class TestAdaptiveTimelapse:
         # Day mode uses auto-exposure
         assert "AeEnable" in settings
         assert settings["AeEnable"] == 1
-        assert settings["AwbEnable"] == 1  # AWB enabled for day
+        # With smooth_wb_in_day_mode (default True), AWB is disabled
+        # and manual interpolated ColourGains are used instead
+        assert settings["AwbEnable"] == 0
+        assert "ColourGains" in settings
 
     def test_get_camera_settings_transition(self, test_config_file):
         """Test camera settings for transition mode."""
@@ -309,7 +312,7 @@ class TestAdaptiveTimelapse:
         assert settings["AnalogueGain"] <= night_gain
 
     def test_get_camera_settings_transition_long_exposure(self, test_config_file):
-        """Test transition mode disables AWB for long exposures."""
+        """Test transition mode always uses manual WB for smooth transitions."""
         # Add colour_gains to night_mode config
         with open(test_config_file, "r") as f:
             config_data = yaml.safe_load(f)
@@ -321,16 +324,16 @@ class TestAdaptiveTimelapse:
 
         timelapse = AdaptiveTimelapse(test_config_file)
 
-        # Test long exposure (>1s) - should disable AWB
+        # Test long exposure (>1s) - should use manual WB
         settings_long = timelapse.get_camera_settings(LightMode.TRANSITION, lux=15.0)
         assert settings_long["AwbEnable"] == 0  # AWB disabled
         assert "ColourGains" in settings_long  # Manual gains set
 
-        # Test short exposure (<1s) - should enable AWB
-        # Use lux=98 which gives exposure ~0.6s (definitely < 1s)
+        # Test short exposure (<1s) - should ALSO use manual WB
+        # (smooth transitions always use interpolated manual WB to prevent flickering)
         settings_short = timelapse.get_camera_settings(LightMode.TRANSITION, lux=98.0)
-        # Short exposures should have AWB enabled
-        assert settings_short["AwbEnable"] == 1
+        assert settings_short["AwbEnable"] == 0  # AWB always disabled in transition
+        assert "ColourGains" in settings_short  # Interpolated gains used
 
     def test_signal_handler(self, test_config_file):
         """Test signal handler stops the timelapse."""
