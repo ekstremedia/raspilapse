@@ -274,7 +274,9 @@ class TestWeatherDataParsing:
         assert data["wind_gust"] == 20
 
     @patch("urllib.request.urlopen")
-    def test_parse_modules_nested_under_data(self, mock_urlopen, weather_config, sample_netatmo_response):
+    def test_parse_modules_nested_under_data(
+        self, mock_urlopen, weather_config, sample_netatmo_response
+    ):
         """Test parsing when modules are nested under 'data' key."""
         mock_response = MagicMock()
         mock_response.status = 200
@@ -343,7 +345,9 @@ class TestWeatherDataFormatWeatherLine:
         assert "%" in result
 
     @patch("urllib.request.urlopen")
-    def test_format_weather_line_with_wind(self, mock_urlopen, weather_config, sample_netatmo_response):
+    def test_format_weather_line_with_wind(
+        self, mock_urlopen, weather_config, sample_netatmo_response
+    ):
         """Test formatting weather line with wind data."""
         mock_response = MagicMock()
         mock_response.status = 200
@@ -364,7 +368,9 @@ class TestWeatherDataFormatWeatherLine:
         assert result == ""
 
     @patch("urllib.request.urlopen")
-    def test_format_weather_line_invalid_placeholder(self, mock_urlopen, weather_config, sample_netatmo_response):
+    def test_format_weather_line_invalid_placeholder(
+        self, mock_urlopen, weather_config, sample_netatmo_response
+    ):
         """Test format_weather_line with invalid placeholder."""
         mock_response = MagicMock()
         mock_response.status = 200
