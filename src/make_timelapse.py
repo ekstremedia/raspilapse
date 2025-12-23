@@ -189,7 +189,10 @@ def create_video(
     fps: int = 25,
     codec: str = "libx264",
     pixel_format: str = "yuv420p",
-    crf: int = 20,
+    crf: int = 23,
+    preset: str = "ultrafast",
+    threads: int = 2,
+    bitrate: str = "10M",
     resolution: Tuple[int, int] = None,
     logger: logging.Logger = None,
 ) -> bool:
@@ -245,9 +248,14 @@ def create_video(
             codec,
             "-pix_fmt",
             pixel_format,
-            "-crf",
-            str(crf),
         ]
+
+        # Hardware encoders (h264_v4l2m2m, h264_omx) use bitrate, software (libx264) uses CRF
+        if codec in ["h264_v4l2m2m", "h264_omx"]:
+            cmd.extend(["-b:v", bitrate])
+        else:
+            # libx264: use preset and threads to control memory usage
+            cmd.extend(["-preset", preset, "-threads", str(threads), "-crf", str(crf)])
 
         # Add resolution scaling if specified
         if resolution:
@@ -264,7 +272,10 @@ def create_video(
         print_subsection("🎬 Generating Video")
         print_info("Images", f"{Colors.bold(str(len(image_list)))} frames")
         print_info("Frame rate", f"{Colors.bold(str(fps))} fps")
-        print_info("Codec", f"{Colors.bold(codec)} (CRF {crf})")
+        if codec in ["h264_v4l2m2m", "h264_omx"]:
+            print_info("Codec", f"{Colors.bold(codec)} (bitrate {bitrate})")
+        else:
+            print_info("Codec", f"{Colors.bold(codec)} (CRF {crf}, preset {preset}, {threads} threads)")
         print_info("Pixel format", Colors.bold(pixel_format))
 
         duration_seconds = len(image_list) / fps
@@ -442,7 +453,10 @@ Examples:
     fps = args.fps if args.fps else config["video"]["fps"]
     codec = config["video"]["codec"]["name"]
     pixel_format = config["video"]["codec"]["pixel_format"]
-    crf = config["video"]["codec"]["crf"]
+    crf = config["video"]["codec"].get("crf", 23)
+    preset = config["video"]["codec"].get("preset", "ultrafast")
+    threads = config["video"]["codec"].get("threads", 2)
+    bitrate = config["video"]["codec"].get("bitrate", "10M")
 
     # Get camera name from overlay config for better video naming
     camera_name = config.get("overlay", {}).get("camera_name", project_name)
@@ -524,6 +538,9 @@ Examples:
         codec=codec,
         pixel_format=pixel_format,
         crf=crf,
+        preset=preset,
+        threads=threads,
+        bitrate=bitrate,
         resolution=None,  # Use original resolution
         logger=logger,
     )

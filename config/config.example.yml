@@ -116,15 +116,26 @@ video:
 
   # Video codec settings
   codec:
-    # Video codec (libx264 for H.264, libx265 for H.265/HEVC)
+    # Video codec: libx264 (software H.264 encoder)
+    # Note: h264_v4l2m2m hardware encoder doesn't support 4K on Pi
     name: "libx264"
 
     # Pixel format (yuv420p for maximum compatibility)
     pixel_format: "yuv420p"
 
-    # Constant Rate Factor (0-51, lower = better quality, 18-23 recommended)
+    # Preset for libx264 (affects speed vs quality vs memory)
+    # ultrafast = fastest, lowest memory, acceptable quality
+    # fast = good balance
+    # slow = best quality, highest memory (may OOM on 4K)
+    preset: "ultrafast"
+
+    # Thread count (lower = less memory, slower encoding)
+    # 2 = safe for Pi with 4GB RAM doing 4K
+    threads: 2
+
+    # Constant Rate Factor (0-51, lower = better quality)
     # 18 = visually lossless, 23 = good quality, 28 = acceptable
-    crf: 20
+    crf: 23
 
   # Frame rate (frames per second)
   # 25 fps = smooth European standard
