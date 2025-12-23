@@ -287,13 +287,16 @@ class TestAdaptiveTimelapse:
         assert settings["AwbEnable"] == 0  # AWB disabled for night
 
     def test_get_camera_settings_day(self, test_config_file):
-        """Test camera settings for day mode."""
+        """Test camera settings for day mode with smooth exposure transitions."""
         timelapse = AdaptiveTimelapse(test_config_file)
         settings = timelapse.get_camera_settings(LightMode.DAY, lux=500.0)
 
-        # Day mode uses auto-exposure
+        # Day mode now uses manual exposure with smooth transitions (prevents ISO jumps)
+        # smooth_exposure_in_day_mode defaults to True
         assert "AeEnable" in settings
-        assert settings["AeEnable"] == 1
+        assert settings["AeEnable"] == 0  # Manual exposure control
+        assert "ExposureTime" in settings  # Calculated exposure
+        assert "AnalogueGain" in settings  # Calculated gain
         # With smooth_wb_in_day_mode (default True), AWB is disabled
         # and manual interpolated ColourGains are used instead
         assert settings["AwbEnable"] == 0

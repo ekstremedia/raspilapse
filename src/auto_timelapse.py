@@ -57,12 +57,18 @@ class AdaptiveTimelapse:
         self._mode_hold_count: int = 0  # Counter for hysteresis
         self._day_wb_reference: tuple = None  # AWB gains from bright daylight
         self._last_colour_gains: tuple = None  # Previous frame's color gains for smooth transition
+        self._last_analogue_gain: float = None  # Previous frame's analogue gain for smooth ISO
+        self._last_exposure_time: float = (
+            None  # Previous frame's exposure time for smooth transition
+        )
 
         # Load transition smoothing config with defaults
         transition_config = self.config.get("adaptive_timelapse", {}).get("transition_mode", {})
         self._lux_smoothing_factor = transition_config.get("lux_smoothing_factor", 0.3)
         self._hysteresis_frames = transition_config.get("hysteresis_frames", 3)
         self._wb_transition_speed = transition_config.get("wb_transition_speed", 0.15)
+        self._gain_transition_speed = transition_config.get("gain_transition_speed", 0.15)
+        self._exposure_transition_speed = transition_config.get("exposure_transition_speed", 0.15)
 
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -194,6 +200,153 @@ class AdaptiveTimelapse:
             f"→ actual=[{new_red:.2f}, {new_blue:.2f}]"
         )
         return interpolated
+
+    def _interpolate_gain(self, target_gain: float) -> float:
+        """
+        Smoothly interpolate analogue gain to prevent sudden ISO jumps.
+
+        Uses gradual transition towards target gain rather than instant switching.
+
+        Args:
+            target_gain: Target analogue gain value
+
+        Returns:
+            Interpolated gain value
+        """
+        if target_gain is None:
+            return self._last_analogue_gain
+
+        if self._last_analogue_gain is None:
+            # First frame - accept target gain
+            self._last_analogue_gain = target_gain
+            return target_gain
+
+        # Gradual transition towards target
+        speed = self._gain_transition_speed
+        new_gain = self._last_analogue_gain + speed * (target_gain - self._last_analogue_gain)
+
+        # Clamp to valid range
+        new_gain = max(1.0, min(16.0, new_gain))
+
+        self._last_analogue_gain = new_gain
+
+        logger.debug(f"Gain interpolation: target={target_gain:.2f} → actual={new_gain:.2f}")
+        return new_gain
+
+    def _interpolate_exposure(self, target_exposure_s: float) -> float:
+        """
+        Smoothly interpolate exposure time to prevent sudden brightness jumps.
+
+        Uses gradual transition towards target exposure rather than instant switching.
+
+        Args:
+            target_exposure_s: Target exposure time in seconds
+
+        Returns:
+            Interpolated exposure time in seconds
+        """
+        if target_exposure_s is None:
+            return self._last_exposure_time
+
+        if self._last_exposure_time is None:
+            # First frame - accept target exposure
+            self._last_exposure_time = target_exposure_s
+            return target_exposure_s
+
+        # Gradual transition towards target (use logarithmic interpolation for exposure)
+        # This gives smoother perceived brightness changes
+        import math
+
+        speed = self._exposure_transition_speed
+
+        # Log-space interpolation for more natural exposure transitions
+        log_last = math.log10(max(0.0001, self._last_exposure_time))
+        log_target = math.log10(max(0.0001, target_exposure_s))
+        log_new = log_last + speed * (log_target - log_last)
+        new_exposure = 10**log_new
+
+        # Clamp to valid range (100µs to 20s)
+        new_exposure = max(0.0001, min(20.0, new_exposure))
+
+        self._last_exposure_time = new_exposure
+
+        logger.debug(
+            f"Exposure interpolation: target={target_exposure_s:.4f}s → actual={new_exposure:.4f}s"
+        )
+        return new_exposure
+
+    def _calculate_target_gain_from_lux(self, lux: float) -> float:
+        """
+        Calculate target analogue gain based on current lux level.
+
+        Higher lux = lower gain needed (less amplification for bright scenes).
+
+        Args:
+            lux: Current light level in lux
+
+        Returns:
+            Target analogue gain value
+        """
+        adaptive_config = self.config["adaptive_timelapse"]
+        thresholds = adaptive_config["light_thresholds"]
+        night_threshold = thresholds["night"]
+        day_threshold = thresholds["day"]
+
+        # Get gain limits from config
+        night_gain = adaptive_config["night_mode"]["analogue_gain"]
+        day_gain = adaptive_config.get("day_mode", {}).get("analogue_gain", 1.0)
+
+        if lux <= night_threshold:
+            # Full night - use max gain
+            return night_gain
+        elif lux >= day_threshold:
+            # Full day - use min gain
+            return day_gain
+        else:
+            # Transition - interpolate based on lux position
+            # Use inverse relationship: more light = less gain
+            position = (lux - night_threshold) / (day_threshold - night_threshold)
+            target_gain = night_gain - position * (night_gain - day_gain)
+            return target_gain
+
+    def _calculate_target_exposure_from_lux(self, lux: float) -> float:
+        """
+        Calculate target exposure time based on current lux level.
+
+        Higher lux = shorter exposure needed.
+
+        Args:
+            lux: Current light level in lux
+
+        Returns:
+            Target exposure time in seconds
+        """
+        adaptive_config = self.config["adaptive_timelapse"]
+        thresholds = adaptive_config["light_thresholds"]
+        night_threshold = thresholds["night"]
+        day_threshold = thresholds["day"]
+
+        # Get exposure limits from config
+        night_exposure = adaptive_config["night_mode"]["max_exposure_time"]
+        day_exposure = adaptive_config.get("day_mode", {}).get("exposure_time", 0.01)
+
+        if lux <= night_threshold:
+            # Full night - use max exposure
+            return night_exposure
+        elif lux >= day_threshold:
+            # Full day - use short exposure
+            return day_exposure
+        else:
+            # Transition - interpolate based on lux position (logarithmic)
+            import math
+
+            position = (lux - night_threshold) / (day_threshold - night_threshold)
+
+            # Log-space interpolation for exposure
+            log_night = math.log10(max(0.0001, night_exposure))
+            log_day = math.log10(max(0.0001, day_exposure))
+            log_target = log_night - position * (log_night - log_day)
+            return 10**log_target
 
     def _update_day_wb_reference(self, metadata: Dict):
         """
@@ -372,8 +525,18 @@ class AdaptiveTimelapse:
             night = adaptive_config["night_mode"]
             # Disable auto-exposure, auto-gain, and auto-white-balance for manual control
             settings["AeEnable"] = 0
-            settings["ExposureTime"] = int(night["max_exposure_time"] * 1_000_000)
-            settings["AnalogueGain"] = night["analogue_gain"]
+
+            # Calculate target values for night mode
+            target_gain = night["analogue_gain"]
+            target_exposure = night["max_exposure_time"]
+
+            # Apply smooth interpolation even in night mode for seamless transitions
+            smooth_gain = self._interpolate_gain(target_gain)
+            smooth_exposure = self._interpolate_exposure(target_exposure)
+
+            settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
+            settings["AnalogueGain"] = smooth_gain
+
             # Lock AWB for long exposures - AWB causes 5x slowdown!
             settings["AwbEnable"] = 0
 
@@ -383,28 +546,46 @@ class AdaptiveTimelapse:
             settings["ColourGains"] = smooth_gains
 
             logger.info(
-                f"Night mode: exposure={night['max_exposure_time']}s, gain={night['analogue_gain']}, "
+                f"Night mode: exposure={smooth_exposure:.2f}s, gain={smooth_gain:.2f}, "
                 f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
             )
 
         elif mode == LightMode.DAY:
             day = adaptive_config["day_mode"]
+            transition_config = adaptive_config.get("transition_mode", {})
 
-            if "exposure_time" in day:
-                # Manual exposure mode
+            # Check if smooth exposure/gain transitions are enabled
+            smooth_exposure_enabled = transition_config.get("smooth_exposure_in_day_mode", True)
+
+            if smooth_exposure_enabled and lux is not None:
+                # SMOOTH TRANSITION MODE: Use calculated exposure/gain based on lux
+                # This prevents ISO jumps by gradually adjusting values
+                settings["AeEnable"] = 0
+
+                # Calculate target values based on current lux
+                target_gain = self._calculate_target_gain_from_lux(lux)
+                target_exposure = self._calculate_target_exposure_from_lux(lux)
+
+                # Apply smooth interpolation to prevent jumps
+                smooth_gain = self._interpolate_gain(target_gain)
+                smooth_exposure = self._interpolate_exposure(target_exposure)
+
+                settings["AnalogueGain"] = smooth_gain
+                settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
+
+            elif "exposure_time" in day:
+                # Manual exposure mode (fixed values from config)
                 settings["AeEnable"] = 0
                 settings["ExposureTime"] = int(day["exposure_time"] * 1_000_000)
                 if "analogue_gain" in day:
                     settings["AnalogueGain"] = day["analogue_gain"]
             else:
-                # Auto exposure mode for day (let camera optimize)
+                # Legacy auto exposure mode (may cause ISO jumps)
                 settings["AeEnable"] = 1
-                # Don't set AnalogueGain - let auto exposure handle it
 
             # For smooth transitions, use manual WB with interpolated gains
             # AWB is only used internally to learn good daylight WB values
             # (captured via _update_day_wb_reference from actual capture metadata)
-            transition_config = adaptive_config.get("transition_mode", {})
             if transition_config.get("smooth_wb_in_day_mode", True):
                 settings["AwbEnable"] = 0
                 target_gains = self._get_target_colour_gains(mode)
@@ -423,10 +604,17 @@ class AdaptiveTimelapse:
                 if "ColourGains" in settings
                 else "WB=auto"
             )
-            logger.info(
-                f"Day mode: auto_exposure={'on' if settings.get('AeEnable', 1) else 'off'}, "
-                f"brightness={day.get('brightness', 0.0)}, {wb_info}"
+            exposure_info = (
+                f"exposure={settings.get('ExposureTime', 'auto')/1_000_000:.4f}s"
+                if "ExposureTime" in settings
+                else "exposure=auto"
             )
+            gain_info = (
+                f"gain={settings.get('AnalogueGain', 'auto'):.2f}"
+                if "AnalogueGain" in settings
+                else "gain=auto"
+            )
+            logger.info(f"Day mode: {exposure_info}, {gain_info}, {wb_info}")
 
         elif mode == LightMode.TRANSITION:
             transition = adaptive_config["transition_mode"]
@@ -436,29 +624,23 @@ class AdaptiveTimelapse:
             settings["AeEnable"] = 0
 
             if transition.get("smooth_transition", True) and lux is not None:
-                # Interpolate gain and exposure based on lux value
+                # Calculate position in transition range for WB interpolation
                 night_threshold = thresholds["night"]
                 day_threshold = thresholds["day"]
                 lux_range = day_threshold - night_threshold
-
-                # Calculate position in transition range (0.0 to 1.0)
                 position = (lux - night_threshold) / lux_range
                 position = max(0.0, min(1.0, position))
 
-                # Interpolate gain
-                gain_min = transition["analogue_gain_min"]
-                gain_max = transition["analogue_gain_max"]
-                interpolated_gain = gain_max - (position * (gain_max - gain_min))
+                # Calculate target values based on current lux
+                target_gain = self._calculate_target_gain_from_lux(lux)
+                target_exposure = self._calculate_target_exposure_from_lux(lux)
 
-                # Interpolate exposure time (from night max to shorter exposure)
-                night_exposure = adaptive_config["night_mode"]["max_exposure_time"]
-                day_exposure = 0.05  # 50ms for transition->day
-                interpolated_exposure = night_exposure - (
-                    position * (night_exposure - day_exposure)
-                )
+                # Apply smooth interpolation to prevent jumps
+                smooth_gain = self._interpolate_gain(target_gain)
+                smooth_exposure = self._interpolate_exposure(target_exposure)
 
-                settings["ExposureTime"] = int(interpolated_exposure * 1_000_000)
-                settings["AnalogueGain"] = interpolated_gain
+                settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
+                settings["AnalogueGain"] = smooth_gain
 
                 # ALWAYS use manual WB during transitions to prevent flickering
                 # AWB causes sudden color shifts - instead we smoothly interpolate
@@ -471,7 +653,7 @@ class AdaptiveTimelapse:
 
                 logger.info(
                     f"Transition mode: lux={lux:.2f}, position={position:.2f}, "
-                    f"exposure={interpolated_exposure:.2f}s, gain={interpolated_gain:.2f}, "
+                    f"exposure={smooth_exposure:.2f}s, gain={smooth_gain:.2f}, "
                     f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
                 )
             else:

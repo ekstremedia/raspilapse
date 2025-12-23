@@ -198,12 +198,13 @@ adaptive_timelapse:
 
   # Day mode settings (for bright daylight conditions)
   day_mode:
-    # Exposure time in seconds (auto if not specified)
-    # exposure_time: 0.01  # 10ms
+    # Target exposure time in seconds for bright daylight
+    # Used when smooth_exposure_in_day_mode is enabled
+    exposure_time: 0.01  # 10ms for bright conditions
 
-    # Analogue gain for daylight (lower = less noise)
-    # Only used if exposure_time is set (manual mode)
-    # analogue_gain: 1.0  # Commented out - let auto exposure handle this
+    # Target analogue gain for daylight (lower = less noise)
+    # Used when smooth_exposure_in_day_mode is enabled
+    analogue_gain: 1.0  # Minimum gain for bright conditions
 
     # Use auto white balance in day mode
     awb_enable: true
@@ -222,6 +223,47 @@ adaptive_timelapse:
     # Analogue gain range for transition
     analogue_gain_min: 1.0
     analogue_gain_max: 2.5
+
+    # === SMOOTH TRANSITION SETTINGS ===
+    # These settings prevent flickering and ISO jumps during day/night transitions
+
+    # Lux smoothing factor (exponential moving average)
+    # Lower = smoother but slower response (0.1-0.5 recommended)
+    # Higher = faster response but more jitter
+    lux_smoothing_factor: 0.3
+
+    # Hysteresis frames: number of consecutive frames required before mode change
+    # Prevents rapid flipping between modes when lux is near threshold
+    # Higher = more stable but slower transitions (2-5 recommended)
+    hysteresis_frames: 3
+
+    # White balance transition speed (0.0-1.0)
+    # How quickly WB gains change towards target per frame
+    # Lower = smoother color transitions (0.1-0.2 recommended)
+    # Higher = faster but may show color jumps
+    wb_transition_speed: 0.15
+
+    # Gain (ISO) transition speed (0.0-1.0)
+    # How quickly gain changes towards target per frame
+    # Lower = smoother ISO transitions (0.1-0.2 recommended)
+    # Higher = faster but may show brightness jumps
+    gain_transition_speed: 0.15
+
+    # Exposure time transition speed (0.0-1.0)
+    # How quickly exposure changes towards target per frame
+    # Uses logarithmic interpolation for natural brightness changes
+    # Lower = smoother transitions (0.1-0.2 recommended)
+    exposure_transition_speed: 0.15
+
+    # Use smooth WB interpolation even in day mode
+    # When true, always uses manual WB gains (interpolated)
+    # When false, uses camera's AWB in full day mode (legacy behavior)
+    smooth_wb_in_day_mode: true
+
+    # Use smooth exposure/gain in day mode
+    # When true, calculates exposure and gain based on lux (prevents ISO jumps)
+    # When false, uses camera's auto-exposure (legacy behavior, may cause ISO jumps)
+    smooth_exposure_in_day_mode: true
 
   # Test shot settings (used to measure light levels)
   test_shot:
