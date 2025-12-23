@@ -172,6 +172,23 @@ def analyze_images(image_metadata_pairs: List[Tuple[Path, Path]], hours: int) ->
         "colour_gains_blue": [],
         "digital_gain": [],
         "filenames": [],
+        # Diagnostic data
+        "mode": [],
+        "raw_lux": [],
+        "smoothed_lux": [],
+        "target_exposure_ms": [],
+        "interpolated_exposure_ms": [],
+        "target_gain": [],
+        "interpolated_gain": [],
+        "transition_position": [],
+        # Brightness analysis
+        "brightness_mean": [],
+        "brightness_median": [],
+        "brightness_std": [],
+        "brightness_p5": [],
+        "brightness_p95": [],
+        "underexposed_percent": [],
+        "overexposed_percent": [],
     }
 
     num_images = len(image_metadata_pairs)
@@ -214,7 +231,37 @@ def analyze_images(image_metadata_pairs: List[Tuple[Path, Path]], hours: int) ->
 
         data["digital_gain"].append(metadata.get("DigitalGain", 1.0))
 
+        # Collect diagnostic data if available
+        diagnostics = metadata.get("diagnostics", {})
+        data["mode"].append(diagnostics.get("mode", "unknown"))
+        data["raw_lux"].append(diagnostics.get("raw_lux"))
+        data["smoothed_lux"].append(diagnostics.get("smoothed_lux"))
+        data["target_exposure_ms"].append(diagnostics.get("target_exposure_ms"))
+        data["interpolated_exposure_ms"].append(diagnostics.get("interpolated_exposure_ms"))
+        data["target_gain"].append(diagnostics.get("target_gain"))
+        data["interpolated_gain"].append(diagnostics.get("interpolated_gain"))
+        data["transition_position"].append(diagnostics.get("transition_position"))
+
+        # Brightness analysis data
+        brightness = diagnostics.get("brightness", {})
+        data["brightness_mean"].append(brightness.get("mean_brightness"))
+        data["brightness_median"].append(brightness.get("median_brightness"))
+        data["brightness_std"].append(brightness.get("std_brightness"))
+        data["brightness_p5"].append(brightness.get("percentile_5"))
+        data["brightness_p95"].append(brightness.get("percentile_95"))
+        data["underexposed_percent"].append(brightness.get("underexposed_percent"))
+        data["overexposed_percent"].append(brightness.get("overexposed_percent"))
+
     print(f"✅ Analysis complete! Collected {len(data['timestamps'])} data points.\n")
+
+    # Check if diagnostic data is available
+    has_diagnostics = any(m is not None for m in data["target_exposure_ms"])
+    if has_diagnostics:
+        print(
+            f"📊 Diagnostic metadata found in {sum(1 for m in data['target_exposure_ms'] if m is not None)} images"
+        )
+    else:
+        print("ℹ️  No diagnostic metadata found (older captures)")
 
     return data
 
@@ -568,6 +615,349 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
     plt.close()
     print(f"    ✅ Saved: {output_path}")
 
+    # === DIAGNOSTIC GRAPHS (if data available) ===
+    has_diagnostics = any(m is not None for m in data["target_exposure_ms"])
+
+    if has_diagnostics:
+        print("\n📊 Creating diagnostic graphs...")
+
+        # Filter out None values for plotting
+        diag_timestamps = []
+        diag_target_exp = []
+        diag_actual_exp = []
+        diag_target_gain = []
+        diag_actual_gain = []
+        diag_raw_lux = []
+        diag_smoothed_lux = []
+
+        for i, ts in enumerate(data["timestamps"]):
+            if data["target_exposure_ms"][i] is not None:
+                diag_timestamps.append(ts)
+                diag_target_exp.append(data["target_exposure_ms"][i])
+                diag_actual_exp.append(
+                    data["interpolated_exposure_ms"][i] or data["target_exposure_ms"][i]
+                )
+                diag_target_gain.append(data["target_gain"][i] or 1.0)
+                diag_actual_gain.append(
+                    data["interpolated_gain"][i] or data["target_gain"][i] or 1.0
+                )
+                diag_raw_lux.append(data["raw_lux"][i] or data["lux"][i])
+                diag_smoothed_lux.append(data["smoothed_lux"][i] or data["lux"][i])
+
+        if diag_timestamps:
+            # 7. Target vs Actual Exposure
+            print("  Creating target vs actual exposure graph...")
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+            ax.plot(
+                diag_timestamps,
+                diag_target_exp,
+                color="tab:blue",
+                linewidth=2,
+                label="Target Exposure (calculated)",
+                alpha=0.7,
+            )
+            ax.plot(
+                diag_timestamps,
+                diag_actual_exp,
+                color="tab:orange",
+                linewidth=2,
+                label="Actual Exposure (interpolated)",
+                alpha=0.9,
+            )
+
+            ax.set_xlabel("Time", fontsize=12)
+            ax.set_ylabel("Exposure Time (ms)", fontsize=12)
+            ax.set_title(
+                "Exposure: Target vs Actual (Interpolated)\n"
+                "Shows how smoothing affects exposure transitions",
+                fontsize=14,
+                fontweight="bold",
+            )
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="upper left", fontsize=10)
+            ax.set_yscale("log")
+
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+            fig.tight_layout()
+            output_path = output_dir / "exposure_target_vs_actual.png"
+            plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+            plt.close()
+            print(f"    ✅ Saved: {output_path}")
+
+            # 8. Target vs Actual Gain
+            print("  Creating target vs actual gain graph...")
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+            ax.plot(
+                diag_timestamps,
+                diag_target_gain,
+                color="tab:blue",
+                linewidth=2,
+                label="Target Gain (calculated)",
+                alpha=0.7,
+            )
+            ax.plot(
+                diag_timestamps,
+                diag_actual_gain,
+                color="tab:green",
+                linewidth=2,
+                label="Actual Gain (interpolated)",
+                alpha=0.9,
+            )
+
+            ax.set_xlabel("Time", fontsize=12)
+            ax.set_ylabel("Analogue Gain (ISO)", fontsize=12)
+            ax.set_title(
+                "Gain: Target vs Actual (Interpolated)\n"
+                "Shows how smoothing affects ISO transitions",
+                fontsize=14,
+                fontweight="bold",
+            )
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="upper left", fontsize=10)
+
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+            fig.tight_layout()
+            output_path = output_dir / "gain_target_vs_actual.png"
+            plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+            plt.close()
+            print(f"    ✅ Saved: {output_path}")
+
+            # 9. Raw vs Smoothed Lux
+            print("  Creating raw vs smoothed lux graph...")
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+            ax.plot(
+                diag_timestamps,
+                diag_raw_lux,
+                color="tab:gray",
+                linewidth=1,
+                label="Raw Lux (from test shot)",
+                alpha=0.5,
+            )
+            ax.plot(
+                diag_timestamps,
+                diag_smoothed_lux,
+                color="tab:orange",
+                linewidth=2,
+                label="Smoothed Lux (EMA)",
+                alpha=0.9,
+            )
+
+            ax.set_xlabel("Time", fontsize=12)
+            ax.set_ylabel("Lux (log scale)", fontsize=12)
+            ax.set_title(
+                "Lux: Raw vs Smoothed (EMA)\n" "Shows how lux smoothing reduces noise",
+                fontsize=14,
+                fontweight="bold",
+            )
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="upper left", fontsize=10)
+            ax.set_yscale("log")
+
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+            fig.tight_layout()
+            output_path = output_dir / "lux_raw_vs_smoothed.png"
+            plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+            plt.close()
+            print(f"    ✅ Saved: {output_path}")
+
+    # === BRIGHTNESS ANALYSIS GRAPHS (if data available) ===
+    has_brightness = any(m is not None for m in data["brightness_mean"])
+
+    if has_brightness:
+        print("\n📊 Creating brightness analysis graphs...")
+
+        # Filter out None values
+        bright_timestamps = []
+        bright_mean = []
+        bright_p5 = []
+        bright_p95 = []
+        under_pct = []
+        over_pct = []
+
+        for i, ts in enumerate(data["timestamps"]):
+            if data["brightness_mean"][i] is not None:
+                bright_timestamps.append(ts)
+                bright_mean.append(data["brightness_mean"][i])
+                bright_p5.append(data["brightness_p5"][i] or 0)
+                bright_p95.append(data["brightness_p95"][i] or 255)
+                under_pct.append(data["underexposed_percent"][i] or 0)
+                over_pct.append(data["overexposed_percent"][i] or 0)
+
+        if bright_timestamps:
+            # 10. Image Brightness Over Time
+            print("  Creating image brightness graph...")
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(fig_width, fig_height * 1.2))
+
+            # Top: Mean brightness with range
+            ax1.fill_between(
+                bright_timestamps,
+                bright_p5,
+                bright_p95,
+                alpha=0.3,
+                color="tab:blue",
+                label="5th-95th percentile range",
+            )
+            ax1.plot(
+                bright_timestamps,
+                bright_mean,
+                color="tab:blue",
+                linewidth=2,
+                label="Mean brightness",
+            )
+
+            # Add ideal range lines
+            ax1.axhline(
+                y=80,
+                color="green",
+                linestyle="--",
+                linewidth=1,
+                alpha=0.7,
+                label="Ideal range (80-180)",
+            )
+            ax1.axhline(y=180, color="green", linestyle="--", linewidth=1, alpha=0.7)
+
+            ax1.set_ylabel("Brightness (0-255)", fontsize=11)
+            ax1.set_title("Image Brightness Over Time", fontsize=13, fontweight="bold")
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(loc="upper right", fontsize=9)
+            ax1.set_ylim(0, 255)
+            ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+            # Bottom: Under/overexposed percentages
+            ax2.fill_between(
+                bright_timestamps,
+                under_pct,
+                alpha=0.5,
+                color="tab:purple",
+                label="Underexposed (<10)",
+            )
+            ax2.fill_between(
+                bright_timestamps,
+                over_pct,
+                alpha=0.5,
+                color="tab:red",
+                label="Overexposed (>245)",
+            )
+
+            # Warning threshold
+            ax2.axhline(
+                y=5,
+                color="orange",
+                linestyle="--",
+                linewidth=1,
+                alpha=0.7,
+                label="5% warning threshold",
+            )
+
+            ax2.set_xlabel("Time", fontsize=11)
+            ax2.set_ylabel("Percentage (%)", fontsize=11)
+            ax2.set_title("Under/Overexposed Pixels", fontsize=13, fontweight="bold")
+            ax2.grid(True, alpha=0.3)
+            ax2.legend(loc="upper right", fontsize=9)
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+            fig.suptitle("Image Brightness Analysis", fontsize=16, fontweight="bold")
+            fig.tight_layout()
+
+            output_path = output_dir / "brightness_analysis.png"
+            plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+            plt.close()
+            print(f"    ✅ Saved: {output_path}")
+
+            # 11. Diagnostic Overview Panel
+            print("  Creating diagnostic overview panel...")
+            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(
+                2, 2, figsize=(fig_width * 1.2, fig_height * 1.2)
+            )
+
+            # Exposure target vs actual
+            ax1.plot(
+                diag_timestamps,
+                diag_target_exp,
+                color="tab:blue",
+                linewidth=1.5,
+                alpha=0.6,
+                label="Target",
+            )
+            ax1.plot(
+                diag_timestamps, diag_actual_exp, color="tab:orange", linewidth=2, label="Actual"
+            )
+            ax1.set_ylabel("Exposure (ms)", fontsize=10)
+            ax1.set_title("Exposure: Target vs Actual", fontsize=12, fontweight="bold")
+            ax1.set_yscale("log")
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(loc="upper left", fontsize=8)
+            ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+            # Gain target vs actual
+            ax2.plot(
+                diag_timestamps,
+                diag_target_gain,
+                color="tab:blue",
+                linewidth=1.5,
+                alpha=0.6,
+                label="Target",
+            )
+            ax2.plot(
+                diag_timestamps, diag_actual_gain, color="tab:green", linewidth=2, label="Actual"
+            )
+            ax2.set_ylabel("Gain (ISO)", fontsize=10)
+            ax2.set_title("Gain: Target vs Actual", fontsize=12, fontweight="bold")
+            ax2.grid(True, alpha=0.3)
+            ax2.legend(loc="upper left", fontsize=8)
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+            # Mean brightness
+            ax3.fill_between(bright_timestamps, bright_p5, bright_p95, alpha=0.3, color="tab:blue")
+            ax3.plot(bright_timestamps, bright_mean, color="tab:blue", linewidth=2)
+            ax3.axhline(y=80, color="green", linestyle="--", linewidth=1, alpha=0.5)
+            ax3.axhline(y=180, color="green", linestyle="--", linewidth=1, alpha=0.5)
+            ax3.set_ylabel("Brightness", fontsize=10)
+            ax3.set_xlabel("Time", fontsize=10)
+            ax3.set_title("Image Brightness", fontsize=12, fontweight="bold")
+            ax3.set_ylim(0, 255)
+            ax3.grid(True, alpha=0.3)
+            ax3.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            plt.setp(ax3.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+            # Under/overexposed
+            ax4.fill_between(
+                bright_timestamps, under_pct, alpha=0.5, color="tab:purple", label="Under"
+            )
+            ax4.fill_between(bright_timestamps, over_pct, alpha=0.5, color="tab:red", label="Over")
+            ax4.axhline(y=5, color="orange", linestyle="--", linewidth=1, alpha=0.7)
+            ax4.set_ylabel("Percent (%)", fontsize=10)
+            ax4.set_xlabel("Time", fontsize=10)
+            ax4.set_title("Clipped Pixels", fontsize=12, fontweight="bold")
+            ax4.grid(True, alpha=0.3)
+            ax4.legend(loc="upper right", fontsize=8)
+            ax4.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            plt.setp(ax4.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+            fig.suptitle("Diagnostic Overview", fontsize=16, fontweight="bold")
+            fig.tight_layout()
+
+            output_path = output_dir / "diagnostic_overview.png"
+            plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+            plt.close()
+            print(f"    ✅ Saved: {output_path}")
+
     print("\n✅ All graphs created successfully!")
 
 
@@ -654,6 +1044,14 @@ def export_to_excel(
         "Color Gain Red",
         "Color Gain Blue",
         "Digital Gain",
+        "Mode",
+        "Target Exp (ms)",
+        "Actual Exp (ms)",
+        "Target Gain",
+        "Actual Gain",
+        "Mean Brightness",
+        "Under %",
+        "Over %",
         "Image File",
     ]
 
@@ -677,7 +1075,54 @@ def export_to_excel(
         ws_raw.cell(row=i, column=9, value=round(data["colour_gains_red"][idx], 3))
         ws_raw.cell(row=i, column=10, value=round(data["colour_gains_blue"][idx], 3))
         ws_raw.cell(row=i, column=11, value=round(data["digital_gain"][idx], 3))
-        ws_raw.cell(row=i, column=12, value=data["filenames"][idx])
+        # Diagnostic data
+        ws_raw.cell(row=i, column=12, value=data["mode"][idx] or "")
+        ws_raw.cell(
+            row=i,
+            column=13,
+            value=round(data["target_exposure_ms"][idx], 2)
+            if data["target_exposure_ms"][idx]
+            else "",
+        )
+        ws_raw.cell(
+            row=i,
+            column=14,
+            value=round(data["interpolated_exposure_ms"][idx], 2)
+            if data["interpolated_exposure_ms"][idx]
+            else "",
+        )
+        ws_raw.cell(
+            row=i,
+            column=15,
+            value=round(data["target_gain"][idx], 2) if data["target_gain"][idx] else "",
+        )
+        ws_raw.cell(
+            row=i,
+            column=16,
+            value=round(data["interpolated_gain"][idx], 2)
+            if data["interpolated_gain"][idx]
+            else "",
+        )
+        ws_raw.cell(
+            row=i,
+            column=17,
+            value=round(data["brightness_mean"][idx], 1) if data["brightness_mean"][idx] else "",
+        )
+        ws_raw.cell(
+            row=i,
+            column=18,
+            value=round(data["underexposed_percent"][idx], 2)
+            if data["underexposed_percent"][idx]
+            else "",
+        )
+        ws_raw.cell(
+            row=i,
+            column=19,
+            value=round(data["overexposed_percent"][idx], 2)
+            if data["overexposed_percent"][idx]
+            else "",
+        )
+        ws_raw.cell(row=i, column=20, value=data["filenames"][idx])
 
     # Auto-size columns
     for column in ws_raw.columns:
