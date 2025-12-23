@@ -254,18 +254,129 @@ done
 
 ---
 
+## Diagnostic Metadata
+
+Each captured frame includes comprehensive diagnostic information to help analyze and tune transition behavior.
+
+### Diagnostic Fields
+
+The `diagnostics` section in metadata JSON files contains:
+
+```json
+{
+  "diagnostics": {
+    "mode": "transition",
+    "smoothed_lux": 45.5,
+    "raw_lux": 48.2,
+    "transition_position": 0.39,
+    "target_exposure_s": 0.439,
+    "target_exposure_ms": 439.56,
+    "target_gain": 2.15,
+    "interpolated_exposure_s": 0.35,
+    "interpolated_exposure_ms": 350.0,
+    "interpolated_gain": 2.0,
+    "hysteresis_hold_count": 0,
+    "hysteresis_last_mode": "transition",
+    "brightness": {
+      "mean_brightness": 127.5,
+      "median_brightness": 125.0,
+      "std_brightness": 45.2,
+      "percentile_5": 35.0,
+      "percentile_25": 95.0,
+      "percentile_75": 160.0,
+      "percentile_95": 210.0,
+      "underexposed_percent": 1.2,
+      "overexposed_percent": 0.5
+    }
+  }
+}
+```
+
+### Field Descriptions
+
+| Field | Description |
+|-------|-------------|
+| `mode` | Current light mode: `day`, `night`, or `transition` |
+| `raw_lux` | Lux from test shot before EMA smoothing |
+| `smoothed_lux` | Lux after exponential moving average |
+| `transition_position` | Position in transition (0.0=night end, 1.0=day end), null if not transition |
+| `target_exposure_ms` | Calculated exposure before interpolation smoothing |
+| `interpolated_exposure_ms` | Actual exposure sent to camera (after smooth interpolation) |
+| `target_gain` | Calculated ISO/gain before interpolation |
+| `interpolated_gain` | Actual gain sent to camera |
+| `hysteresis_hold_count` | Frames waiting to confirm mode change (0 = stable) |
+| `hysteresis_last_mode` | Mode being held during hysteresis |
+
+### Brightness Analysis
+
+The `brightness` sub-section analyzes the actual captured image:
+
+| Field | Description | Good Range |
+|-------|-------------|------------|
+| `mean_brightness` | Average pixel brightness (0-255) | 80-180 |
+| `median_brightness` | Median pixel brightness | 80-180 |
+| `std_brightness` | Brightness variation (contrast indicator) | 30-70 |
+| `percentile_5` | Shadow level (darkest 5% of pixels) | >10 |
+| `percentile_95` | Highlight level (brightest 5% of pixels) | <245 |
+| `underexposed_percent` | % of pixels below 10 (clipped blacks) | <5% |
+| `overexposed_percent` | % of pixels above 245 (clipped highlights) | <5% |
+
+### Using Diagnostics for Debugging
+
+**Check if exposure is tracking lux correctly:**
+```bash
+python3 -c "
+import json, glob
+for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-10:]:
+    with open(f) as fp:
+        d = json.load(fp)
+        diag = d.get('diagnostics', {})
+        print(f\"{f.split('/')[-1][25:33]}: lux={diag.get('smoothed_lux', 'N/A'):7.2f}, target={diag.get('target_exposure_ms', 'N/A'):7.1f}ms, actual={diag.get('interpolated_exposure_ms', 'N/A'):7.1f}ms\")
+"
+```
+
+**Check image brightness vs exposure:**
+```bash
+python3 -c "
+import json, glob
+for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-10:]:
+    with open(f) as fp:
+        d = json.load(fp)
+        diag = d.get('diagnostics', {})
+        bright = diag.get('brightness', {})
+        print(f\"{diag.get('mode', 'N/A'):10}: mean={bright.get('mean_brightness', 'N/A'):6.1f}, under={bright.get('underexposed_percent', 'N/A'):5.2f}%, over={bright.get('overexposed_percent', 'N/A'):5.2f}%\")
+"
+```
+
+**Identify exposure calculation issues:**
+- If `target_exposure_ms` differs greatly from `interpolated_exposure_ms`, the smoothing is still catching up
+- If `underexposed_percent` > 10%, increase exposure or gain
+- If `overexposed_percent` > 5%, decrease exposure
+- If `hysteresis_hold_count` is frequently > 0, lux is fluctuating near thresholds
+
+---
+
 ## Future Improvements
 
+- [x] Diagnostic metadata for debugging transitions (implemented 2025-12-23)
+- [x] Image brightness analysis in metadata (implemented 2025-12-23)
 - [ ] Adaptive WB transition speed based on lux rate of change
 - [ ] Per-channel WB smoothing (red and blue could have different speeds)
 - [ ] Sunset/sunrise detection for optimized transition timing
 - [ ] Store day WB reference persistently between restarts
-- [ ] Histogram-based brightness normalization during transitions
 - [ ] Machine learning to predict optimal WB for given lux level
 
 ---
 
 ## Changelog
+
+### 2025-12-23 - Diagnostic Metadata & Exposure Fix
+- Added diagnostic metadata to every captured frame
+- Added image brightness analysis (mean, median, percentiles, under/overexposed %)
+- Added exposure/gain target vs interpolated values in metadata
+- Added transition position tracking
+- Fixed exposure calculation to use continuous lux-based formula
+- Formula: `exposure = 20 / lux` (inverse relationship, clamped to 10ms-20s)
 
 ### 2025-12-23 - Initial Implementation
 - Added lux EMA smoothing

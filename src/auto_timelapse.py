@@ -772,6 +772,140 @@ class AdaptiveTimelapse:
         logger.debug(f"Test shot saved: {image_path}")
         return image_path, metadata
 
+    def _analyze_image_brightness(self, image_path: str) -> Dict:
+        """
+        Analyze brightness characteristics of a captured image.
+
+        Calculates histogram statistics to help diagnose exposure issues.
+
+        Args:
+            image_path: Path to the image file
+
+        Returns:
+            Dictionary with brightness metrics
+        """
+        try:
+            from PIL import Image
+            import numpy as np
+
+            with Image.open(image_path) as img:
+                # Convert to grayscale for brightness analysis
+                gray = img.convert("L")
+                pixels = np.array(gray)
+
+                # Calculate statistics
+                mean_brightness = float(np.mean(pixels))
+                median_brightness = float(np.median(pixels))
+                std_brightness = float(np.std(pixels))
+
+                # Percentiles for exposure analysis
+                p5 = float(np.percentile(pixels, 5))
+                p25 = float(np.percentile(pixels, 25))
+                p75 = float(np.percentile(pixels, 75))
+                p95 = float(np.percentile(pixels, 95))
+
+                # Calculate under/overexposure percentages
+                total_pixels = pixels.size
+                underexposed = float(np.sum(pixels < 10) / total_pixels * 100)
+                overexposed = float(np.sum(pixels > 245) / total_pixels * 100)
+
+                return {
+                    "mean_brightness": round(mean_brightness, 2),
+                    "median_brightness": round(median_brightness, 2),
+                    "std_brightness": round(std_brightness, 2),
+                    "percentile_5": round(p5, 2),
+                    "percentile_25": round(p25, 2),
+                    "percentile_75": round(p75, 2),
+                    "percentile_95": round(p95, 2),
+                    "underexposed_percent": round(underexposed, 2),
+                    "overexposed_percent": round(overexposed, 2),
+                }
+
+        except Exception as e:
+            logger.warning(f"Could not analyze image brightness: {e}")
+            return {}
+
+    def _enrich_metadata_with_diagnostics(
+        self,
+        metadata_path: str,
+        image_path: str,
+        mode: str,
+        lux: float = None,
+        raw_lux: float = None,
+        transition_position: float = None,
+    ) -> bool:
+        """
+        Enrich saved metadata with diagnostic information.
+
+        Adds brightness analysis, exposure calculation details, and mode state
+        to help with future tuning and debugging.
+
+        Args:
+            metadata_path: Path to the metadata JSON file
+            image_path: Path to the captured image
+            mode: Current light mode
+            lux: Smoothed lux value
+            raw_lux: Raw lux value before smoothing
+            transition_position: Position in transition (0-1), None if not transition
+
+        Returns:
+            True if successful, False otherwise
+        """
+        import json
+
+        try:
+            # Load existing metadata
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+
+            # Add diagnostics section
+            diagnostics = {
+                "mode": mode,
+                "smoothed_lux": round(lux, 4) if lux is not None else None,
+                "raw_lux": round(raw_lux, 4) if raw_lux is not None else None,
+                "transition_position": (
+                    round(transition_position, 4) if transition_position is not None else None
+                ),
+            }
+
+            # Add exposure calculation targets (what we calculated, before interpolation)
+            if lux is not None:
+                target_exposure = self._calculate_target_exposure_from_lux(lux)
+                target_gain = self._calculate_target_gain_from_lux(lux)
+                diagnostics["target_exposure_s"] = round(target_exposure, 6)
+                diagnostics["target_exposure_ms"] = round(target_exposure * 1000, 2)
+                diagnostics["target_gain"] = round(target_gain, 2)
+
+            # Add current interpolated values (what we actually sent to camera)
+            if self._last_exposure_time is not None:
+                diagnostics["interpolated_exposure_s"] = round(self._last_exposure_time, 6)
+                diagnostics["interpolated_exposure_ms"] = round(self._last_exposure_time * 1000, 2)
+            if self._last_analogue_gain is not None:
+                diagnostics["interpolated_gain"] = round(self._last_analogue_gain, 2)
+
+            # Add hysteresis state
+            diagnostics["hysteresis_hold_count"] = getattr(self, "_mode_hold_count", 0)
+            diagnostics["hysteresis_last_mode"] = getattr(self, "_last_mode", None)
+
+            # Analyze image brightness
+            brightness_analysis = self._analyze_image_brightness(image_path)
+            if brightness_analysis:
+                diagnostics["brightness"] = brightness_analysis
+
+            # Add diagnostics to metadata
+            metadata["diagnostics"] = diagnostics
+
+            # Save enriched metadata
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f, indent=2, default=str)
+
+            logger.debug(f"Enriched metadata with diagnostics: {metadata_path}")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Could not enrich metadata with diagnostics: {e}")
+            return False
+
     def _create_latest_symlink(self, image_path: str):
         """
         Create a symlink to the latest captured image.
@@ -890,6 +1024,11 @@ class AdaptiveTimelapse:
                     capture = None
                     last_mode = None
 
+                # Initialize diagnostic tracking variables
+                raw_lux = None
+                lux = None
+                transition_position = None
+
                 # Take test shot if enabled
                 if adaptive_config["test_shot"]["enabled"]:
                     try:
@@ -906,6 +1045,15 @@ class AdaptiveTimelapse:
 
                         # Apply hysteresis to prevent rapid mode flipping
                         mode = self._apply_hysteresis(raw_mode)
+
+                        # Calculate transition position for diagnostics
+                        if mode == LightMode.TRANSITION:
+                            night_threshold = adaptive_config["light_thresholds"]["night"]
+                            day_threshold = adaptive_config["light_thresholds"]["day"]
+                            transition_position = (lux - night_threshold) / (
+                                day_threshold - night_threshold
+                            )
+                            transition_position = max(0.0, min(1.0, transition_position))
 
                         # Get settings for this mode (with smooth WB interpolation)
                         settings = self.get_camera_settings(mode, lux)
@@ -931,6 +1079,17 @@ class AdaptiveTimelapse:
                 try:
                     image_path, metadata_path = self.capture_frame(capture, mode)
                     logger.info(f"Frame captured: {image_path}")
+
+                    # Enrich metadata with diagnostic information
+                    if metadata_path:
+                        self._enrich_metadata_with_diagnostics(
+                            metadata_path=metadata_path,
+                            image_path=image_path,
+                            mode=mode,
+                            lux=lux,
+                            raw_lux=raw_lux,
+                            transition_position=transition_position,
+                        )
 
                     # Update day WB reference from actual capture metadata
                     # This allows us to learn good daylight WB values for smooth transitions

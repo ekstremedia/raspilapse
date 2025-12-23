@@ -92,9 +92,15 @@ The adaptive timelapse automatically adjusts camera settings based on ambient li
      - Actual analogue gain used
      - Color gains, temperature, lux
      - Timestamp, resolution, quality
+     - **Diagnostic section** (see below)
    - **Non-blocking:** No 20+ second wait for next frame period
 
-4. **Request cleanup:**
+4. **Diagnostic enrichment:**
+   - After capture, metadata is enriched with diagnostic information
+   - Includes brightness analysis of the actual captured image
+   - See "Diagnostic Metadata" section below for full details
+
+5. **Request cleanup:**
    - `request.release()` immediately frees buffer
    - Counter increments
    - Camera stays open (reused for next frame if mode unchanged)
@@ -237,11 +243,80 @@ python3 src/auto_timelapse.py --test
 
 ---
 
+## Diagnostic Metadata
+
+Each captured frame includes diagnostic information in the metadata JSON to help analyze and debug exposure/transition behavior.
+
+### Example Diagnostic Section
+
+```json
+{
+  "diagnostics": {
+    "mode": "night",
+    "smoothed_lux": 1.0559,
+    "raw_lux": 1.0559,
+    "transition_position": null,
+    "target_exposure_s": 18.941778,
+    "target_exposure_ms": 18941.78,
+    "target_gain": 5.96,
+    "interpolated_exposure_s": 20.0,
+    "interpolated_exposure_ms": 20000.0,
+    "interpolated_gain": 6.0,
+    "hysteresis_hold_count": 0,
+    "hysteresis_last_mode": "night",
+    "brightness": {
+      "mean_brightness": 47.97,
+      "median_brightness": 42.0,
+      "std_brightness": 27.88,
+      "percentile_5": 20.0,
+      "percentile_25": 35.0,
+      "percentile_75": 54.0,
+      "percentile_95": 83.0,
+      "underexposed_percent": 0.01,
+      "overexposed_percent": 0.61
+    }
+  }
+}
+```
+
+### Key Fields
+
+| Field | Purpose |
+|-------|---------|
+| `mode` | Current light mode (day/night/transition) |
+| `raw_lux` / `smoothed_lux` | Lux before/after EMA smoothing |
+| `target_exposure_ms` | What formula calculated |
+| `interpolated_exposure_ms` | What was sent to camera (after smoothing) |
+| `target_gain` / `interpolated_gain` | Same for ISO/gain |
+| `transition_position` | 0.0-1.0 position in transition (null if not) |
+| `brightness.mean_brightness` | Average image brightness (0-255) |
+| `brightness.underexposed_percent` | % of too-dark pixels |
+| `brightness.overexposed_percent` | % of too-bright pixels |
+
+### Usage
+
+**Quick exposure check:**
+```bash
+# Show last 5 captures with exposure info
+python3 -c "
+import json, glob
+for f in sorted(glob.glob('/var/www/html/images/*/*/*/*_metadata.json'))[-5:]:
+    d = json.load(open(f))
+    diag = d.get('diagnostics', {})
+    print(f\"{diag.get('mode','?'):10} lux={diag.get('smoothed_lux',0):7.2f} exp={diag.get('interpolated_exposure_ms',0):8.1f}ms\")
+"
+```
+
+For full diagnostic documentation, see `TRANSITION_SMOOTHING.md`.
+
+---
+
 ## Summary
 
 | Aspect | Implementation |
 |--------|---------------|
 | **Metadata saved?** | ✅ YES - every shot (test + actual) |
+| **Diagnostic data?** | ✅ YES - exposure targets, brightness analysis |
 | **Open/close for metadata?** | ❌ NO - single `capture_request()` call |
 | **Test shots stored?** | ✅ YES - in `metadata/` directory (overwritten) |
 | **Blocking delays?** | ❌ NO - `capture_request()` is non-blocking |
