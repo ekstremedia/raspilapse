@@ -50,6 +50,20 @@ class AdaptiveTimelapse:
         self.running = True
         self.frame_count = 0
 
+        # Transition smoothing state
+        self._lux_history: list = []  # Rolling history for EMA
+        self._smoothed_lux: float = None  # Exponential moving average of lux
+        self._last_mode: str = None  # Previous mode for hysteresis
+        self._mode_hold_count: int = 0  # Counter for hysteresis
+        self._day_wb_reference: tuple = None  # AWB gains from bright daylight
+        self._last_colour_gains: tuple = None  # Previous frame's color gains for smooth transition
+
+        # Load transition smoothing config with defaults
+        transition_config = self.config.get("adaptive_timelapse", {}).get("transition_mode", {})
+        self._lux_smoothing_factor = transition_config.get("lux_smoothing_factor", 0.3)
+        self._hysteresis_frames = transition_config.get("hysteresis_frames", 3)
+        self._wb_transition_speed = transition_config.get("wb_transition_speed", 0.15)
+
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -74,6 +88,172 @@ class AdaptiveTimelapse:
         except yaml.YAMLError as e:
             logger.error(f"Failed to parse configuration file: {e}")
             raise
+
+    def _smooth_lux(self, raw_lux: float) -> float:
+        """
+        Apply exponential moving average smoothing to lux values.
+
+        This prevents sudden jumps in lux readings from causing mode flips.
+
+        Args:
+            raw_lux: Raw calculated lux value
+
+        Returns:
+            Smoothed lux value
+        """
+        if self._smoothed_lux is None:
+            # First reading - initialize
+            self._smoothed_lux = raw_lux
+        else:
+            # Exponential moving average: new = alpha * raw + (1 - alpha) * old
+            alpha = self._lux_smoothing_factor
+            self._smoothed_lux = alpha * raw_lux + (1 - alpha) * self._smoothed_lux
+
+        logger.debug(f"Lux smoothing: raw={raw_lux:.2f} → smoothed={self._smoothed_lux:.2f}")
+        return self._smoothed_lux
+
+    def _apply_hysteresis(self, new_mode: str) -> str:
+        """
+        Apply hysteresis to mode transitions to prevent rapid flipping.
+
+        Mode only changes after N consecutive frames request the same new mode.
+
+        Args:
+            new_mode: The mode determined by current lux
+
+        Returns:
+            The actual mode to use (may be held at previous)
+        """
+        if self._last_mode is None:
+            # First frame - accept the mode
+            self._last_mode = new_mode
+            self._mode_hold_count = 0
+            return new_mode
+
+        if new_mode == self._last_mode:
+            # Same mode - reset counter
+            self._mode_hold_count = 0
+            return new_mode
+
+        # Different mode requested
+        self._mode_hold_count += 1
+
+        if self._mode_hold_count >= self._hysteresis_frames:
+            # Enough consecutive frames - accept the change
+            logger.info(
+                f"Mode transition: {self._last_mode} → {new_mode} "
+                f"(after {self._mode_hold_count} frames)"
+            )
+            self._last_mode = new_mode
+            self._mode_hold_count = 0
+            return new_mode
+        else:
+            # Hold at previous mode
+            logger.debug(
+                f"Hysteresis: holding {self._last_mode}, "
+                f"requested {new_mode} ({self._mode_hold_count}/{self._hysteresis_frames})"
+            )
+            return self._last_mode
+
+    def _interpolate_colour_gains(self, target_gains: tuple, position: float = None) -> tuple:
+        """
+        Smoothly interpolate colour gains to prevent sudden white balance shifts.
+
+        Uses gradual transition towards target gains rather than instant switching.
+
+        Args:
+            target_gains: Target (red, blue) colour gains
+            position: Optional transition position (0.0=night, 1.0=day) for
+                     calculating intermediate gains between night and day references
+
+        Returns:
+            Interpolated colour gains tuple
+        """
+        if target_gains is None:
+            return self._last_colour_gains
+
+        if self._last_colour_gains is None:
+            # First frame - accept target gains
+            self._last_colour_gains = target_gains
+            return target_gains
+
+        # Gradual transition towards target
+        speed = self._wb_transition_speed
+        new_red = self._last_colour_gains[0] + speed * (
+            target_gains[0] - self._last_colour_gains[0]
+        )
+        new_blue = self._last_colour_gains[1] + speed * (
+            target_gains[1] - self._last_colour_gains[1]
+        )
+
+        interpolated = (new_red, new_blue)
+        self._last_colour_gains = interpolated
+
+        logger.debug(
+            f"WB interpolation: target=[{target_gains[0]:.2f}, {target_gains[1]:.2f}] "
+            f"→ actual=[{new_red:.2f}, {new_blue:.2f}]"
+        )
+        return interpolated
+
+    def _update_day_wb_reference(self, metadata: Dict):
+        """
+        Update day white balance reference from camera's AWB in bright conditions.
+
+        This captures what the camera considers correct WB for daylight,
+        which we use to smoothly transition from/to night manual WB.
+
+        Args:
+            metadata: Camera metadata containing ColourGains
+        """
+        colour_gains = metadata.get("ColourGains")
+        lux = metadata.get("Lux", 0)
+
+        # Only update reference in bright daylight (>200 lux) with valid gains
+        if colour_gains and lux > 200:
+            # Validate gains are reasonable (not extreme values)
+            if 1.0 < colour_gains[0] < 4.0 and 1.0 < colour_gains[1] < 4.0:
+                self._day_wb_reference = tuple(colour_gains)
+                logger.debug(
+                    f"Updated day WB reference: [{colour_gains[0]:.2f}, {colour_gains[1]:.2f}] "
+                    f"at {lux:.0f} lux"
+                )
+
+    def _get_target_colour_gains(self, mode: str, position: float = None) -> tuple:
+        """
+        Get target colour gains based on mode and transition position.
+
+        For smooth transitions, interpolates between night manual gains
+        and day AWB reference gains.
+
+        Args:
+            mode: Current light mode
+            position: Transition position (0.0=night, 1.0=day), only for transition mode
+
+        Returns:
+            Target colour gains tuple (red, blue)
+        """
+        night_config = self.config["adaptive_timelapse"]["night_mode"]
+        night_gains = tuple(night_config.get("colour_gains", [1.83, 2.02]))
+
+        if mode == LightMode.NIGHT:
+            return night_gains
+
+        # For day and transition, we need day reference
+        # Use stored reference or a reasonable default for daylight
+        day_gains = self._day_wb_reference or (2.5, 1.6)
+
+        if mode == LightMode.DAY:
+            return day_gains
+
+        # Transition mode - interpolate based on position
+        if position is not None:
+            # position: 0.0 = at night threshold, 1.0 = at day threshold
+            red = night_gains[0] + position * (day_gains[0] - night_gains[0])
+            blue = night_gains[1] + position * (day_gains[1] - night_gains[1])
+            return (red, blue)
+
+        # Default to midpoint
+        return ((night_gains[0] + day_gains[0]) / 2, (night_gains[1] + day_gains[1]) / 2)
 
     def calculate_lux(self, test_image_path: str, metadata: Dict) -> float:
         """
@@ -197,11 +377,14 @@ class AdaptiveTimelapse:
             # Lock AWB for long exposures - AWB causes 5x slowdown!
             settings["AwbEnable"] = 0
 
-            if "colour_gains" in night:
-                settings["ColourGains"] = tuple(night["colour_gains"])
+            # Use smooth WB interpolation even in night mode for seamless transitions
+            target_gains = self._get_target_colour_gains(mode)
+            smooth_gains = self._interpolate_colour_gains(target_gains)
+            settings["ColourGains"] = smooth_gains
 
             logger.info(
-                f"Night mode: exposure={night['max_exposure_time']}s, gain={night['analogue_gain']}"
+                f"Night mode: exposure={night['max_exposure_time']}s, gain={night['analogue_gain']}, "
+                f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
             )
 
         elif mode == LightMode.DAY:
@@ -218,14 +401,31 @@ class AdaptiveTimelapse:
                 settings["AeEnable"] = 1
                 # Don't set AnalogueGain - let auto exposure handle it
 
-            settings["AwbEnable"] = 1 if day.get("awb_enable", True) else 0
+            # For smooth transitions, use manual WB with interpolated gains
+            # AWB is only used internally to learn good daylight WB values
+            # (captured via _update_day_wb_reference from actual capture metadata)
+            transition_config = adaptive_config.get("transition_mode", {})
+            if transition_config.get("smooth_wb_in_day_mode", True):
+                settings["AwbEnable"] = 0
+                target_gains = self._get_target_colour_gains(mode)
+                smooth_gains = self._interpolate_colour_gains(target_gains)
+                settings["ColourGains"] = smooth_gains
+            else:
+                # Legacy behavior: use AWB in day mode
+                settings["AwbEnable"] = 1 if day.get("awb_enable", True) else 0
 
             # Apply brightness adjustment if specified
             if "brightness" in day:
                 settings["Brightness"] = day["brightness"]
 
+            wb_info = (
+                f"WB=[{settings.get('ColourGains', ('auto', 'auto'))[0]:.2f}, {settings.get('ColourGains', ('auto', 'auto'))[1]:.2f}]"
+                if "ColourGains" in settings
+                else "WB=auto"
+            )
             logger.info(
-                f"Day mode: auto_exposure={'on' if settings.get('AeEnable', 1) else 'off'}, gain={'auto' if settings.get('AeEnable', 1) else day.get('analogue_gain', 'auto')}, brightness={day.get('brightness', 0.0)}"
+                f"Day mode: auto_exposure={'on' if settings.get('AeEnable', 1) else 'off'}, "
+                f"brightness={day.get('brightness', 0.0)}, {wb_info}"
             )
 
         elif mode == LightMode.TRANSITION:
@@ -260,30 +460,30 @@ class AdaptiveTimelapse:
                 settings["ExposureTime"] = int(interpolated_exposure * 1_000_000)
                 settings["AnalogueGain"] = interpolated_gain
 
-                # CRITICAL: Disable AWB for long exposures (>1s) to avoid 5x slowdown
-                # For short exposures, enable AWB for better color accuracy
-                if interpolated_exposure > 1.0:
-                    settings["AwbEnable"] = 0
-                    # Use manual color gains for long exposures
-                    night_config = adaptive_config["night_mode"]
-                    if "colour_gains" in night_config:
-                        settings["ColourGains"] = tuple(night_config["colour_gains"])
-                else:
-                    settings["AwbEnable"] = 1
+                # ALWAYS use manual WB during transitions to prevent flickering
+                # AWB causes sudden color shifts - instead we smoothly interpolate
+                settings["AwbEnable"] = 0
+
+                # Get smoothly interpolated colour gains
+                target_gains = self._get_target_colour_gains(mode, position)
+                smooth_gains = self._interpolate_colour_gains(target_gains, position)
+                settings["ColourGains"] = smooth_gains
 
                 logger.info(
-                    f"Transition mode: lux={lux:.2f}, exposure={interpolated_exposure:.2f}s, gain={interpolated_gain:.2f}, awb={'off' if settings['AwbEnable'] == 0 else 'on'}"
+                    f"Transition mode: lux={lux:.2f}, position={position:.2f}, "
+                    f"exposure={interpolated_exposure:.2f}s, gain={interpolated_gain:.2f}, "
+                    f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
                 )
             else:
                 # Use middle values
                 exposure_seconds = 5.0
                 settings["ExposureTime"] = int(exposure_seconds * 1_000_000)  # 5 seconds
                 settings["AnalogueGain"] = transition["analogue_gain_max"]
-                # CRITICAL: Disable AWB for long exposures to avoid 5x slowdown
                 settings["AwbEnable"] = 0
-                night_config = adaptive_config["night_mode"]
-                if "colour_gains" in night_config:
-                    settings["ColourGains"] = tuple(night_config["colour_gains"])
+                # Use interpolated colour gains
+                target_gains = self._get_target_colour_gains(mode, 0.5)
+                smooth_gains = self._interpolate_colour_gains(target_gains)
+                settings["ColourGains"] = smooth_gains
 
         return settings
 
@@ -478,13 +678,19 @@ class AdaptiveTimelapse:
                     try:
                         test_image_path, test_metadata = self.take_test_shot()
 
-                        # Calculate lux from test shot
-                        lux = self.calculate_lux(test_image_path, test_metadata)
+                        # Calculate raw lux from test shot
+                        raw_lux = self.calculate_lux(test_image_path, test_metadata)
 
-                        # Determine mode
-                        mode = self.determine_mode(lux)
+                        # Apply exponential moving average smoothing
+                        lux = self._smooth_lux(raw_lux)
 
-                        # Get settings for this mode
+                        # Determine raw mode from smoothed lux
+                        raw_mode = self.determine_mode(lux)
+
+                        # Apply hysteresis to prevent rapid mode flipping
+                        mode = self._apply_hysteresis(raw_mode)
+
+                        # Get settings for this mode (with smooth WB interpolation)
                         settings = self.get_camera_settings(mode, lux)
 
                     except Exception as e:
@@ -508,6 +714,18 @@ class AdaptiveTimelapse:
                 try:
                     image_path, metadata_path = self.capture_frame(capture, mode)
                     logger.info(f"Frame captured: {image_path}")
+
+                    # Update day WB reference from actual capture metadata
+                    # This allows us to learn good daylight WB values for smooth transitions
+                    if metadata_path and mode == LightMode.DAY:
+                        try:
+                            import json
+
+                            with open(metadata_path, "r") as f:
+                                capture_metadata = json.load(f)
+                            self._update_day_wb_reference(capture_metadata)
+                        except Exception as e:
+                            logger.debug(f"Could not read capture metadata for WB reference: {e}")
 
                 except Exception as e:
                     logger.error(f"Frame capture failed: {e}", exc_info=True)
