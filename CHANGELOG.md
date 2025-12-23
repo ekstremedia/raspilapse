@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2025-12-23
+
+### Added
+- **Date-organized video output**: Videos now saved to `YYYY/MM/` subdirectories
+  - New config option `video.organize_by_date: true`
+  - New config option `video.date_format: "%Y/%m"`
+  - Example: `/var/www/html/videos/2025/12/kringelen_nord_daily_2025-12-23.mp4`
+- **Memory-optimized encoding**: Prevents OOM kills on 4K video encoding
+  - New config option `video.codec.preset: "ultrafast"`
+  - New config option `video.codec.threads: 2`
+  - Safe for Raspberry Pi with 4GB RAM encoding 4K video
+
+### Changed
+- **Service timeout**: Changed from 10 minutes to `infinity`
+  - Prevents ffmpeg being killed mid-encode
+  - Videos now complete regardless of encoding time
+- **Default video directory**: Now `/var/www/html/videos` (absolute path)
+- **Default CRF**: Changed from 20 to 23 for smaller file sizes
+
+### Fixed
+- **Video corruption**: Fixed "moov atom not found" errors
+  - Caused by systemd killing ffmpeg after 10-minute timeout
+  - Now uses unlimited timeout for complete encoding
+- **OOM kills during 4K encoding**: Fixed by using ultrafast preset and 2 threads
+  - Previously ffmpeg used too much RAM and was killed by OOM killer
+
+### Documentation
+- Updated `TIMELAPSE_VIDEO.md` with new configuration options
+- Updated `DAILY_VIDEO.md` with performance notes and troubleshooting
+- Added OOM troubleshooting guide
+- Added memory usage guidance for 4K encoding
+
 ## [1.0.0] - 2025-11-09
 
 ### 🎉 First Stable Release!

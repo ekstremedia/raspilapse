@@ -275,7 +275,9 @@ def create_video(
         if codec in ["h264_v4l2m2m", "h264_omx"]:
             print_info("Codec", f"{Colors.bold(codec)} (bitrate {bitrate})")
         else:
-            print_info("Codec", f"{Colors.bold(codec)} (CRF {crf}, preset {preset}, {threads} threads)")
+            print_info(
+                "Codec", f"{Colors.bold(codec)} (CRF {crf}, preset {preset}, {threads} threads)"
+            )
         print_info("Pixel format", Colors.bold(pixel_format))
 
         duration_seconds = len(image_list) / fps

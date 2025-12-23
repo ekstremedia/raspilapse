@@ -11,7 +11,9 @@ The daily video feature automatically creates a timelapse video from the last 24
 - **Automatic daily generation**: Creates a video every day at 04:00
 - **Last 24 hours**: Always captures exactly 24 hours of footage
 - **Smart naming**: Videos are named `{project_name}_daily_YYYY-MM-DD.mp4`
-- **Web-friendly location**: Saves to `/var/www/html/videos/` for easy web access
+- **Date-organized**: Saves to `/var/www/html/videos/YYYY/MM/` for easy browsing
+- **Memory-optimized**: Uses ultrafast preset and limited threads for 4K encoding
+- **No timeout**: Service runs until completion (no arbitrary time limits)
 - **Persistent timer**: Will catch up if the system was offline during scheduled time
 
 ## Installation
@@ -137,16 +139,21 @@ This removes the service but keeps your existing videos.
 
 ### Location
 
-Videos are saved to `/var/www/html/videos/` by default, making them accessible via:
-- Local web server: `http://raspberrypi.local/videos/`
-- Direct file access: `/var/www/html/videos/`
+Videos are saved to date-organized directories by default:
+- `/var/www/html/videos/2025/12/kringelen_nord_daily_2025-12-23.mp4`
+
+Accessible via:
+- Local web server: `http://raspberrypi.local/videos/2025/12/`
+- Direct file access: `/var/www/html/videos/YYYY/MM/`
 
 ### Video Settings
 
 From `config/config.yml`:
 - **Frame rate**: 25 fps (smooth European standard)
 - **Codec**: H.264 (libx264)
-- **Quality**: CRF 20 (high quality)
+- **Preset**: ultrafast (memory-optimized for 4K)
+- **Threads**: 2 (prevents OOM on 4GB Pi)
+- **Quality**: CRF 23 (good quality)
 - **Format**: MP4 with YUV420p (maximum compatibility)
 
 ## Troubleshooting
@@ -166,6 +173,32 @@ video:
   codec:
     crf: 23  # Higher = smaller files (20-23 recommended)
 ```
+
+### Video Not Playable (moov atom not found)
+
+**Problem:** Video file exists but won't play, ffprobe shows "moov atom not found"
+
+**Cause:** ffmpeg was killed before it could finalize the file (usually OOM killer)
+
+**Solutions:**
+1. Check if OOM killed ffmpeg:
+   ```bash
+   dmesg | grep -i "oom\|killed"
+   ```
+
+2. Use memory-optimized settings in `config/config.yml`:
+   ```yaml
+   video:
+     codec:
+       preset: "ultrafast"
+       threads: 2
+   ```
+
+3. Delete the corrupt video and regenerate:
+   ```bash
+   rm /var/www/html/videos/2025/12/broken_video.mp4
+   sudo systemctl start --no-block raspilapse-daily-video.service
+   ```
 
 ### Wrong Time
 
@@ -212,9 +245,19 @@ To display videos on a web page, create an index.html in `/var/www/html/videos/`
 
 ## Performance Notes
 
-- Processing 2,880 images (24 hours at 30-second intervals) takes approximately 2-5 minutes
-- Video size is typically 150-200 MB for 24 hours at 1920x1080
-- The service has a 10-minute timeout to handle large datasets
+### 1080p (1920x1080)
+- Processing 2,880 images takes approximately 5-10 minutes
+- Video size is typically 150-200 MB for 24 hours
+
+### 4K (3840x2160)
+- Processing 2,880 images takes approximately 60-90 minutes
+- Video size is typically 400-600 MB for 24 hours
+- Uses ultrafast preset and 2 threads to prevent OOM
+
+### Service Timeout
+- The service has **no timeout** (`TimeoutStartSec=infinity`)
+- Encoding runs until completion, regardless of how long it takes
+- Monitor progress with: `journalctl -u raspilapse-daily-video -f`
 
 ## Advanced Configuration
 

@@ -48,8 +48,17 @@ python3 src/make_timelapse.py --start 04:00 --end 04:00 -c config/custom.yml
 
 ```yaml
 video:
-  # Directory for generated timelapse videos
-  directory: "videos"
+  # Base directory for generated timelapse videos
+  directory: "/var/www/html/videos"
+
+  # Create subdirectories by date (YEAR/MONTH structure)
+  # When enabled, videos are organized as: directory/YYYY/MM/filename.mp4
+  # Example: /var/www/html/videos/2025/12/kringelen_nord_daily_2025-12-23.mp4
+  organize_by_date: true
+
+  # Date format for subdirectories (if organize_by_date is true)
+  # %Y = 4-digit year, %m = 2-digit month
+  date_format: "%Y/%m"
 
   # Video filename pattern
   # Available placeholders: {name}, {start_date}, {end_date}
@@ -57,15 +66,26 @@ video:
 
   # Video codec settings
   codec:
-    # Video codec (libx264 for H.264, libx265 for H.265/HEVC)
+    # Video codec: libx264 (software H.264 encoder)
+    # Note: h264_v4l2m2m hardware encoder doesn't support 4K on Pi
     name: "libx264"
 
     # Pixel format (yuv420p for maximum compatibility)
     pixel_format: "yuv420p"
 
+    # Preset for libx264 (affects speed vs quality vs memory)
+    # ultrafast = fastest, lowest memory, acceptable quality
+    # fast = good balance
+    # slow = best quality, highest memory (may OOM on 4K)
+    preset: "ultrafast"
+
+    # Thread count (lower = less memory, slower encoding)
+    # 2 = safe for Pi with 4GB RAM doing 4K
+    threads: 2
+
     # Constant Rate Factor (0-51, lower = better quality)
     # 18 = visually lossless, 23 = good quality, 28 = acceptable
-    crf: 20
+    crf: 23
 
   # Frame rate (frames per second)
   # 25 fps = smooth European standard
@@ -186,18 +206,27 @@ Example output:
 
 ### Video Location
 
-Videos are saved to the directory specified in config:
+Videos are saved to date-organized directories when `organize_by_date: true`:
 
 ```
-videos/
-└── kringelen_2025-11-05_to_2025-11-06.mp4
+/var/www/html/videos/
+├── 2025/
+│   ├── 11/
+│   │   ├── kringelen_nord_daily_2025-11-30.mp4
+│   │   └── ...
+│   └── 12/
+│       ├── kringelen_nord_daily_2025-12-01.mp4
+│       ├── kringelen_nord_daily_2025-12-23.mp4
+│       └── ...
 ```
 
 ### Filename Pattern
 
 Default pattern: `{name}_{start_date}_to_{end_date}.mp4`
 
-Example: `kringelen_2025-11-05_to_2025-11-06.mp4`
+For daily videos (default 24h): `{name}_daily_YYYY-MM-DD.mp4`
+
+Example: `kringelen_nord_daily_2025-12-23.mp4`
 
 ## Logging
 
@@ -244,25 +273,47 @@ This is useful for:
 
 ### Processing Time
 
-Approximate processing time on Raspberry Pi 4:
+Approximate processing time on Raspberry Pi 4/5:
 
-| Images | Resolution | Duration | Processing Time |
-|--------|-----------|----------|----------------|
-| 100    | 1920x1080 | 4s       | ~10 seconds    |
-| 500    | 1920x1080 | 20s      | ~45 seconds    |
-| 1440   | 1920x1080 | 58s      | ~2-3 minutes   |
-| 2880   | 1920x1080 | 115s     | ~5-6 minutes   |
+**1080p (1920x1080) with default settings:**
+| Images | Duration | Processing Time |
+|--------|----------|----------------|
+| 100    | 4s       | ~10 seconds    |
+| 500    | 20s      | ~45 seconds    |
+| 1440   | 58s      | ~2-3 minutes   |
+| 2880   | 115s     | ~5-6 minutes   |
+
+**4K (3840x2160) with ultrafast preset, 2 threads:**
+| Images | Duration | Processing Time |
+|--------|----------|----------------|
+| 100    | 4s       | ~2 minutes     |
+| 500    | 20s      | ~10 minutes    |
+| 1440   | 58s      | ~30 minutes    |
+| 2880   | 115s     | ~60-90 minutes |
 
 ### File Sizes
 
-Expected output file sizes (CRF 20, 25 fps):
+Expected output file sizes (CRF 23, 25 fps, ultrafast preset):
 
-| Video Duration | Images | File Size |
-|---------------|--------|-----------|
-| 4 seconds     | 100    | ~6 MB     |
-| 20 seconds    | 500    | ~30 MB    |
-| 1 minute      | 1500   | ~100 MB   |
-| 2 minutes     | 3000   | ~200 MB   |
+| Resolution | Video Duration | Images | File Size |
+|------------|---------------|--------|-----------|
+| 1080p      | 1 minute      | 1500   | ~100 MB   |
+| 1080p      | 2 minutes     | 3000   | ~200 MB   |
+| 4K         | 1 minute      | 1500   | ~300 MB   |
+| 4K         | 2 minutes     | 3000   | ~600 MB   |
+
+### Memory Usage
+
+4K encoding requires significant RAM. Use these settings to avoid OOM:
+
+```yaml
+video:
+  codec:
+    preset: "ultrafast"  # ~500MB RAM
+    threads: 2           # Limits parallel memory usage
+```
+
+With these settings, 4K encoding uses ~1-1.5GB RAM (safe for 4GB Pi).
 
 ## Troubleshooting
 
@@ -285,6 +336,36 @@ Expected output file sizes (CRF 20, 25 fps):
 2. Verify images exist and are readable
 3. Check disk space: `df -h`
 4. Try with smaller image count: `--limit 10`
+
+### Out of Memory (OOM) Errors
+
+**Problem:** ffmpeg killed by OOM killer when encoding 4K video
+
+**Symptoms:**
+- Video file created but not playable (missing moov atom)
+- `dmesg | grep oom` shows ffmpeg was killed
+- Service fails with "exit-code" status
+
+**Solutions:**
+1. **Use memory-optimized settings** (recommended):
+   ```yaml
+   video:
+     codec:
+       preset: "ultrafast"  # Lowest memory usage
+       threads: 2           # Limit parallel processing
+   ```
+
+2. **Check current memory**:
+   ```bash
+   free -h
+   ```
+
+3. **Monitor during encoding**:
+   ```bash
+   watch -n1 free -h
+   ```
+
+**Note:** The Pi's hardware encoder (h264_v4l2m2m) doesn't support 4K resolution. Use libx264 with memory-optimized settings instead.
 
 ### Wrong Time Range
 
