@@ -15,6 +15,7 @@ import shutil
 import yaml
 import sys
 import os
+from unittest.mock import Mock, patch
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -245,6 +246,185 @@ class TestTimelapseIntegration:
         )
 
         assert filename == "kringelen_2025-11-05_to_2025-11-06.mp4"
+
+
+class TestCreateVideoCodecHandling:
+    """Test codec-specific command generation in create_video."""
+
+    @pytest.fixture
+    def temp_images(self):
+        """Create temporary test images."""
+        temp_dir = tempfile.mkdtemp()
+        images = []
+        for i in range(3):
+            img_path = Path(temp_dir) / f"test_{i:03d}.jpg"
+            img_path.touch()
+            images.append(img_path)
+        yield images
+        shutil.rmtree(temp_dir)
+
+    @pytest.fixture
+    def temp_output(self):
+        """Create temporary output path."""
+        temp_dir = tempfile.mkdtemp()
+        output = Path(temp_dir) / "test_output.mp4"
+        yield output
+        shutil.rmtree(temp_dir)
+
+    @patch("make_timelapse.subprocess.run")
+    def test_libx264_uses_crf_preset_threads(self, mock_run, temp_images, temp_output):
+        """Test that libx264 codec uses CRF, preset, and threads."""
+        from make_timelapse import create_video
+
+        mock_run.return_value = Mock(returncode=0)
+        # Create a fake output file so stat() works
+        temp_output.touch()
+
+        create_video(
+            temp_images,
+            temp_output,
+            fps=25,
+            codec="libx264",
+            pixel_format="yuv420p",
+            crf=23,
+            preset="ultrafast",
+            threads=2,
+            bitrate="10M",
+        )
+
+        # Verify ffmpeg was called
+        assert mock_run.called
+        cmd = mock_run.call_args[0][0]
+
+        # Check libx264 specific options
+        assert "-preset" in cmd
+        assert "ultrafast" in cmd
+        assert "-threads" in cmd
+        assert "2" in cmd
+        assert "-crf" in cmd
+        assert "23" in cmd
+        # Should NOT have bitrate for libx264
+        assert "-b:v" not in cmd
+
+    @patch("make_timelapse.subprocess.run")
+    def test_h264_v4l2m2m_uses_bitrate(self, mock_run, temp_images, temp_output):
+        """Test that h264_v4l2m2m hardware encoder uses bitrate instead of CRF."""
+        from make_timelapse import create_video
+
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(
+            temp_images,
+            temp_output,
+            fps=25,
+            codec="h264_v4l2m2m",
+            pixel_format="yuv420p",
+            crf=23,
+            preset="ultrafast",
+            threads=2,
+            bitrate="10M",
+        )
+
+        assert mock_run.called
+        cmd = mock_run.call_args[0][0]
+
+        # Check hardware encoder specific options
+        assert "-b:v" in cmd
+        assert "10M" in cmd
+        # Should NOT have CRF/preset/threads for hardware encoder
+        assert "-crf" not in cmd
+        assert "-preset" not in cmd
+        assert "-threads" not in cmd
+
+    @patch("make_timelapse.subprocess.run")
+    def test_h264_omx_uses_bitrate(self, mock_run, temp_images, temp_output):
+        """Test that h264_omx hardware encoder uses bitrate instead of CRF."""
+        from make_timelapse import create_video
+
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(
+            temp_images,
+            temp_output,
+            fps=25,
+            codec="h264_omx",
+            pixel_format="yuv420p",
+            crf=23,
+            preset="ultrafast",
+            threads=2,
+            bitrate="15M",
+        )
+
+        assert mock_run.called
+        cmd = mock_run.call_args[0][0]
+
+        # Check hardware encoder specific options
+        assert "-b:v" in cmd
+        assert "15M" in cmd
+        # Should NOT have CRF for hardware encoder
+        assert "-crf" not in cmd
+
+    def test_create_video_empty_list(self, temp_output):
+        """Test create_video with empty image list."""
+        from make_timelapse import create_video
+
+        result = create_video([], temp_output)
+        assert result is False
+
+
+class TestVideoDirectoryOrganization:
+    """Test video output directory organization by date."""
+
+    def test_video_path_with_date_organization(self):
+        """Test that video path includes date subdirectory when organize_by_date is True."""
+        from pathlib import Path
+        from datetime import datetime
+
+        video_base_dir = "/videos"
+        video_organize_by_date = True
+        video_date_format = "%Y/%m"
+        end_datetime = datetime(2025, 11, 15, 10, 0, 0)
+
+        video_path = Path(video_base_dir)
+        if video_organize_by_date:
+            date_subdir = end_datetime.strftime(video_date_format)
+            video_path = video_path / date_subdir
+
+        assert str(video_path) == "/videos/2025/11"
+
+    def test_video_path_without_date_organization(self):
+        """Test that video path is base directory when organize_by_date is False."""
+        from pathlib import Path
+
+        video_base_dir = "/videos"
+        video_organize_by_date = False
+
+        video_path = Path(video_base_dir)
+        if video_organize_by_date:
+            video_path = video_path / "2025/11"
+
+        assert str(video_path) == "/videos"
+
+    def test_video_date_format_variations(self):
+        """Test different date format patterns."""
+        from pathlib import Path
+        from datetime import datetime
+
+        end_datetime = datetime(2025, 12, 25, 10, 0, 0)
+
+        # Test %Y/%m format
+        date_subdir = end_datetime.strftime("%Y/%m")
+        assert date_subdir == "2025/12"
+
+        # Test %Y-%m-%d format
+        date_subdir = end_datetime.strftime("%Y-%m-%d")
+        assert date_subdir == "2025-12-25"
+
+        # Test %Y format (year only)
+        date_subdir = end_datetime.strftime("%Y")
+        assert date_subdir == "2025"
 
 
 if __name__ == "__main__":

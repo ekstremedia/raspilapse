@@ -225,6 +225,190 @@ class TestWeatherDataCaching:
         assert mock_urlopen.call_count == 2
 
 
+class TestWeatherDataParsing:
+    """Test weather data parsing from different API response formats."""
+
+    @patch("urllib.request.urlopen")
+    def test_parse_modules_at_root_level(self, mock_urlopen, weather_config):
+        """Test parsing when modules are at root level (not nested under 'data')."""
+        # API response with modules directly at root level
+        root_level_response = {
+            "modules": [
+                {
+                    "id": "outdoor-module",
+                    "name": "Outdoor",
+                    "type": "Outdoor Module",
+                    "measurements": {
+                        "Temperature": 15.5,
+                        "Humidity": 65,
+                    },
+                },
+                {
+                    "id": "wind-module",
+                    "name": "Wind",
+                    "type": "Wind Gauge",
+                    "measurements": {
+                        "WindStrength": 12,
+                        "WindAngle": 90,
+                        "GustStrength": 20,
+                    },
+                },
+            ],
+            "last_updated": "2025-12-23T10:00:00+01:00",
+        }
+
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps(root_level_response).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        data = weather.get_weather_data()
+
+        assert data is not None
+        assert data["temperature"] == 15.5
+        assert data["humidity"] == 65
+        assert data["wind_speed"] == 12
+        assert data["wind_angle"] == 90
+        assert data["wind_gust"] == 20
+
+    @patch("urllib.request.urlopen")
+    def test_parse_modules_nested_under_data(self, mock_urlopen, weather_config, sample_netatmo_response):
+        """Test parsing when modules are nested under 'data' key."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        data = weather.get_weather_data()
+
+        assert data is not None
+        assert data["temperature"] == -0.2
+        assert data["humidity"] == 82
+
+    @patch("urllib.request.urlopen")
+    def test_parse_empty_modules_array(self, mock_urlopen, weather_config):
+        """Test parsing when modules array is empty."""
+        empty_modules_response = {
+            "modules": [],
+            "last_updated": "2025-12-23T10:00:00+01:00",
+        }
+
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps(empty_modules_response).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        data = weather.get_weather_data()
+
+        assert data is not None
+        assert data["temperature"] is None
+        assert data["humidity"] is None
+
+    @patch("urllib.request.urlopen")
+    def test_parse_missing_endpoint(self, mock_urlopen):
+        """Test that missing endpoint returns None."""
+        config = {
+            "weather": {
+                "enabled": True,
+                # No endpoint configured
+            }
+        }
+        weather = WeatherData(config)
+        data = weather.get_weather_data()
+        assert data is None
+
+
+class TestWeatherDataFormatWeatherLine:
+    """Test format_weather_line method."""
+
+    @patch("urllib.request.urlopen")
+    def test_format_weather_line_basic(self, mock_urlopen, weather_config, sample_netatmo_response):
+        """Test formatting a weather line with template."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        result = weather.format_weather_line("Temp: {temp} | Humidity: {humidity}")
+
+        assert "°C" in result
+        assert "%" in result
+
+    @patch("urllib.request.urlopen")
+    def test_format_weather_line_with_wind(self, mock_urlopen, weather_config, sample_netatmo_response):
+        """Test formatting weather line with wind data."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        result = weather.format_weather_line("Wind: {wind_speed} from {wind_dir}")
+
+        assert "m/s" in result
+
+    def test_format_weather_line_disabled(self):
+        """Test format_weather_line when weather is disabled."""
+        config = {"weather": {"enabled": False}}
+        weather = WeatherData(config)
+        result = weather.format_weather_line("Temp: {temp}")
+        assert result == ""
+
+    @patch("urllib.request.urlopen")
+    def test_format_weather_line_invalid_placeholder(self, mock_urlopen, weather_config, sample_netatmo_response):
+        """Test format_weather_line with invalid placeholder."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        # Template with an invalid placeholder
+        result = weather.format_weather_line("Test: {invalid_key}")
+        # Should return original template when key is unknown
+        assert result == "Test: {invalid_key}"
+
+
+class TestWeatherDataStaleCache:
+    """Test stale cache behavior."""
+
+    @patch("urllib.request.urlopen")
+    def test_stale_cache_returns_none(self, mock_urlopen, weather_config, sample_netatmo_response):
+        """Test that stale cache + failed refresh returns None."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+
+        # First call succeeds
+        data1 = weather.get_weather_data()
+        assert data1 is not None
+        assert mock_urlopen.call_count == 1
+
+        # Expire the cache
+        weather._cache_time = datetime.now() - timedelta(seconds=400)
+
+        # Second call fails (network error)
+        mock_urlopen.side_effect = urllib.error.URLError("Network error")
+        data2 = weather.get_weather_data()
+
+        # Should return None (showing "-" values) instead of stale data
+        assert data2 is None
+
+
 class TestWeatherDataFormatting:
     """Test weather data formatting methods."""
 
