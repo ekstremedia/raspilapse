@@ -436,7 +436,9 @@ Examples:
     date_format = config["output"].get("date_format", "%Y/%m/%d")
 
     # Use output-dir override if provided, otherwise use config
-    video_dir = args.output_dir if args.output_dir else config["video"]["directory"]
+    video_base_dir = args.output_dir if args.output_dir else config["video"]["directory"]
+    video_organize_by_date = config["video"].get("organize_by_date", False)
+    video_date_format = config["video"].get("date_format", "%Y/%m")
     fps = args.fps if args.fps else config["video"]["fps"]
     codec = config["video"]["codec"]["name"]
     pixel_format = config["video"]["codec"]["pixel_format"]
@@ -485,8 +487,12 @@ Examples:
     print(f"  {Colors.CYAN}→{Colors.END} First: {Colors.bold(images[0].name)}")
     print(f"  {Colors.CYAN}→{Colors.END} Last:  {Colors.bold(images[-1].name)}")
 
-    # Create output directory
-    video_path = Path(video_dir)
+    # Create output directory (with optional date organization)
+    video_path = Path(video_base_dir)
+    if video_organize_by_date:
+        # Use end_datetime to determine the subdirectory
+        date_subdir = end_datetime.strftime(video_date_format)
+        video_path = video_path / date_subdir
     video_path.mkdir(parents=True, exist_ok=True)
     logger.info(f"Output directory: {video_path}")
 

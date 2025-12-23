@@ -6,7 +6,7 @@ After=network.target
 Type=oneshot
 User=pi
 WorkingDirectory=/home/pi/raspilapse
-ExecStart=/usr/bin/python3 /home/pi/raspilapse/src/make_timelapse.py --output-dir /var/www/html/videos
+ExecStart=/usr/bin/python3 /home/pi/raspilapse/src/make_timelapse.py
 StandardOutput=journal
 StandardError=journal
 

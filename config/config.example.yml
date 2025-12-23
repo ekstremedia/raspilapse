@@ -94,8 +94,17 @@ output:
 
 # Video Output Settings
 video:
-  # Directory for generated timelapse videos
-  directory: "videos"
+  # Base directory for generated timelapse videos
+  directory: "/var/www/html/videos"
+
+  # Create subdirectories by date (YEAR/MONTH structure)
+  # When enabled, videos are organized as: directory/YYYY/MM/filename.mp4
+  # Example: /var/www/html/videos/2025/12/timelapse_daily_2025-12-23.mp4
+  organize_by_date: true
+
+  # Date format for subdirectories (if organize_by_date is true)
+  # %Y = 4-digit year, %m = 2-digit month
+  date_format: "%Y/%m"
 
   # Video filename pattern (supports strftime formatting)
   # Available placeholders:
