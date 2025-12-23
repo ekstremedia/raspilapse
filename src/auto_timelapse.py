@@ -1080,8 +1080,13 @@ class AdaptiveTimelapse:
                     image_path, metadata_path = self.capture_frame(capture, mode)
                     logger.info(f"Frame captured: {image_path}")
 
-                    # Enrich metadata with diagnostic information
-                    if metadata_path:
+                    # Enrich metadata with diagnostic information (if enabled)
+                    diagnostics_enabled = (
+                        self.config.get("adaptive_timelapse", {})
+                        .get("diagnostics", {})
+                        .get("enabled", False)
+                    )
+                    if metadata_path and diagnostics_enabled:
                         self._enrich_metadata_with_diagnostics(
                             metadata_path=metadata_path,
                             image_path=image_path,

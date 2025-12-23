@@ -276,6 +276,14 @@ adaptive_timelapse:
     # Test shot gain
     analogue_gain: 1.0
 
+  # Diagnostic metadata settings
+  # Adds extra analysis data to each capture's metadata JSON
+  diagnostics:
+    # Enable diagnostic metadata (target vs actual exposure/gain, brightness analysis)
+    # Useful for debugging and tuning transition settings
+    # Adds ~100-300ms processing per capture (image brightness analysis)
+    enabled: false
+
 # System Settings
 system:
   # Create output directory if it doesn't exist
