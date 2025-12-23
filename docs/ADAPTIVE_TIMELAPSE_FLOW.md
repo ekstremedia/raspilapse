@@ -52,7 +52,8 @@ The adaptive timelapse automatically adjusts camera settings based on ambient li
    **Day Mode (lux > 100):**
    ```python
    AeEnable = True           # Auto exposure
-   AwbEnable = True          # Auto white balance
+   AwbEnable = False         # Manual WB with smooth interpolation (prevents flickering)
+   ColourGains = [R, B]      # Interpolated towards day reference values
    Brightness = 0.0          # No adjustment (or custom from config)
    # AnalogueGain = NOT SET  # Let auto-exposure decide
    # ExposureTime = NOT SET  # Let auto-exposure decide
@@ -71,7 +72,8 @@ The adaptive timelapse automatically adjusts camera settings based on ambient li
    **Transition Mode (10 ≤ lux ≤ 100):**
    ```python
    AeEnable = False
-   AwbEnable = True
+   AwbEnable = False         # Always manual WB to prevent flickering
+   ColourGains = [R, B]      # Smoothly interpolated between night and day values
    ExposureTime = interpolated (50ms to 20s based on lux)
    AnalogueGain = interpolated (1.0 to 2.5 based on lux)
    ```
