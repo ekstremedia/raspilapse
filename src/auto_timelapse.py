@@ -279,7 +279,12 @@ class AdaptiveTimelapse:
         """
         Calculate target analogue gain based on current lux level.
 
+        Uses a continuous relationship across the entire lux range.
         Higher lux = lower gain needed (less amplification for bright scenes).
+
+        The gain adjusts to complement exposure:
+        - In bright light (high lux): low gain (1.0) since exposure provides enough light
+        - In dim light (low lux): high gain to amplify the signal
 
         Args:
             lux: Current light level in lux
@@ -287,33 +292,57 @@ class AdaptiveTimelapse:
         Returns:
             Target analogue gain value
         """
+        import math
+
         adaptive_config = self.config["adaptive_timelapse"]
-        thresholds = adaptive_config["light_thresholds"]
-        night_threshold = thresholds["night"]
-        day_threshold = thresholds["day"]
 
         # Get gain limits from config
         night_gain = adaptive_config["night_mode"]["analogue_gain"]
         day_gain = adaptive_config.get("day_mode", {}).get("analogue_gain", 1.0)
 
-        if lux <= night_threshold:
-            # Full night - use max gain
+        # Clamp lux to reasonable range
+        lux = max(0.01, min(10000, lux))
+
+        # Use logarithmic interpolation for smooth gain transitions
+        # Map lux range to gain range using log scale
+        # At lux=1, gain should be near night_gain
+        # At lux=500+, gain should be near day_gain
+
+        # Calculate position in log space (0 to 1)
+        # lux=1 → position=0 (night), lux=500 → position=1 (day)
+        lux_low = 1.0  # Lux level for max gain
+        lux_high = 500.0  # Lux level for min gain
+
+        if lux <= lux_low:
             return night_gain
-        elif lux >= day_threshold:
-            # Full day - use min gain
+        elif lux >= lux_high:
             return day_gain
         else:
-            # Transition - interpolate based on lux position
-            # Use inverse relationship: more light = less gain
-            position = (lux - night_threshold) / (day_threshold - night_threshold)
-            target_gain = night_gain - position * (night_gain - day_gain)
+            # Logarithmic interpolation
+            log_position = (math.log10(lux) - math.log10(lux_low)) / (
+                math.log10(lux_high) - math.log10(lux_low)
+            )
+            log_position = max(0.0, min(1.0, log_position))
+
+            # Interpolate gain (higher position = lower gain)
+            target_gain = night_gain - log_position * (night_gain - day_gain)
+
+            logger.debug(
+                f"Lux-based gain: lux={lux:.2f} → position={log_position:.2f} → gain={target_gain:.2f}"
+            )
+
             return target_gain
 
     def _calculate_target_exposure_from_lux(self, lux: float) -> float:
         """
         Calculate target exposure time based on current lux level.
 
-        Higher lux = shorter exposure needed.
+        Uses a continuous logarithmic relationship across the entire lux range,
+        not just thresholds. This ensures exposure adjusts smoothly even within
+        "day mode" as clouds pass or light changes.
+
+        The formula: exposure = k / lux (inverse relationship)
+        In log space: log(exposure) = log(k) - log(lux)
 
         Args:
             lux: Current light level in lux
@@ -321,32 +350,38 @@ class AdaptiveTimelapse:
         Returns:
             Target exposure time in seconds
         """
+        import math
+
         adaptive_config = self.config["adaptive_timelapse"]
-        thresholds = adaptive_config["light_thresholds"]
-        night_threshold = thresholds["night"]
-        day_threshold = thresholds["day"]
 
         # Get exposure limits from config
         night_exposure = adaptive_config["night_mode"]["max_exposure_time"]
-        day_exposure = adaptive_config.get("day_mode", {}).get("exposure_time", 0.01)
+        min_exposure = adaptive_config.get("day_mode", {}).get("exposure_time", 0.01)
 
-        if lux <= night_threshold:
-            # Full night - use max exposure
-            return night_exposure
-        elif lux >= day_threshold:
-            # Full day - use short exposure
-            return day_exposure
-        else:
-            # Transition - interpolate based on lux position (logarithmic)
-            import math
+        # Clamp lux to reasonable range to avoid extreme values
+        lux = max(0.01, min(10000, lux))
 
-            position = (lux - night_threshold) / (day_threshold - night_threshold)
+        # Use inverse relationship: exposure = calibration_constant / lux
+        # Calibrate so that:
+        #   - At lux=1, exposure approaches night_exposure (20s)
+        #   - At lux=1000, exposure approaches min_exposure (10ms)
+        #
+        # Formula: exposure = (night_exposure * reference_lux) / lux
+        # where reference_lux is the lux level at which we want night_exposure
+        reference_lux = 1.0  # At 1 lux, use night exposure
 
-            # Log-space interpolation for exposure
-            log_night = math.log10(max(0.0001, night_exposure))
-            log_day = math.log10(max(0.0001, day_exposure))
-            log_target = log_night - position * (log_night - log_day)
-            return 10**log_target
+        # Calculate target exposure using inverse relationship
+        target_exposure = (night_exposure * reference_lux) / lux
+
+        # Clamp to valid range
+        target_exposure = max(min_exposure, min(night_exposure, target_exposure))
+
+        logger.debug(
+            f"Lux-based exposure: lux={lux:.2f} → target={target_exposure:.4f}s "
+            f"(range: {min_exposure:.4f}s - {night_exposure:.1f}s)"
+        )
+
+        return target_exposure
 
     def _update_day_wb_reference(self, metadata: Dict):
         """
