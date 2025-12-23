@@ -157,8 +157,13 @@ class WeatherData:
 
         try:
             # Navigate to modules array
-            station_data = data.get("data", {})
-            modules = station_data.get("modules", [])
+            # API can return modules directly at root level or nested under "data"
+            if "modules" in data:
+                modules = data.get("modules", [])
+                station_data = data
+            else:
+                station_data = data.get("data", {})
+                modules = station_data.get("modules", [])
 
             # Find outdoor module (temperature, humidity)
             for module in modules:
