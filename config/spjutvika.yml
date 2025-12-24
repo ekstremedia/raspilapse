@@ -1,0 +1,192 @@
+# Raspilapse Configuration - Spjutvika
+#
+# Updated for gemini branch with Polar Awareness and Holy Grail transitions
+
+# Location Settings (for sun position calculation)
+# Used for Polar Day/Night detection at high latitudes (68°N)
+# This enables "Civil Twilight Override" - forces Day mode when sun > -6°
+location:
+  latitude: 68.7
+  longitude: 15.4
+  timezone: "Europe/Oslo"
+  civil_twilight_threshold: -6.0
+
+# Camera Settings
+camera:
+  resolution:
+    width: 3840
+    height: 2160
+
+  transforms:
+    horizontal_flip: false
+    vertical_flip: false
+
+  controls:
+    af_mode: 0
+    lens_position: 0.0
+
+# Output Settings
+output:
+  directory: "/var/www/html/images"
+  filename_pattern: "{name}_%Y_%m_%d_%H_%M_%S.jpg"
+  project_name: "spjutvika"
+  quality: 75
+  organize_by_date: true
+  date_format: "%Y/%m/%d"
+
+  symlink_latest:
+    enabled: true
+    path: "/var/www/html/status.jpg"
+
+# Video Output Settings
+video:
+  directory: "/var/www/html/videos"
+  organize_by_date: true
+  date_format: "%Y/%m"
+  filename_pattern: "{name}_{start_date}_to_{end_date}.mp4"
+
+  codec:
+    name: "libx264"
+    pixel_format: "yuv420p"
+    preset: "ultrafast"
+    threads: 2
+    crf: 23
+
+  fps: 25
+
+# Timelapse Settings
+timelapse:
+  interval: 3
+  num_frames: 0
+  stabilization_delay: 2
+
+# Adaptive Timelapse Settings (for auto_timelapse.py)
+adaptive_timelapse:
+  enabled: true
+  interval: 30
+  num_frames: 0
+
+  light_thresholds:
+    night: 5
+    day: 80
+
+  # Night mode settings
+  night_mode:
+    max_exposure_time: 20.0
+    analogue_gain: 6
+    awb_enable: false
+    colour_gains: [1.83, 2.02]
+
+  # Day mode settings
+  day_mode:
+    exposure_time: 0.01
+    analogue_gain: 1.0
+    awb_enable: true
+
+  # Transition mode settings (dawn/dusk)
+  transition_mode:
+    smooth_transition: true
+
+    # Sequential ramping (shutter first, then gain) - reduces noise
+    sequential_ramping: true
+
+    # Smooth transition settings
+    lux_smoothing_factor: 0.3
+    hysteresis_frames: 3
+    wb_transition_speed: 0.15
+    gain_transition_speed: 0.10
+    exposure_transition_speed: 0.10
+    smooth_wb_in_day_mode: true
+    smooth_exposure_in_day_mode: true
+
+    # Brightness feedback for butter-smooth transitions
+    brightness_feedback_enabled: true
+    target_brightness: 120
+    brightness_tolerance: 40
+    brightness_feedback_strength: 0.2
+
+  # Test shot settings
+  test_shot:
+    enabled: true
+    exposure_time: 0.1
+    analogue_gain: 1.0
+    frequency: 1
+
+  # Diagnostic metadata (for debugging/tuning)
+  diagnostics:
+    enabled: false
+
+# System Settings
+system:
+  create_directories: true
+  save_metadata: true
+  metadata_filename: "{name}_%Y_%m_%d_%H_%M_%S_metadata.json"
+  metadata_folder: "metadata"
+
+# Overlay Settings
+overlay:
+  enabled: true
+
+  font:
+    family: "DejaVuSans-Bold.ttf"
+    size_ratio: 0.020
+    color: [255, 255, 255, 255]
+
+  background:
+    enabled: true
+    color: [0, 0, 30, 70]
+    padding: 0.6
+
+  position: "top-bar"
+
+  custom_position:
+    x: 5
+    y: 95
+
+  margin: 10
+
+  content:
+    line_1_left: "{camera_name}"
+    line_1_right: "{temp}, humidity: {humidity}, wind: {wind} {wind_dir}, rain: {rain} "
+    line_2_left: "{date} {time}"
+    line_2_right: "Exposure: {exposure}, {iso}, lux: {lux} - CPU: {cpu_temp}, load: {load_1min}, disk: {disk_free}, mem: {memory_percent}"
+
+  camera_name: "Spjutvika"
+
+  datetime:
+    localized: true
+    locale: "nb_NO.UTF-8"
+    show_seconds: false
+    date_format: "%Y-%m-%d"
+    time_format: "%H:%M"
+
+  layout:
+    line_spacing: 1.2
+    section_spacing: false
+    bottom_padding_multiplier: 0.7
+
+# Logging Settings
+logging:
+  enabled: true
+  level: "INFO"
+  log_file: "logs/{script}.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  console: true
+  max_size_mb: 10
+  backup_count: 5
+
+# Analysis and Graphs Settings
+graphs:
+  directory: "graphs"
+  width: 14
+  height: 8
+  dpi: 150
+  default_hours: 24
+
+# Weather Data Settings
+weather:
+  enabled: true
+  endpoint: "https://ekstremedia.no/api/netatmo/stations/2c4735da-abbe-425e-a2ba-1006e786554c"
+  cache_duration: 300
+  timeout: 5
