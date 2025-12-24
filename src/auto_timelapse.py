@@ -66,6 +66,14 @@ class AdaptiveTimelapse:
         self._last_brightness: float = None  # Previous frame's mean brightness
         self._brightness_correction_factor: float = 1.0  # Multiplier for exposure adjustment
 
+        # Holy Grail transition state - seeded from actual camera metadata
+        self._transition_seeded: bool = False  # True once we've seeded from metadata
+        self._seed_exposure: float = None  # Actual exposure from last auto frame
+        self._seed_gain: float = None  # Actual gain from last auto frame
+        self._seed_wb_gains: tuple = None  # Actual WB gains from last auto frame
+        self._previous_mode: str = None  # Track mode changes for seeding detection
+        self._last_day_capture_metadata: Dict = None  # Metadata from last day mode capture
+
         # Load transition smoothing config with defaults
         transition_config = self.config.get("adaptive_timelapse", {}).get("transition_mode", {})
         self._lux_smoothing_factor = transition_config.get("lux_smoothing_factor", 0.3)
@@ -502,6 +510,86 @@ class AdaptiveTimelapse:
                     f"Updated day WB reference: [{colour_gains[0]:.2f}, {colour_gains[1]:.2f}] "
                     f"at {lux:.0f} lux"
                 )
+
+    def _seed_from_metadata(self, metadata: Dict, capture_metadata: Dict = None):
+        """
+        Seed interpolation state from actual camera metadata (Holy Grail technique).
+
+        This captures the REAL camera settings and uses them as the starting point
+        for manual control. This eliminates the "flash" that occurs when switching
+        from auto to manual mode.
+
+        For WB gains: Uses test shot metadata (AWB is enabled during test shots)
+        For exposure/gain: Uses last actual capture metadata (if available) or
+        calculates from current lux (already handled by interpolation init)
+
+        Called when entering transition mode from day mode.
+
+        Args:
+            metadata: Test shot metadata (has AWB-chosen ColourGains)
+            capture_metadata: Optional metadata from last actual capture
+        """
+        # AWB gains from test shot ARE useful - test shot has AWB enabled
+        colour_gains = metadata.get("ColourGains")
+
+        if colour_gains is not None:
+            # Validate gains are reasonable
+            if 1.0 < colour_gains[0] < 4.0 and 1.0 < colour_gains[1] < 4.0:
+                self._seed_wb_gains = tuple(colour_gains)
+                self._last_colour_gains = tuple(colour_gains)
+                # Update day WB reference since this is what AWB chose at transition
+                self._day_wb_reference = tuple(colour_gains)
+                logger.info(
+                    f"[Holy Grail] Seeded WB from AWB: "
+                    f"[{colour_gains[0]:.2f}, {colour_gains[1]:.2f}]"
+                )
+
+        # If we have actual capture metadata (from last day mode frame), use its exposure/gain
+        if capture_metadata:
+            exposure_time_us = capture_metadata.get("ExposureTime")
+            analogue_gain = capture_metadata.get("AnalogueGain")
+
+            if exposure_time_us is not None:
+                self._seed_exposure = exposure_time_us / 1_000_000
+                self._last_exposure_time = self._seed_exposure
+                logger.info(
+                    f"[Holy Grail] Seeded exposure from last capture: {self._seed_exposure:.4f}s"
+                )
+
+            if analogue_gain is not None:
+                self._seed_gain = analogue_gain
+                self._last_analogue_gain = analogue_gain
+                logger.info(f"[Holy Grail] Seeded gain from last capture: {self._seed_gain:.2f}")
+
+        self._transition_seeded = True
+        logger.info(
+            "[Holy Grail] Transition seeded - AWB locked, "
+            "smooth interpolation will prevent flash"
+        )
+
+    def _log_transition_progress(self, lux: float, position: float):
+        """
+        Log transition progress in Holy Grail format.
+
+        Args:
+            lux: Current smoothed lux value
+            position: Transition position (0.0=night, 1.0=day)
+        """
+        progress_pct = (1.0 - position) * 100  # 0% at day threshold, 100% at night
+        exposure_ms = (self._last_exposure_time or 0) * 1000
+        gain = self._last_analogue_gain or 0
+        wb_status = "Locked" if self._transition_seeded else "Learning"
+
+        if exposure_ms >= 1000:
+            shutter_str = f"{exposure_ms/1000:.1f}s"
+        else:
+            shutter_str = f"{exposure_ms:.0f}ms"
+
+        logger.info(
+            f"[Transition] Progress: {progress_pct:.0f}% | "
+            f"Lux: {lux:.1f} | Shutter: {shutter_str} | "
+            f"Gain: {gain:.2f} | AWB: {wb_status}"
+        )
 
     def _get_target_colour_gains(self, mode: str, position: float = None) -> tuple:
         """
@@ -1172,6 +1260,30 @@ class AdaptiveTimelapse:
                             )
                             transition_position = max(0.0, min(1.0, transition_position))
 
+                        # === HOLY GRAIL: Seed from metadata when entering transition ===
+                        # Detect mode change: Day → Transition or Day → Night
+                        entering_manual_mode = self._previous_mode == LightMode.DAY and mode in (
+                            LightMode.TRANSITION,
+                            LightMode.NIGHT,
+                        )
+
+                        if entering_manual_mode and not self._transition_seeded:
+                            # Seed interpolation state from actual camera metadata
+                            # This makes first manual frame identical to last auto frame
+                            self._seed_from_metadata(test_metadata, self._last_day_capture_metadata)
+
+                        # Reset seed state when returning to day mode
+                        if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
+                            self._transition_seeded = False
+                            logger.info("[Holy Grail] Returned to Day mode - seed state reset")
+
+                        # Log transition progress
+                        if mode == LightMode.TRANSITION and transition_position is not None:
+                            self._log_transition_progress(lux, transition_position)
+
+                        # Track mode for next iteration
+                        self._previous_mode = mode
+
                         # Get settings for this mode (with smooth WB interpolation)
                         settings = self.get_camera_settings(mode, lux)
 
@@ -1243,6 +1355,7 @@ class AdaptiveTimelapse:
 
                     # Update day WB reference from actual capture metadata
                     # This allows us to learn good daylight WB values for smooth transitions
+                    # Also store for Holy Grail seeding when entering transition
                     if metadata_path and mode == LightMode.DAY:
                         try:
                             import json
@@ -1250,6 +1363,8 @@ class AdaptiveTimelapse:
                             with open(metadata_path, "r") as f:
                                 capture_metadata = json.load(f)
                             self._update_day_wb_reference(capture_metadata)
+                            # Store for Holy Grail seeding
+                            self._last_day_capture_metadata = capture_metadata
                         except Exception as e:
                             logger.debug(f"Could not read capture metadata for WB reference: {e}")
 
