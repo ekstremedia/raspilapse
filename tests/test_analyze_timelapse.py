@@ -290,6 +290,22 @@ class TestExportToExcel:
             "colour_gains_blue": [1.3, 1.4, 1.5, 1.6, 1.7],
             "digital_gain": [1.0, 1.0, 1.0, 1.0, 1.0],
             "filenames": [f"test_{i}.jpg" for i in range(5)],
+            "mode": ["day", "day", "day", "day", "day"],
+            # Diagnostic fields (can be None if diagnostics disabled)
+            "raw_lux": [None] * 5,
+            "smoothed_lux": [None] * 5,
+            "target_exposure_ms": [None] * 5,
+            "interpolated_exposure_ms": [None] * 5,
+            "target_gain": [None] * 5,
+            "interpolated_gain": [None] * 5,
+            "transition_position": [None] * 5,
+            "brightness_mean": [None] * 5,
+            "brightness_median": [None] * 5,
+            "brightness_std": [None] * 5,
+            "brightness_p5": [None] * 5,
+            "brightness_p95": [None] * 5,
+            "underexposed_percent": [None] * 5,
+            "overexposed_percent": [None] * 5,
         }
 
         config = load_config(sample_config)
