@@ -169,10 +169,11 @@ adaptive_timelapse:
   # These values determine when to switch between day/night/transition modes
   light_thresholds:
     # Lux below this = night mode (long exposure)
-    night: 10
+    # Lower values = transition starts earlier (prevents overexposure)
+    night: 5
 
     # Lux above this = day mode (normal exposure)
-    day: 100
+    day: 80
 
     # Between night and day = transition mode (gradual adjustment)
     # Automatically calculated between night and day thresholds
@@ -245,15 +246,15 @@ adaptive_timelapse:
 
     # Gain (ISO) transition speed (0.0-1.0)
     # How quickly gain changes towards target per frame
-    # Lower = smoother ISO transitions (0.1-0.2 recommended)
+    # Lower = smoother ISO transitions (0.05-0.15 recommended)
     # Higher = faster but may show brightness jumps
-    gain_transition_speed: 0.15
+    gain_transition_speed: 0.10
 
     # Exposure time transition speed (0.0-1.0)
     # How quickly exposure changes towards target per frame
     # Uses logarithmic interpolation for natural brightness changes
-    # Lower = smoother transitions (0.1-0.2 recommended)
-    exposure_transition_speed: 0.15
+    # Lower = smoother transitions (0.05-0.15 recommended)
+    exposure_transition_speed: 0.10
 
     # Use smooth WB interpolation even in day mode
     # When true, always uses manual WB gains (interpolated)
@@ -264,6 +265,29 @@ adaptive_timelapse:
     # When true, calculates exposure and gain based on lux (prevents ISO jumps)
     # When false, uses camera's auto-exposure (legacy behavior, may cause ISO jumps)
     smooth_exposure_in_day_mode: true
+
+    # === BRIGHTNESS FEEDBACK SETTINGS ===
+    # These settings enable real-time brightness correction for butter-smooth
+    # transitions. The system analyzes actual image brightness and gradually
+    # adjusts exposure to maintain consistent brightness.
+
+    # Enable brightness feedback (recommended for smooth transitions)
+    brightness_feedback_enabled: true
+
+    # Target brightness (0-255, where 128 is mid-gray)
+    # Higher = brighter images, lower = darker images
+    target_brightness: 120
+
+    # Brightness tolerance (pixels within target ± tolerance are acceptable)
+    # Larger tolerance = less correction, more stable
+    # Smaller tolerance = more correction, may cause subtle fluctuations
+    brightness_tolerance: 40
+
+    # Brightness feedback strength (0.0-1.0)
+    # How quickly the correction factor adjusts per frame
+    # Lower = smoother but slower to correct (recommended: 0.1-0.3)
+    # Higher = faster correction but may cause subtle jumps
+    brightness_feedback_strength: 0.2
 
   # Test shot settings (used to measure light levels)
   test_shot:

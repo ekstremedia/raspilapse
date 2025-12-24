@@ -1080,16 +1080,18 @@ def export_to_excel(
         ws_raw.cell(
             row=i,
             column=13,
-            value=round(data["target_exposure_ms"][idx], 2)
-            if data["target_exposure_ms"][idx]
-            else "",
+            value=(
+                round(data["target_exposure_ms"][idx], 2) if data["target_exposure_ms"][idx] else ""
+            ),
         )
         ws_raw.cell(
             row=i,
             column=14,
-            value=round(data["interpolated_exposure_ms"][idx], 2)
-            if data["interpolated_exposure_ms"][idx]
-            else "",
+            value=(
+                round(data["interpolated_exposure_ms"][idx], 2)
+                if data["interpolated_exposure_ms"][idx]
+                else ""
+            ),
         )
         ws_raw.cell(
             row=i,
@@ -1099,9 +1101,9 @@ def export_to_excel(
         ws_raw.cell(
             row=i,
             column=16,
-            value=round(data["interpolated_gain"][idx], 2)
-            if data["interpolated_gain"][idx]
-            else "",
+            value=(
+                round(data["interpolated_gain"][idx], 2) if data["interpolated_gain"][idx] else ""
+            ),
         )
         ws_raw.cell(
             row=i,
@@ -1111,16 +1113,20 @@ def export_to_excel(
         ws_raw.cell(
             row=i,
             column=18,
-            value=round(data["underexposed_percent"][idx], 2)
-            if data["underexposed_percent"][idx]
-            else "",
+            value=(
+                round(data["underexposed_percent"][idx], 2)
+                if data["underexposed_percent"][idx]
+                else ""
+            ),
         )
         ws_raw.cell(
             row=i,
             column=19,
-            value=round(data["overexposed_percent"][idx], 2)
-            if data["overexposed_percent"][idx]
-            else "",
+            value=(
+                round(data["overexposed_percent"][idx], 2)
+                if data["overexposed_percent"][idx]
+                else ""
+            ),
         )
         ws_raw.cell(row=i, column=20, value=data["filenames"][idx])
 

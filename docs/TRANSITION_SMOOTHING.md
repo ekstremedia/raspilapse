@@ -54,9 +54,14 @@ Raw Lux → EMA Smoothing → Mode Determination → Hysteresis → Camera Setti
 
 ## Configuration
 
-All settings are in `config/config.yml` under `adaptive_timelapse.transition_mode`:
+All settings are in `config/config.yml` under `adaptive_timelapse`:
 
 ```yaml
+# Light thresholds determine mode switching
+light_thresholds:
+  night: 5     # Below = night mode (was 10, lowered for earlier transition)
+  day: 80      # Above = day mode (was 100)
+
 transition_mode:
   smooth_transition: true
 
@@ -67,27 +72,41 @@ transition_mode:
   # === SMOOTH TRANSITION SETTINGS ===
 
   # Lux smoothing factor (EMA alpha)
-  # Formula: smoothed = alpha * raw + (1 - alpha) * previous
-  # Lower = smoother but slower response
-  # Range: 0.1 - 0.5, Default: 0.3
   lux_smoothing_factor: 0.3
 
   # Hysteresis: frames required before mode change
-  # Higher = more stable but slower transitions
-  # Range: 2 - 5, Default: 3
   hysteresis_frames: 3
 
-  # White balance transition speed
-  # How fast WB gains change per frame (0.0 - 1.0)
-  # Lower = smoother color transitions
-  # Range: 0.1 - 0.3, Default: 0.15
+  # Transition speeds (0.0-1.0, lower = smoother)
   wb_transition_speed: 0.15
+  gain_transition_speed: 0.10    # Slowed from 0.15
+  exposure_transition_speed: 0.10  # Slowed from 0.15
 
   # Use smooth WB in day mode
-  # true = always use interpolated manual WB
-  # false = use camera AWB in full day mode (legacy)
   smooth_wb_in_day_mode: true
+
+  # === BRIGHTNESS FEEDBACK SETTINGS ===
+
+  # Enable brightness feedback for butter-smooth transitions
+  brightness_feedback_enabled: true
+
+  # Target brightness (0-255)
+  target_brightness: 120
+
+  # Tolerance before correction kicks in
+  brightness_tolerance: 40
+
+  # How fast correction adjusts (0.0-1.0, lower = smoother)
+  brightness_feedback_strength: 0.2
 ```
+
+**Exposure Formula:** `target_exposure = (20 * 2.5) / lux × correction_factor`
+- Base formula: 50 / lux
+- Correction factor adjusts based on actual vs target brightness
+- At lux 100: ~500ms (adjusted by correction)
+- At lux 600: ~83ms (adjusted by correction)
+
+See [TRANSITION_TUNING_LOG.md](TRANSITION_TUNING_LOG.md) for tuning history and adjustments.
 
 ---
 
@@ -179,6 +198,51 @@ def _update_day_wb_reference(self, metadata: Dict):
 ```
 
 Default day reference if none learned: `[2.5, 1.6]`
+
+### 5. Brightness Feedback (Butter-Smooth Transitions)
+
+Real-time brightness correction that analyzes each captured image and gradually adjusts exposure to maintain consistent brightness. This eliminates light flashes during transitions.
+
+**How it works:**
+1. After each capture, analyze actual mean brightness (0-255)
+2. Compare to target brightness (default: 120)
+3. If outside tolerance (±40), calculate correction factor
+4. Apply correction factor to next frame's target exposure
+5. Correction changes VERY gradually (0.2 per frame) for smoothness
+
+```python
+def _apply_brightness_feedback(self, actual_brightness: float) -> float:
+    error = actual_brightness - target_brightness  # 120
+
+    # Within tolerance? Slowly decay correction back to 1.0
+    if abs(error) <= tolerance:  # 40
+        # Decay towards 1.0 at 0.05 per frame
+        return correction_factor
+
+    # Outside tolerance? Adjust correction gradually
+    error_percent = error / target_brightness
+    adjustment = error_percent * feedback_strength  # 0.2
+    correction_factor *= (1.0 - adjustment)
+
+    return correction_factor  # Range: 0.25 to 4.0
+```
+
+**Example: Morning transition with images getting too bright**
+```
+Frame 1: brightness=160, target=120, error=+40 → correction=0.93 (reduce exposure)
+Frame 2: brightness=155, target=120, error=+35 → correction=0.88
+Frame 3: brightness=145, target=120, error=+25 → correction=0.84
+...
+Frame 10: brightness=125, target=120, error=+5 → within tolerance, decay
+Frame 15: brightness=122, target=120 → stable, correction≈1.0
+```
+
+**Why this eliminates light flashes:**
+- Changes are spread across many frames (feedback_strength=0.2)
+- Goes through TWO layers of smoothing:
+  1. Correction factor changes gradually (0.2 per frame max)
+  2. Target exposure goes through interpolation (0.1 per frame)
+- Net effect: actual exposure changes at ~0.02 per frame = butter smooth
 
 ---
 
@@ -360,6 +424,7 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 
 - [x] Diagnostic metadata for debugging transitions (implemented 2025-12-23)
 - [x] Image brightness analysis in metadata (implemented 2025-12-23)
+- [x] Brightness feedback system for butter-smooth transitions (implemented 2025-12-24)
 - [ ] Adaptive WB transition speed based on lux rate of change
 - [ ] Per-channel WB smoothing (red and blue could have different speeds)
 - [ ] Sunset/sunrise detection for optimized transition timing

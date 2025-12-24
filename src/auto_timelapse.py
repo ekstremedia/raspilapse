@@ -62,6 +62,10 @@ class AdaptiveTimelapse:
             None  # Previous frame's exposure time for smooth transition
         )
 
+        # Brightness feedback state for smooth transitions
+        self._last_brightness: float = None  # Previous frame's mean brightness
+        self._brightness_correction_factor: float = 1.0  # Multiplier for exposure adjustment
+
         # Load transition smoothing config with defaults
         transition_config = self.config.get("adaptive_timelapse", {}).get("transition_mode", {})
         self._lux_smoothing_factor = transition_config.get("lux_smoothing_factor", 0.3)
@@ -69,6 +73,13 @@ class AdaptiveTimelapse:
         self._wb_transition_speed = transition_config.get("wb_transition_speed", 0.15)
         self._gain_transition_speed = transition_config.get("gain_transition_speed", 0.15)
         self._exposure_transition_speed = transition_config.get("exposure_transition_speed", 0.15)
+
+        # Brightness feedback config
+        self._target_brightness = transition_config.get("target_brightness", 120)
+        self._brightness_tolerance = transition_config.get("brightness_tolerance", 40)
+        self._brightness_feedback_strength = transition_config.get(
+            "brightness_feedback_strength", 0.3
+        )
 
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -275,6 +286,79 @@ class AdaptiveTimelapse:
         )
         return new_exposure
 
+    def _apply_brightness_feedback(self, actual_brightness: float) -> float:
+        """
+        Apply gradual brightness feedback to correct exposure errors.
+
+        This method maintains a slow-moving correction factor based on the
+        difference between actual and target brightness. The correction is
+        applied VERY gradually over multiple frames to ensure butter-smooth
+        transitions with no visible jumps.
+
+        The correction factor is a multiplier for exposure:
+        - If images are consistently too bright, factor decreases below 1.0
+        - If images are consistently too dark, factor increases above 1.0
+
+        Args:
+            actual_brightness: Mean brightness of the captured image (0-255)
+
+        Returns:
+            Updated correction factor to apply to target exposure
+        """
+        if actual_brightness is None:
+            return self._brightness_correction_factor
+
+        # Store for tracking
+        self._last_brightness = actual_brightness
+
+        # Calculate brightness error (positive = too bright, negative = too dark)
+        error = actual_brightness - self._target_brightness
+
+        # Check if we're within acceptable tolerance
+        if abs(error) <= self._brightness_tolerance:
+            # Within tolerance - slowly decay correction back to 1.0
+            # This prevents over-correction after reaching target
+            decay_rate = 0.05  # Very slow decay
+            if self._brightness_correction_factor > 1.0:
+                self._brightness_correction_factor = max(
+                    1.0, self._brightness_correction_factor - decay_rate
+                )
+            elif self._brightness_correction_factor < 1.0:
+                self._brightness_correction_factor = min(
+                    1.0, self._brightness_correction_factor + decay_rate
+                )
+            logger.debug(
+                f"Brightness within tolerance ({actual_brightness:.1f}), "
+                f"correction decaying to {self._brightness_correction_factor:.3f}"
+            )
+            return self._brightness_correction_factor
+
+        # Outside tolerance - apply gradual correction
+        # Convert error to a correction percentage
+        # error of 40 (e.g., brightness 160 vs target 120) = 33% too bright
+        error_percent = error / self._target_brightness
+
+        # Apply feedback strength to make changes very gradual
+        # With feedback_strength=0.3 and 33% error, we adjust by ~10% per frame
+        # But this goes through interpolation too, so actual change is even smaller
+        adjustment = error_percent * self._brightness_feedback_strength
+
+        # Update correction factor (reducing it if too bright, increasing if too dark)
+        # Too bright (positive error) → reduce correction factor (less exposure)
+        # Too dark (negative error) → increase correction factor (more exposure)
+        self._brightness_correction_factor *= 1.0 - adjustment
+
+        # Clamp to reasonable range (0.25x to 4x correction)
+        self._brightness_correction_factor = max(0.25, min(4.0, self._brightness_correction_factor))
+
+        logger.debug(
+            f"Brightness feedback: actual={actual_brightness:.1f}, "
+            f"target={self._target_brightness}, error={error:.1f}, "
+            f"correction={self._brightness_correction_factor:.3f}"
+        )
+
+        return self._brightness_correction_factor
+
     def _calculate_target_gain_from_lux(self, lux: float) -> float:
         """
         Calculate target analogue gain based on current lux level.
@@ -344,11 +428,14 @@ class AdaptiveTimelapse:
         The formula: exposure = k / lux (inverse relationship)
         In log space: log(exposure) = log(k) - log(lux)
 
+        Additionally applies brightness feedback correction to compensate for
+        any consistent over/under exposure detected in previous frames.
+
         Args:
             lux: Current light level in lux
 
         Returns:
-            Target exposure time in seconds
+            Target exposure time in seconds (with brightness correction applied)
         """
         import math
 
@@ -363,22 +450,32 @@ class AdaptiveTimelapse:
 
         # Use inverse relationship: exposure = calibration_constant / lux
         # Calibrate so that:
-        #   - At lux=1, exposure approaches night_exposure (20s)
-        #   - At lux=1000, exposure approaches min_exposure (10ms)
+        #   - At low lux, exposure approaches night_exposure (20s)
+        #   - At high lux, exposure gives mid-tone brightness (~120)
         #
         # Formula: exposure = (night_exposure * reference_lux) / lux
-        # where reference_lux is the lux level at which we want night_exposure
-        reference_lux = 1.0  # At 1 lux, use night exposure
+        # where reference_lux controls the overall brightness level
+        #
+        # Tuning history:
+        #   - 1.0: Original - too dark in day mode (brightness ~40 at lux 600)
+        #   - 2.5: 2024-12-24 - increased for brighter day images (target brightness ~120)
+        reference_lux = 2.5  # Higher = brighter images across all lux levels
 
-        # Calculate target exposure using inverse relationship
-        target_exposure = (night_exposure * reference_lux) / lux
+        # Calculate base target exposure using inverse relationship
+        base_exposure = (night_exposure * reference_lux) / lux
+
+        # Apply brightness feedback correction
+        # This gradually adjusts exposure based on actual image brightness
+        # to maintain consistent brightness even when lux formula is imperfect
+        target_exposure = base_exposure * self._brightness_correction_factor
 
         # Clamp to valid range
         target_exposure = max(min_exposure, min(night_exposure, target_exposure))
 
         logger.debug(
-            f"Lux-based exposure: lux={lux:.2f} → target={target_exposure:.4f}s "
-            f"(range: {min_exposure:.4f}s - {night_exposure:.1f}s)"
+            f"Lux-based exposure: lux={lux:.2f} → base={base_exposure:.4f}s "
+            f"× correction={self._brightness_correction_factor:.3f} "
+            f"→ target={target_exposure:.4f}s"
         )
 
         return target_exposure
@@ -887,6 +984,14 @@ class AdaptiveTimelapse:
             diagnostics["hysteresis_hold_count"] = getattr(self, "_mode_hold_count", 0)
             diagnostics["hysteresis_last_mode"] = getattr(self, "_last_mode", None)
 
+            # Add brightness feedback state
+            diagnostics["brightness_correction_factor"] = round(
+                self._brightness_correction_factor, 4
+            )
+            diagnostics["target_brightness"] = self._target_brightness
+            if self._last_brightness is not None:
+                diagnostics["last_brightness"] = round(self._last_brightness, 2)
+
             # Analyze image brightness
             brightness_analysis = self._analyze_image_brightness(image_path)
             if brightness_analysis:
@@ -1095,6 +1200,23 @@ class AdaptiveTimelapse:
                             raw_lux=raw_lux,
                             transition_position=transition_position,
                         )
+
+                    # Apply brightness feedback for butter-smooth transitions
+                    # This analyzes actual image brightness and gradually adjusts
+                    # the exposure correction factor to maintain consistent brightness
+                    brightness_feedback_enabled = (
+                        self.config.get("adaptive_timelapse", {})
+                        .get("transition_mode", {})
+                        .get("brightness_feedback_enabled", True)
+                    )
+                    if brightness_feedback_enabled:
+                        try:
+                            brightness_analysis = self._analyze_image_brightness(image_path)
+                            if brightness_analysis:
+                                actual_brightness = brightness_analysis.get("mean_brightness")
+                                self._apply_brightness_feedback(actual_brightness)
+                        except Exception as e:
+                            logger.debug(f"Could not apply brightness feedback: {e}")
 
                     # Update day WB reference from actual capture metadata
                     # This allows us to learn good daylight WB values for smooth transitions
