@@ -1,0 +1,423 @@
+# Raspilapse Configuration File (Example/Template)
+#
+# IMPORTANT: This is the default configuration template.
+#            Copy this file to config.yml and customize it:
+#            cp config/config.example.yml config/config.yml
+#
+# Your config.yml will NOT be tracked by git, so you can safely
+# customize it with your personal settings (API keys, paths, etc.)
+
+# Camera Settings
+camera:
+  # Image resolution (width x height)
+  # Common options for Camera V3:
+  # - [4608, 2592] - Full 11.9MP
+  # - [2304, 1296] - 3MP binned
+  # - [1920, 1080] - Full HD
+  # - [1280, 720]  - HD
+  resolution:
+    width: 3840
+    height: 2160
+
+  # Image transforms
+  transforms:
+    horizontal_flip: false
+    vertical_flip: false
+
+  # Camera controls (optional, comment out for auto)
+  controls:
+    # Exposure time in microseconds (e.g., 20000 = 20ms)
+    # exposure_time: 20000
+
+    # Analogue gain (1.0 = normal)
+    # analogue_gain: 1.0
+
+    # Auto white balance enable
+    # awb_enable: true
+
+    # Manual colour gains (if awb disabled)
+    # colour_gains: [1.5, 1.5]
+
+    # Brightness (-1.0 to 1.0, 0 = normal)
+    # brightness: 0.0
+
+    # Contrast (0.0 to 2.0, 1.0 = normal)
+    # contrast: 1.0
+
+    # Autofocus mode (if supported):
+    # 0 = Manual, 1 = Single AF, 2 = Continuous AF
+    af_mode: 0
+    lens_position: 0.0
+
+# Output Settings
+output:
+  # Base directory for saved images
+  # For production timelapse, use: /var/www/html/images
+  # For testing, use: test_photos
+  directory: "/var/www/html/images"
+
+  # Filename pattern (supports strftime formatting and counter)
+  # Available placeholders:
+  # - {timestamp} - ISO format timestamp
+  # - {counter} - Sequential counter (4 digits, zero-padded)
+  # - {name} - Project name
+  # You can also use strftime directives like %Y%m%d_%H%M%S
+  filename_pattern: "{name}_%Y_%m_%d_%H_%M_%S.jpg"
+
+  # Project name (used in filename)
+  project_name: "spjutvika"
+
+  # Image quality (0-100, JPEG compression)
+  # Higher = better quality, larger files
+  quality: 75
+
+  # Create subdirectories by date (YEAR/MONTH/DAY structure)
+  # When enabled, images are organized as: directory/YYYY/MM/DD/filename.jpg
+  # Example: /var/www/html/images/2025/11/05/kringelen_2025_11_05_14_30_00.jpg
+  organize_by_date: true
+
+  # Date format for subdirectories (if organize_by_date is true)
+  # %Y = 4-digit year, %m = 2-digit month, %d = 2-digit day
+  date_format: "%Y/%m/%d"
+
+  # Symlink latest image (for web status display)
+  symlink_latest:
+    enabled: true
+    path: "/var/www/html/status.jpg"
+
+# Video Output Settings
+video:
+  # Directory for generated timelapse videos
+  directory: "videos"
+
+  # Video filename pattern (supports strftime formatting)
+  # Available placeholders:
+  # - {name} - Project name
+  # - {start_date} - Start date (YYYY-MM-DD)
+  # - {end_date} - End date (YYYY-MM-DD)
+  # You can also use strftime directives like %Y%m%d
+  filename_pattern: "{name}_{start_date}_to_{end_date}.mp4"
+
+  # Video codec settings
+  codec:
+    # Video codec (libx264 for H.264, libx265 for H.265/HEVC)
+    name: "libx264"
+
+    # Pixel format (yuv420p for maximum compatibility)
+    pixel_format: "yuv420p"
+
+    # Constant Rate Factor (0-51, lower = better quality, 18-23 recommended)
+    # 18 = visually lossless, 23 = good quality, 28 = acceptable
+    crf: 20
+
+  # Frame rate (frames per second)
+  # 25 fps = smooth European standard
+  # 30 fps = smooth NTSC standard
+  # 24 fps = cinematic
+  fps: 25
+
+# Timelapse Settings (for future timelapse.py script)
+timelapse:
+  # Interval between captures in seconds
+  interval: 3
+
+  # Total number of frames to capture (0 = unlimited)
+  num_frames: 0
+
+  # Stabilization delay after camera start (seconds)
+  stabilization_delay: 2
+
+# Adaptive Timelapse Settings (for auto_timelapse.py)
+adaptive_timelapse:
+  # Enable adaptive exposure based on light conditions
+  enabled: true
+
+  # Interval between captures in seconds
+  interval: 30
+
+  # Total number of frames to capture (0 = unlimited, runs continuously)
+  num_frames: 0
+
+  # Light level thresholds (based on calculated lux from metadata)
+  # These values determine when to switch between day/night/transition modes
+  light_thresholds:
+    # Lux below this = night mode (long exposure)
+    night: 10
+
+    # Lux above this = day mode (normal exposure)
+    day: 100
+
+    # Between night and day = transition mode (gradual adjustment)
+    # Automatically calculated between night and day thresholds
+
+  # Night mode settings (for dark conditions - stars, aurora, etc.)
+  night_mode:
+    # Maximum exposure time in seconds (max 20 seconds to avoid star trails)
+    max_exposure_time: 20.0
+
+    # Minimum exposure time in seconds
+    min_exposure_time: 1.0
+
+    # Analogue gain (ISO equivalent)
+    # Higher = brighter but more noise. Range: 1.0-8.0, recommended max: 4.0
+    analogue_gain: 6
+
+    # Use auto white balance in night mode
+    awb_enable: false
+
+    # Manual color gains if awb disabled (red, blue)
+    #colour_gains: [1.8, 1.5]
+    colour_gains: [1.83, 2.02]
+
+  # Day mode settings (for bright daylight conditions)
+  day_mode:
+    # Exposure time in seconds (auto if not specified)
+    # exposure_time: 0.01  # 10ms
+
+    # Analogue gain for daylight (lower = less noise)
+    # Only used if exposure_time is set (manual mode)
+    # analogue_gain: 1.0  # Commented out - let auto exposure handle this
+
+    # Use auto white balance in day mode
+    awb_enable: true
+
+    # Brightness adjustment (-1.0 to 1.0)
+    # Negative = darker, positive = brighter
+    # 0.0 = no adjustment (camera default auto-exposure)
+    # brightness: 0.0
+
+  # Transition mode settings (dawn/dusk)
+  transition_mode:
+    # Gradually adjust between day and night settings
+    # Based on calculated lux value
+    smooth_transition: true
+
+    # Analogue gain range for transition
+    analogue_gain_min: 1.0
+    analogue_gain_max: 2.5
+
+  # Test shot settings (used to measure light levels)
+  test_shot:
+    # Take a test shot before each capture to measure light
+    enabled: true
+
+    # Test shot exposure time in seconds (quick test)
+    exposure_time: 0.1
+
+    # Test shot gain
+    analogue_gain: 1.0
+
+# System Settings
+system:
+  # Create output directory if it doesn't exist
+  create_directories: true
+
+  # Save metadata with each capture
+  save_metadata: true
+
+  # Metadata filename pattern
+  metadata_filename: "{name}_%Y_%m_%d_%H_%M_%S_metadata.json"
+
+  # Metadata folder for test shots (overwritten each time)
+  metadata_folder: "metadata"
+
+# Overlay Settings
+overlay:
+  # Enable/disable overlay
+  enabled: true
+
+  # Font settings
+  font:
+    # Font family (system font name or path to .ttf file)
+    # Common: "DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "Arial.ttf"
+    # Leave as "default" to use PIL default font
+    family: "DejaVuSans-Bold.ttf"  # Bold for sharper, clearer text
+
+    # Font size relative to image height (0.02 = 2% of image height)
+    size_ratio: 0.020  # Slightly larger for bar mode
+
+    # Font color (RGB or RGBA)
+    color: [255, 255, 255, 255]  # Pure white with full opacity
+
+  # Background settings for text
+  background:
+    # Enable semi-transparent background behind text
+    enabled: true
+
+    # Background color (RGBA - last value is opacity: 0=transparent, 255=opaque)
+    # For top-bar mode, this creates a gradient that fades out at the bottom
+    color: [0, 0, 30, 70]  # Black with 43% opacity (very transparent with gradient)
+
+    # Padding around text (relative to font size)
+    padding: 0.6  # Extra padding for more breathing room
+
+  # Position presets: "top-left", "top-right", "bottom-left", "bottom-right", "top-bar", "custom"
+  # "top-bar" creates a full-width navbar at top with centered text
+  position: "top-bar"
+
+  # Custom position (only used if position = "custom")
+  # Values are percentages of image dimensions (0-100)
+  custom_position:
+    x: 5  # 5% from left
+    y: 95  # 95% from top (near bottom)
+
+  # Margin from edges (pixels)
+  margin: 10  # Small margin for top-bar mode
+
+  # Content to display
+  # In top-bar mode: 2 lines with left/right alignment
+  # In corner modes: stacked lines in a box
+  #
+  # Available variables for templates:
+  #   {date} - Date (YYYY-MM-DD)
+  #   {time} - Time (HH:MM:SS)
+  #   {datetime} - Full datetime
+  #   {camera_name} - Camera name from config
+  #   {mode} - Light mode (day/night/transition)
+  #   {exposure} - Exposure time (human readable)
+  #   {exposure_ms} - Exposure time in milliseconds
+  #   {exposure_us} - Exposure time in microseconds
+  #   {iso} - ISO/Analogue gain
+  #   {gain} - Analogue gain (raw value)
+  #   {wb} - White balance mode (auto/manual)
+  #   {wb_gains} - White balance gains (R, B)
+  #   {lux} - Calculated lux value
+  #   {resolution} - Image resolution
+  #   {temperature} - Camera sensor temperature (hardware, NOT ambient)
+  #
+  # Weather variables (requires weather.enabled = true):
+  #   {temp} or {temperature_outdoor} - Outdoor temperature
+  #   {humidity} - Outdoor humidity
+  #   {wind} - Wind speed with gust (e.g., "5.2 m/s (gust 8.1)")
+  #   {wind_speed} - Wind speed only
+  #   {wind_gust} - Wind gust speed
+  #   {wind_dir} - Wind direction (N, NE, E, SE, S, SW, W, NW)
+  #   {rain} - Current rain
+  #   {rain_1h} - Rain in last hour
+  #   {rain_24h} - Rain in last 24 hours
+  #   {pressure} - Atmospheric pressure
+  #
+  # System monitoring variables (always available):
+  #   {cpu_temp} - CPU temperature (e.g., "42.5°C")
+  #   {cpu_temp_raw} - CPU temperature raw value (e.g., "42.5")
+  #   {disk} - Disk space formatted (e.g., "50.2 GB free (42% used)")
+  #   {disk_free} - Free disk space (e.g., "50.2 GB")
+  #   {disk_used} - Used disk space (e.g., "36.8 GB")
+  #   {disk_total} - Total disk space (e.g., "116.7 GB")
+  #   {disk_percent} - Disk usage percentage (e.g., "31%")
+  #   {memory} - Memory usage formatted (e.g., "1.2 GB / 4.0 GB (30%)")
+  #   {memory_used} - Used memory (e.g., "1.2 GB")
+  #   {memory_free} - Free memory (e.g., "2.8 GB")
+  #   {memory_total} - Total memory (e.g., "4.0 GB")
+  #   {memory_percent} - Memory usage percentage (e.g., "30%")
+  #   {load} - CPU load averages (e.g., "0.52, 0.48, 0.45")
+  #   {load_1min} - 1-minute load average (e.g., "0.52")
+  #   {load_5min} - 5-minute load average (e.g., "0.48")
+  #   {load_15min} - 15-minute load average (e.g., "0.45")
+  #   {uptime} - System uptime (e.g., "2d 5h 30m")
+  content:
+    # Line 1 - Left side
+    line_1_left: "{camera_name}"
+
+    # Line 1 - Right side
+    line_1_right: "{temp}, humidity: {humidity}, wind: {wind} {wind_dir}, rain: {rain} "
+
+    # Line 2 - Left side
+    line_2_left: "{date} {time}"
+
+    # Line 2 - Right side
+    line_2_right: "Exposure: {exposure}, {iso}, lux: {lux} - CPU: {cpu_temp}, load: {load_1min}, disk: {disk_free}, mem: {memory_percent}"
+
+    # Example with system monitoring:
+    # line_1_right: "CPU: {cpu_temp}, Disk: {disk_free}, Load: {load_1min}"
+    # line_2_right: "Memory: {memory_used}/{memory_total}, Uptime: {uptime}"
+
+  # Camera name (displayed in overlay)
+  camera_name: "Spjutvika"
+
+  # DateTime formatting
+  datetime:
+    # Use localized date/time format (day name, month name in local language)
+    localized: true
+
+    # Locale for date/time formatting (e.g., "nb_NO" for Norwegian, "en_US" for English)
+    # Must be installed on system: locale -a to list available
+    locale: "nb_NO.UTF-8"
+
+    # Show seconds in time
+    show_seconds: false
+
+    # Date format (when localized=false)
+    # Strftime format: %Y-%m-%d = 2025-11-05
+    date_format: "%Y-%m-%d"
+
+    # Time format (when localized=false)
+    # Strftime format: %H:%M:%S = 15:45:30, %H:%M = 15:45
+    time_format: "%H:%M"
+
+  # Layout options
+  layout:
+    # Line spacing multiplier (1.0 = normal, 1.5 = 1.5x spacing)
+    line_spacing: 1.2  # Tighter spacing for bar mode
+
+    # Separate sections with blank line
+    section_spacing: false  # No blank lines in compact bar
+
+    # Extra bottom spacing for bar (adds padding below text)
+    bottom_padding_multiplier: 0.7  # 30% more space at bottom
+
+# Logging Settings
+logging:
+  # Enable/disable logging
+  enabled: true
+
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+
+  # Log file path (relative to project root)
+  # Use {script} placeholder for script name
+  log_file: "logs/{script}.log"
+
+  # Log format
+  # Available placeholders: %(asctime)s, %(name)s, %(levelname)s, %(message)s
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # Date format for timestamps
+  date_format: "%Y-%m-%d %H:%M:%S"
+
+  # Also log to console
+  console: true
+
+  # Maximum log file size in MB (0 = unlimited)
+  max_size_mb: 10
+
+  # Number of backup log files to keep
+  backup_count: 5
+
+# Analysis and Graphs Settings
+graphs:
+  # Directory for generated analysis graphs
+  directory: "graphs"
+
+  # Graph image settings
+  width: 14  # inches
+  height: 8  # inches
+  dpi: 150   # resolution (dots per inch)
+
+  # Default time window for analysis (hours)
+  default_hours: 24
+
+# Weather Data Settings
+weather:
+  # Enable/disable weather data fetching
+  enabled: true 
+
+  # Netatmo API endpoint URL
+  # Example: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
+  #endpoint: "https://dev.ekstremedia.no/api/netatmo/stations/f3a08757-a212-4058-b0a2-ab3761ecf6f5"
+  endpoint: "https://ekstremedia.no/api/netatmo/stations/2c4735da-abbe-425e-a2ba-1006e786554c"
+    # Cache duration in seconds (how long to keep weather data before refreshing)
+  cache_duration: 300  # 5 minutes
+
+  # Request timeout in seconds
+  timeout: 5
