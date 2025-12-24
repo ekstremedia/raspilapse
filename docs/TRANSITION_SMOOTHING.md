@@ -62,12 +62,13 @@ light_thresholds:
   night: 5     # Below = night mode (was 10, lowered for earlier transition)
   day: 80      # Above = day mode (was 100)
 
+day_mode:
+  exposure_time: 0.01          # 10ms for bright conditions
+  analogue_gain: 1.0           # Minimum gain
+  fixed_colour_gains: [2.5, 1.6]  # Fixed WB gains (optional, overrides AWB learning)
+
 transition_mode:
   smooth_transition: true
-
-  # Analogue gain range
-  analogue_gain_min: 1.0
-  analogue_gain_max: 2.5
 
   # === SMOOTH TRANSITION SETTINGS ===
 
@@ -98,6 +99,12 @@ transition_mode:
 
   # How fast correction adjusts (0.0-1.0, lower = smoother)
   brightness_feedback_strength: 0.2
+
+test_shot:
+  enabled: true
+  exposure_time: 0.1
+  analogue_gain: 1.0
+  frequency: 1  # Take test shot every N frames (1 = every frame)
 ```
 
 **Exposure Formula:** `target_exposure = (20 * 2.5) / lux × correction_factor`
@@ -199,7 +206,38 @@ def _update_day_wb_reference(self, metadata: Dict):
 
 Default day reference if none learned: `[2.5, 1.6]`
 
-### 5. Brightness Feedback (Butter-Smooth Transitions)
+### 5. Lores Stream Brightness Measurement
+
+The brightness feedback system uses a low-resolution camera stream to measure image brightness without disk I/O or overlay contamination.
+
+**How it works:**
+1. Camera captures both main (4K) and lores (320×240) streams simultaneously
+2. Brightness is computed from lores buffer directly in memory
+3. Avoids reading the saved JPEG file (saves ~50ms disk I/O)
+4. Measures RAW camera output before any overlay is applied
+
+```python
+def _compute_brightness_from_lores(self, request) -> Dict:
+    lores_array = request.make_array("lores")  # Get 320x240 RGB buffer
+
+    # Convert to grayscale: Y = 0.299*R + 0.587*G + 0.114*B
+    gray = 0.299 * lores[:,:,0] + 0.587 * lores[:,:,1] + 0.114 * lores[:,:,2]
+
+    return {
+        "mean_brightness": np.mean(gray),
+        "median_brightness": np.median(gray),
+        "std_brightness": np.std(gray),
+        # ... percentiles, under/overexposed %
+    }
+```
+
+**Benefits:**
+- **Fast**: No disk I/O, direct memory access
+- **Accurate**: Measures raw camera output, not overlaid image
+- **Consistent**: Same metrics as disk-based analysis
+- **Low overhead**: 320×240 = 76,800 pixels vs 8MP+ main image
+
+### 6. Brightness Feedback (Butter-Smooth Transitions)
 
 Real-time brightness correction that analyzes each captured image and gradually adjusts exposure to maintain consistent brightness. This eliminates light flashes during transitions.
 
@@ -425,6 +463,9 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 - [x] Diagnostic metadata for debugging transitions (implemented 2025-12-23)
 - [x] Image brightness analysis in metadata (implemented 2025-12-23)
 - [x] Brightness feedback system for butter-smooth transitions (implemented 2025-12-24)
+- [x] Lores stream for fast brightness measurement (implemented 2025-12-24)
+- [x] Fixed day WB gains config option (implemented 2025-12-24)
+- [x] Test shot frequency control (implemented 2025-12-24)
 - [ ] Adaptive WB transition speed based on lux rate of change
 - [ ] Per-channel WB smoothing (red and blue could have different speeds)
 - [ ] Sunset/sunrise detection for optimized transition timing
@@ -434,6 +475,16 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 ---
 
 ## Changelog
+
+### 2025-12-24 - Performance & Configuration Improvements
+- Added lores stream for fast in-memory brightness measurement
+  - Avoids disk I/O overhead (no need to read saved JPEG)
+  - Avoids overlay contamination (measures raw camera data)
+  - Uses low-resolution (320×240) stream for minimal overhead
+- Added `fixed_colour_gains` option in day_mode for consistent WB across sessions
+- Added test shot `frequency` control to reduce overhead in stable lighting
+- Removed unused config keys (`analogue_gain_min`, `analogue_gain_max`, `min_exposure_time`)
+- Fixed overlay quality to use config value instead of hardcoded 95
 
 ### 2025-12-23 - Diagnostic Metadata & Exposure Fix
 - Added diagnostic metadata to every captured frame

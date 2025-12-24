@@ -183,9 +183,6 @@ adaptive_timelapse:
     # Maximum exposure time in seconds (max 20 seconds to avoid star trails)
     max_exposure_time: 20.0
 
-    # Minimum exposure time in seconds
-    min_exposure_time: 1.0
-
     # Analogue gain (ISO equivalent)
     # Higher = brighter but more noise. Range: 1.0-8.0, recommended max: 4.0
     analogue_gain: 6
@@ -207,6 +204,12 @@ adaptive_timelapse:
     # Used when smooth_exposure_in_day_mode is enabled
     analogue_gain: 1.0  # Minimum gain for bright conditions
 
+    # Fixed white balance gains for day mode (red, blue)
+    # When specified, uses these fixed gains instead of learning from AWB
+    # Recommended for consistent color across sessions
+    # Comment out to learn from camera's AWB instead
+    # fixed_colour_gains: [2.5, 1.6]
+
     # Use auto white balance in day mode
     awb_enable: true
 
@@ -220,10 +223,6 @@ adaptive_timelapse:
     # Gradually adjust between day and night settings
     # Based on calculated lux value
     smooth_transition: true
-
-    # Analogue gain range for transition
-    analogue_gain_min: 1.0
-    analogue_gain_max: 2.5
 
     # === SMOOTH TRANSITION SETTINGS ===
     # These settings prevent flickering and ISO jumps during day/night transitions
@@ -299,6 +298,12 @@ adaptive_timelapse:
 
     # Test shot gain
     analogue_gain: 1.0
+
+    # Measurement frequency: how often to take test shots
+    # 1 = every capture (default), 2 = every other capture, etc.
+    # Higher values reduce overhead but may miss rapid light changes
+    # Recommended: 1 for dawn/dusk transitions, 2-3 for stable lighting
+    frequency: 1
 
   # Diagnostic metadata settings
   # Adds extra analysis data to each capture's metadata JSON

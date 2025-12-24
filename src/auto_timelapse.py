@@ -524,8 +524,13 @@ class AdaptiveTimelapse:
             return night_gains
 
         # For day and transition, we need day reference
-        # Use stored reference or a reasonable default for daylight
-        day_gains = self._day_wb_reference or (2.5, 1.6)
+        # Priority: 1) Fixed config gains, 2) Learned AWB reference, 3) Default
+        day_config = self.config["adaptive_timelapse"].get("day_mode", {})
+        fixed_gains = day_config.get("fixed_colour_gains")
+        if fixed_gains:
+            day_gains = tuple(fixed_gains)
+        else:
+            day_gains = self._day_wb_reference or (2.5, 1.6)
 
         if mode == LightMode.DAY:
             return day_gains
@@ -789,10 +794,11 @@ class AdaptiveTimelapse:
                     f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
                 )
             else:
-                # Use middle values
+                # Legacy fallback when smooth_transition is disabled
+                # Use middle values between day and night
                 exposure_seconds = 5.0
                 settings["ExposureTime"] = int(exposure_seconds * 1_000_000)  # 5 seconds
-                settings["AnalogueGain"] = transition["analogue_gain_max"]
+                settings["AnalogueGain"] = 2.5  # Sensible middle value
                 settings["AwbEnable"] = 0
                 # Use interpolated colour gains
                 target_gains = self._get_target_colour_gains(mode, 0.5)
@@ -1121,9 +1127,15 @@ class AdaptiveTimelapse:
                     logger.info(f"Reached frame limit: {num_frames}")
                     break
 
+                # Determine if we should take a test shot based on frequency
+                test_shot_frequency = adaptive_config["test_shot"].get("frequency", 1)
+                should_take_test_shot = adaptive_config["test_shot"]["enabled"] and (
+                    self.frame_count % test_shot_frequency == 0
+                )
+
                 # CRITICAL: Close camera before taking test shot to avoid "Camera in Running state" error
                 # Test shot uses its own context-managed camera instance
-                if capture is not None and adaptive_config["test_shot"]["enabled"]:
+                if capture is not None and should_take_test_shot:
                     logger.debug("Closing camera before test shot...")
                     self._close_camera_fast(capture, last_mode)
                     capture = None
@@ -1134,8 +1146,8 @@ class AdaptiveTimelapse:
                 lux = None
                 transition_position = None
 
-                # Take test shot if enabled
-                if adaptive_config["test_shot"]["enabled"]:
+                # Take test shot if enabled and frequency allows
+                if should_take_test_shot:
                     try:
                         test_image_path, test_metadata = self.take_test_shot()
 
@@ -1165,13 +1177,20 @@ class AdaptiveTimelapse:
 
                     except Exception as e:
                         logger.error(f"Test shot failed: {e}")
-                        # Fall back to day mode
-                        mode = LightMode.DAY
-                        settings = self.get_camera_settings(mode)
+                        # Fall back to last mode or day mode
+                        mode = self._last_mode or LightMode.DAY
+                        lux = self._smoothed_lux
+                        settings = self.get_camera_settings(mode, lux)
                 else:
-                    # No test shot, use day mode
-                    mode = LightMode.DAY
-                    settings = self.get_camera_settings(mode)
+                    # Test shot skipped (frequency > 1) - reuse last known values
+                    # This keeps camera running and applies interpolation
+                    mode = self._last_mode or LightMode.DAY
+                    lux = self._smoothed_lux  # Use last smoothed lux
+                    settings = self.get_camera_settings(mode, lux)
+                    logger.debug(
+                        f"Skipping test shot (frame {self.frame_count}), "
+                        f"reusing mode={mode}, lux={lux:.2f if lux else 'N/A'}"
+                    )
 
                 # Initialize camera on first frame or if it was closed
                 if capture is None:
@@ -1202,8 +1221,8 @@ class AdaptiveTimelapse:
                         )
 
                     # Apply brightness feedback for butter-smooth transitions
-                    # This analyzes actual image brightness and gradually adjusts
-                    # the exposure correction factor to maintain consistent brightness
+                    # Uses lores stream brightness (from capture.last_brightness_metrics)
+                    # which avoids disk I/O and overlay contamination
                     brightness_feedback_enabled = (
                         self.config.get("adaptive_timelapse", {})
                         .get("transition_mode", {})
@@ -1211,9 +1230,13 @@ class AdaptiveTimelapse:
                     )
                     if brightness_feedback_enabled:
                         try:
-                            brightness_analysis = self._analyze_image_brightness(image_path)
-                            if brightness_analysis:
-                                actual_brightness = brightness_analysis.get("mean_brightness")
+                            # Prefer lores brightness (fast, no overlay contamination)
+                            # Fall back to disk analysis if lores not available
+                            brightness_metrics = capture.last_brightness_metrics
+                            if not brightness_metrics:
+                                brightness_metrics = self._analyze_image_brightness(image_path)
+                            if brightness_metrics:
+                                actual_brightness = brightness_metrics.get("mean_brightness")
                                 self._apply_brightness_feedback(actual_brightness)
                         except Exception as e:
                             logger.debug(f"Could not apply brightness feedback: {e}")

@@ -119,6 +119,9 @@ class ImageCapture:
         # Initialize overlay handler
         self.overlay = ImageOverlay(config.config)
 
+        # Store last brightness metrics from lores stream (avoids disk I/O)
+        self.last_brightness_metrics: Optional[Dict] = None
+
         logger.debug("ImageCapture instance created")
 
     def initialize_camera(self, manual_controls: Optional[Dict] = None):
@@ -183,6 +186,8 @@ class ImageCapture:
                 camera_config = self.picam2.create_still_configuration(
                     # Use an RGB format that PIL / Picamera2 helpers support
                     main={"size": resolution, "format": "RGB888"},
+                    # Low-res stream for fast brightness measurement (avoids disk I/O)
+                    lores={"size": (320, 240), "format": "RGB888"},
                     raw=None,  # Disable RAW for performance
                     buffer_count=3,  # CRITICAL: prevents frame queuing delays
                     queue=False,  # Ensures fresh frame after request
@@ -193,6 +198,8 @@ class ImageCapture:
             else:
                 camera_config = self.picam2.create_still_configuration(
                     main={"size": resolution},
+                    # Low-res stream for fast brightness measurement
+                    lores={"size": (320, 240), "format": "RGB888"},
                     display=None,
                 )
 
@@ -297,6 +304,70 @@ class ImageCapture:
             logger.debug(f"Applying controls to camera: {control_map}")
             self.picam2.set_controls(control_map)
 
+    def _compute_brightness_from_lores(self, request) -> Dict:
+        """
+        Compute brightness metrics from the lores stream.
+
+        This avoids disk I/O and overlay contamination by analyzing
+        the raw low-resolution image buffer directly from the camera.
+
+        Args:
+            request: Picamera2 capture request with lores stream
+
+        Returns:
+            Dictionary with brightness metrics
+        """
+        try:
+            import numpy as np
+
+            # Get lores array from request (RGB888 format)
+            lores_array = request.make_array("lores")
+
+            # Convert to grayscale using luminance formula
+            # Y = 0.299*R + 0.587*G + 0.114*B
+            gray = (
+                0.299 * lores_array[:, :, 0]
+                + 0.587 * lores_array[:, :, 1]
+                + 0.114 * lores_array[:, :, 2]
+            )
+
+            # Compute statistics
+            mean_brightness = float(np.mean(gray))
+            median_brightness = float(np.median(gray))
+            std_brightness = float(np.std(gray))
+
+            # Percentiles for exposure analysis
+            p5 = float(np.percentile(gray, 5))
+            p10 = float(np.percentile(gray, 10))
+            p90 = float(np.percentile(gray, 90))
+            p95 = float(np.percentile(gray, 95))
+
+            # Under/overexposure percentages
+            total_pixels = gray.size
+            underexposed = float(np.sum(gray < 10) / total_pixels * 100)
+            overexposed = float(np.sum(gray > 245) / total_pixels * 100)
+
+            metrics = {
+                "mean_brightness": round(mean_brightness, 2),
+                "median_brightness": round(median_brightness, 2),
+                "std_brightness": round(std_brightness, 2),
+                "percentile_5": round(p5, 2),
+                "percentile_10": round(p10, 2),
+                "percentile_90": round(p90, 2),
+                "percentile_95": round(p95, 2),
+                "underexposed_percent": round(underexposed, 2),
+                "overexposed_percent": round(overexposed, 2),
+            }
+
+            logger.debug(
+                f"Lores brightness: mean={mean_brightness:.1f}, median={median_brightness:.1f}"
+            )
+            return metrics
+
+        except Exception as e:
+            logger.warning(f"Could not compute brightness from lores: {e}")
+            return {}
+
     def update_controls(self, controls: Dict):
         """
         Update camera controls on an already-initialized camera.
@@ -387,6 +458,9 @@ class ImageCapture:
             logger.debug("Capturing image...")
             request = self.picam2.capture_request()
             try:
+                # Compute brightness from lores BEFORE saving (no overlay contamination)
+                self.last_brightness_metrics = self._compute_brightness_from_lores(request)
+
                 # Save the image
                 request.save("main", str(output_path))
                 logger.info(f"Image captured successfully: {output_path}")
