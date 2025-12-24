@@ -9,10 +9,19 @@ import os
 import sys
 import time
 import signal
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 import yaml
+
+# Optional: Sun position calculation for polar regions
+try:
+    from astral import LocationInfo
+    from astral.sun import elevation
+
+    ASTRAL_AVAILABLE = True
+except ImportError:
+    ASTRAL_AVAILABLE = False
 
 # Handle imports for both module and script execution
 try:
@@ -89,6 +98,12 @@ class AdaptiveTimelapse:
             "brightness_feedback_strength", 0.3
         )
 
+        # Polar awareness - sun position for high latitude locations (68°N)
+        self._location = None
+        self._sun_elevation: float = None  # Current sun elevation in degrees
+        self._civil_twilight_threshold = -6.0  # Default: Civil twilight
+        self._init_location()
+
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -97,6 +112,83 @@ class AdaptiveTimelapse:
         """Handle shutdown signals gracefully."""
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         self.running = False
+
+    def _init_location(self):
+        """Initialize location for sun position calculations (Polar awareness)."""
+        if not ASTRAL_AVAILABLE:
+            logger.debug("Astral not available - sun position features disabled")
+            return
+
+        location_config = self.config.get("location", {})
+        if not location_config:
+            logger.debug("No location configured - sun position features disabled")
+            return
+
+        try:
+            lat = location_config.get("latitude", 68.7)
+            lon = location_config.get("longitude", 15.4)
+            tz = location_config.get("timezone", "Europe/Oslo")
+            self._civil_twilight_threshold = location_config.get("civil_twilight_threshold", -6.0)
+
+            self._location = LocationInfo(
+                name="Timelapse Location",
+                region="",
+                timezone=tz,
+                latitude=lat,
+                longitude=lon,
+            )
+            logger.info(
+                f"[Polar] Location initialized: {lat}°N, {lon}°E "
+                f"(Civil twilight threshold: {self._civil_twilight_threshold}°)"
+            )
+        except Exception as e:
+            logger.warning(f"Could not initialize location: {e}")
+            self._location = None
+
+    def _get_sun_elevation(self) -> Optional[float]:
+        """
+        Calculate current sun elevation angle in degrees.
+
+        Returns:
+            Sun elevation in degrees (positive = above horizon, negative = below)
+            None if location not configured or calculation fails
+        """
+        if not ASTRAL_AVAILABLE or self._location is None:
+            return None
+
+        try:
+            now = datetime.now(timezone.utc)
+            self._sun_elevation = elevation(self._location.observer, now)
+            return self._sun_elevation
+        except Exception as e:
+            logger.debug(f"Could not calculate sun elevation: {e}")
+            return None
+
+    def _is_polar_day(self, lux: float = None) -> bool:
+        """
+        Check if we're in Polar Day conditions (Civil Twilight override).
+
+        In polar regions, even when lux is low, we should stay in Day mode
+        if the sun is above the civil twilight threshold (-6°) to capture
+        beautiful twilight colors with AWB instead of locked night settings.
+
+        Args:
+            lux: Current measured lux (for logging)
+
+        Returns:
+            True if sun elevation indicates Polar Day (civil twilight or brighter)
+        """
+        sun_elev = self._get_sun_elevation()
+        if sun_elev is None:
+            return False
+
+        is_polar_day = sun_elev > self._civil_twilight_threshold
+        if is_polar_day:
+            logger.debug(
+                f"[Polar] Civil twilight override: Sun={sun_elev:.1f}° > {self._civil_twilight_threshold}° "
+                f"(forcing Day mode despite lux={lux:.1f if lux else 'N/A'})"
+            )
+        return is_polar_day
 
     def _load_config(self) -> Dict:
         """Load configuration from YAML file."""
@@ -425,6 +517,106 @@ class AdaptiveTimelapse:
 
             return target_gain
 
+    def _calculate_sequential_ramping(self, lux: float, position: float) -> Tuple[float, float]:
+        """
+        Calculate exposure and gain using Sequential Ramping for noise reduction.
+
+        This prioritizes shutter speed to keep ISO (gain) low:
+        - Phase 1 (Shutter Priority): Ramp exposure from seed to max, keep gain locked
+        - Phase 2 (Gain Priority): Only after exposure is maxed, ramp gain up
+
+        This produces cleaner images by minimizing sensor noise from high gain.
+
+        Args:
+            lux: Current light level in lux
+            position: Transition position (0.0=at night threshold, 1.0=at day threshold)
+
+        Returns:
+            Tuple of (target_exposure_seconds, target_gain)
+        """
+        import math
+
+        adaptive_config = self.config["adaptive_timelapse"]
+        night_config = adaptive_config["night_mode"]
+
+        # Get limits
+        max_exposure = night_config["max_exposure_time"]  # e.g., 20s
+        max_gain = night_config["analogue_gain"]  # e.g., 8.0
+
+        # Get seed values (from last day mode capture) or reasonable defaults
+        seed_exposure = self._seed_exposure if self._seed_exposure else 0.01  # 10ms default
+        seed_gain = self._seed_gain if self._seed_gain else 1.0
+
+        # Transition goes from position=1.0 (day) to position=0.0 (night)
+        # So we invert to get progress towards night (0=start, 1=end)
+        night_progress = 1.0 - position
+
+        # Calculate the total EV range we need to cover
+        # EV_night = max_exposure * max_gain
+        # EV_seed = seed_exposure * seed_gain
+        # Total EV increase needed = log2(EV_night / EV_seed)
+
+        ev_seed = seed_exposure * seed_gain
+        ev_night = max_exposure * max_gain
+
+        if ev_seed <= 0 or ev_night <= 0:
+            # Fallback to simple calculation
+            return self._calculate_target_exposure_from_lux(
+                lux
+            ), self._calculate_target_gain_from_lux(lux)
+
+        # Phase boundary: when does exposure hit max?
+        # Exposure range: seed_exposure → max_exposure
+        # This represents a portion of total EV range
+        exposure_ev_range = math.log2(max_exposure / seed_exposure) if seed_exposure > 0 else 10
+        total_ev_range = math.log2(ev_night / ev_seed) if ev_seed > 0 else 12
+
+        # Phase 1 ends when exposure is maxed
+        phase1_end = exposure_ev_range / total_ev_range if total_ev_range > 0 else 0.5
+        phase1_end = max(0.1, min(0.9, phase1_end))  # Clamp to reasonable range
+
+        if night_progress <= phase1_end:
+            # === PHASE 1: Shutter Priority ===
+            # Ramp exposure from seed to max, keep gain locked at seed
+            phase1_progress = night_progress / phase1_end  # 0 to 1 within phase 1
+
+            # Logarithmic interpolation for exposure
+            log_seed = math.log10(max(0.0001, seed_exposure))
+            log_max = math.log10(max_exposure)
+            log_target = log_seed + phase1_progress * (log_max - log_seed)
+            target_exposure = 10**log_target
+
+            # Keep gain locked at seed value
+            target_gain = seed_gain
+
+            logger.debug(
+                f"[Sequential] Phase 1 (Shutter): progress={night_progress:.2f}/{phase1_end:.2f}, "
+                f"exposure={target_exposure:.4f}s, gain={target_gain:.2f} (locked)"
+            )
+        else:
+            # === PHASE 2: Gain Priority ===
+            # Exposure is maxed, now ramp gain from seed to night target
+            phase2_progress = (night_progress - phase1_end) / (
+                1.0 - phase1_end
+            )  # 0 to 1 within phase 2
+            phase2_progress = max(0.0, min(1.0, phase2_progress))
+
+            # Exposure stays at max
+            target_exposure = max_exposure
+
+            # Logarithmic interpolation for gain
+            log_seed = math.log10(max(0.5, seed_gain))
+            log_max = math.log10(max_gain)
+            log_target = log_seed + phase2_progress * (log_max - log_seed)
+            target_gain = 10**log_target
+
+            logger.debug(
+                f"[Sequential] Phase 2 (Gain): progress={night_progress:.2f}, "
+                f"exposure={target_exposure:.4f}s (maxed), gain={target_gain:.2f}"
+            )
+
+        return target_exposure, target_gain
+
     def _calculate_target_exposure_from_lux(self, lux: float) -> float:
         """
         Calculate target exposure time based on current lux level.
@@ -510,6 +702,62 @@ class AdaptiveTimelapse:
                     f"Updated day WB reference: [{colour_gains[0]:.2f}, {colour_gains[1]:.2f}] "
                     f"at {lux:.0f} lux"
                 )
+
+    def _apply_ev_safety_clamp(
+        self, target_exposure: float, target_gain: float
+    ) -> Tuple[float, float]:
+        """
+        Apply EV Safety Clamp to ensure seamless auto-to-manual handover.
+
+        Compares proposed manual EV to the seeded auto EV. If they differ by >5%,
+        forces the manual values to match the auto EV exactly.
+
+        This guarantees the first manual frame is mathematically identical to
+        the last auto frame, preventing any visible "flash" or brightness jump.
+
+        Args:
+            target_exposure: Proposed exposure time in seconds
+            target_gain: Proposed analogue gain
+
+        Returns:
+            Tuple of (clamped_exposure, clamped_gain)
+        """
+        # Only apply clamp on first manual frame (when we have seed values)
+        if not self._transition_seeded or self._seed_exposure is None or self._seed_gain is None:
+            return target_exposure, target_gain
+
+        # Calculate EVs (EV = exposure * gain, proportional to light captured)
+        seed_ev = self._seed_exposure * self._seed_gain
+        proposed_ev = target_exposure * target_gain
+
+        if seed_ev <= 0 or proposed_ev <= 0:
+            return target_exposure, target_gain
+
+        # Calculate percentage difference
+        ev_ratio = proposed_ev / seed_ev
+        ev_diff_percent = abs(ev_ratio - 1.0) * 100
+
+        if ev_diff_percent > 5.0:
+            # Clamp: adjust exposure to match seed EV while keeping proposed gain
+            # EV_seed = exposure_new * gain_proposed
+            # exposure_new = EV_seed / gain_proposed
+            clamped_exposure = seed_ev / target_gain
+
+            # Ensure within valid range
+            night_config = self.config["adaptive_timelapse"]["night_mode"]
+            max_exposure = night_config["max_exposure_time"]
+            min_exposure = 0.0001  # 100µs
+
+            clamped_exposure = max(min_exposure, min(max_exposure, clamped_exposure))
+
+            logger.info(
+                f"[Safety] EV clamp applied: proposed EV differs by {ev_diff_percent:.1f}%. "
+                f"Adjusted exposure {target_exposure:.4f}s → {clamped_exposure:.4f}s "
+                f"to match auto EV={seed_ev:.4f}"
+            )
+            return clamped_exposure, target_gain
+
+        return target_exposure, target_gain
 
     def _seed_from_metadata(self, metadata: Dict, capture_metadata: Dict = None):
         """
@@ -710,7 +958,11 @@ class AdaptiveTimelapse:
 
     def determine_mode(self, lux: float) -> str:
         """
-        Determine light mode based on lux value.
+        Determine light mode based on lux value and sun position.
+
+        Includes Polar Day override: In polar regions, force Day mode when
+        sun elevation is above civil twilight threshold (-6°), even if lux
+        readings suggest otherwise. This captures twilight colors with AWB.
 
         Args:
             lux: Calculated lux value
@@ -722,6 +974,17 @@ class AdaptiveTimelapse:
         night_threshold = thresholds["night"]
         day_threshold = thresholds["day"]
 
+        # === POLAR DAY OVERRIDE ===
+        # In polar regions, force Day mode during civil twilight to capture
+        # beautiful pink/blue twilight colors with AWB instead of locked night WB
+        if self._is_polar_day(lux):
+            sun_elev = self._sun_elevation  # Cached from _is_polar_day call
+            logger.info(
+                f"[Polar] Sun: {sun_elev:.1f}° | Lux: {lux:.1f} | Mode: Polar Day (override)"
+            )
+            return LightMode.DAY
+
+        # Standard lux-based mode determination
         if lux < night_threshold:
             mode = LightMode.NIGHT
         elif lux > day_threshold:
@@ -729,7 +992,13 @@ class AdaptiveTimelapse:
         else:
             mode = LightMode.TRANSITION
 
-        logger.info(f"Light level: {lux:.2f} lux → Mode: {mode}")
+        # Log with sun elevation if available
+        sun_elev = self._sun_elevation
+        if sun_elev is not None:
+            logger.info(f"[Status] Sun: {sun_elev:.1f}° | Lux: {lux:.1f} | Mode: {mode}")
+        else:
+            logger.info(f"Light level: {lux:.2f} lux → Mode: {mode}")
+
         return mode
 
     def get_camera_settings(self, mode: str, lux: float = None) -> Dict:
@@ -856,9 +1125,26 @@ class AdaptiveTimelapse:
                 position = (lux - night_threshold) / lux_range
                 position = max(0.0, min(1.0, position))
 
-                # Calculate target values based on current lux
-                target_gain = self._calculate_target_gain_from_lux(lux)
-                target_exposure = self._calculate_target_exposure_from_lux(lux)
+                # === SEQUENTIAL RAMPING ===
+                # Use shutter-first ramping when transition is seeded (Holy Grail mode)
+                # This keeps ISO low for cleaner images
+                use_sequential = (
+                    transition.get("sequential_ramping", True) and self._transition_seeded
+                )
+
+                if use_sequential:
+                    # Sequential: Shutter first, then gain
+                    target_exposure, target_gain = self._calculate_sequential_ramping(lux, position)
+                else:
+                    # Legacy: Simultaneous ramping based on lux
+                    target_gain = self._calculate_target_gain_from_lux(lux)
+                    target_exposure = self._calculate_target_exposure_from_lux(lux)
+
+                # === EV SAFETY CLAMP ===
+                # Ensure first manual frame matches last auto frame exactly
+                target_exposure, target_gain = self._apply_ev_safety_clamp(
+                    target_exposure, target_gain
+                )
 
                 # Apply smooth interpolation to prevent jumps
                 smooth_gain = self._interpolate_gain(target_gain)
@@ -1056,6 +1342,9 @@ class AdaptiveTimelapse:
                 "raw_lux": round(raw_lux, 4) if raw_lux is not None else None,
                 "transition_position": (
                     round(transition_position, 4) if transition_position is not None else None
+                ),
+                "sun_elevation": (
+                    round(self._sun_elevation, 2) if self._sun_elevation is not None else None
                 ),
             }
 

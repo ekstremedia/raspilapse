@@ -181,6 +181,7 @@ def analyze_images(image_metadata_pairs: List[Tuple[Path, Path]], hours: int) ->
         "target_gain": [],
         "interpolated_gain": [],
         "transition_position": [],
+        "sun_elevation": [],  # Sun position in degrees (polar awareness)
         # Brightness analysis
         "brightness_mean": [],
         "brightness_median": [],
@@ -241,6 +242,7 @@ def analyze_images(image_metadata_pairs: List[Tuple[Path, Path]], hours: int) ->
         data["target_gain"].append(diagnostics.get("target_gain"))
         data["interpolated_gain"].append(diagnostics.get("interpolated_gain"))
         data["transition_position"].append(diagnostics.get("transition_position"))
+        data["sun_elevation"].append(diagnostics.get("sun_elevation"))
 
         # Brightness analysis data
         brightness = diagnostics.get("brightness", {})
@@ -1384,6 +1386,142 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
         print(f"    ✅ Saved: {output_path}")
     else:
         print("  ℹ️  No transition position data available (diagnostics may be disabled)")
+
+    # 15. POLAR: Sun Elevation + Lux Comparison
+    # Shows sun position alongside lux for polar region analysis
+    sun_data = [
+        (data["timestamps"][i], data["sun_elevation"][i])
+        for i in range(len(data["timestamps"]))
+        if data["sun_elevation"][i] is not None
+    ]
+
+    if sun_data:
+        print("  Creating sun elevation plot...")
+        fig, ax1 = plt.subplots(figsize=(fig_width, fig_height))
+
+        fig.patch.set_facecolor("#1a1a1a")
+        ax1.set_facecolor("#2d2d2d")
+
+        # Add zone shading
+        if transition_zones:
+            add_zone_shading(ax1, transition_zones, -20, 50)
+
+        sun_times = [t[0] for t in sun_data]
+        sun_values = [t[1] for t in sun_data]
+
+        # Plot Sun Elevation (primary axis)
+        color_sun = "#ffdd44"
+        ax1.plot(
+            sun_times,
+            sun_values,
+            color=color_sun,
+            linewidth=2.5,
+            label="Sun Elevation (°)",
+            zorder=5,
+        )
+        ax1.fill_between(
+            sun_times,
+            sun_values,
+            alpha=0.2,
+            color=color_sun,
+            zorder=4,
+        )
+
+        # Add reference lines for sun position
+        ax1.axhline(
+            y=0,
+            color="#ff8844",
+            linestyle="-",
+            linewidth=2,
+            alpha=0.7,
+            label="Horizon (0°)",
+        )
+        ax1.axhline(
+            y=-6,
+            color="#8888ff",
+            linestyle="--",
+            linewidth=2,
+            alpha=0.7,
+            label="Civil Twilight (-6°)",
+        )
+        ax1.axhline(
+            y=-12,
+            color="#4444ff",
+            linestyle=":",
+            linewidth=1.5,
+            alpha=0.5,
+            label="Nautical Twilight (-12°)",
+        )
+
+        ax1.set_xlabel("Time", fontsize=12, color="white")
+        ax1.set_ylabel("Sun Elevation (degrees)", fontsize=12, color=color_sun)
+        ax1.tick_params(axis="y", labelcolor=color_sun)
+        ax1.tick_params(axis="x", colors="white")
+
+        # Create second axis for Lux
+        ax2 = ax1.twinx()
+        color_lux = "#88ff88"
+
+        # Match lux data timestamps to sun data
+        lux_for_sun = []
+        for t, _ in sun_data:
+            # Find closest timestamp in lux data
+            idx = min(
+                range(len(data["timestamps"])),
+                key=lambda i: abs((data["timestamps"][i] - t).total_seconds()),
+            )
+            lux_for_sun.append(data["lux"][idx])
+
+        ax2.semilogy(
+            sun_times,
+            lux_for_sun,
+            color=color_lux,
+            linewidth=2,
+            linestyle="--",
+            label="Lux (light)",
+            alpha=0.8,
+            zorder=3,
+        )
+        ax2.set_ylabel("Lux (log scale)", fontsize=12, color=color_lux)
+        ax2.tick_params(axis="y", labelcolor=color_lux)
+
+        ax1.set_title(
+            "Polar Awareness: Sun Elevation vs Light Level\n"
+            "When sun > -6° (civil twilight), Day Mode is forced for twilight colors",
+            fontsize=14,
+            fontweight="bold",
+            color="white",
+            pad=20,
+        )
+
+        # Combined legend
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        legend = ax1.legend(
+            lines1 + lines2,
+            labels1 + labels2,
+            loc="upper right",
+            fontsize=10,
+            facecolor="#3d3d3d",
+            edgecolor="gray",
+        )
+        plt.setp(legend.get_texts(), color="white")
+
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax1.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+        plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha="right")
+        ax1.grid(True, alpha=0.2, linestyle="--", color="gray")
+
+        for spine in ax1.spines.values():
+            spine.set_edgecolor("gray")
+
+        fig.tight_layout()
+        output_path = output_dir / "polar_sun_elevation.png"
+        plt.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close()
+        print(f"    ✅ Saved: {output_path}")
+    else:
+        print("  ℹ️  No sun elevation data available (location may not be configured)")
 
     print("\n✅ All graphs created successfully!")
 

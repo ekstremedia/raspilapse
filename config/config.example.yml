@@ -7,6 +7,20 @@
 # Your config.yml will NOT be tracked by git, so you can safely
 # customize it with your personal settings (API keys, paths, etc.)
 
+# Location Settings (for sun position calculation)
+# Used for Polar Day/Night detection at high latitudes (68°N)
+# This enables "Civil Twilight Override" - forces Day mode when sun > -6°
+location:
+  # Latitude in decimal degrees (negative for South)
+  latitude: 68.7
+  # Longitude in decimal degrees (negative for West)
+  longitude: 15.4
+  # Timezone (for accurate sun calculations)
+  timezone: "Europe/Oslo"
+  # Civil twilight threshold (degrees below horizon)
+  # Sun > this value = force Day mode even if lux is low
+  civil_twilight_threshold: -6.0
+
 # Camera Settings
 camera:
   # Image resolution (width x height)
@@ -223,6 +237,13 @@ adaptive_timelapse:
     # Gradually adjust between day and night settings
     # Based on calculated lux value
     smooth_transition: true
+
+    # === SEQUENTIAL RAMPING (Noise Reduction) ===
+    # When enabled, prioritizes shutter speed over gain to minimize noise:
+    # - Phase 1: Ramp shutter from day value to max, keep gain locked at ~1.0
+    # - Phase 2: Only after shutter is maxed, ramp gain up to night target
+    # This produces cleaner twilight images by keeping ISO low as long as possible
+    sequential_ramping: true
 
     # === SMOOTH TRANSITION SETTINGS ===
     # These settings prevent flickering and ISO jumps during day/night transitions
