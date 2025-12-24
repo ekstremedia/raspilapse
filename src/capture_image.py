@@ -187,7 +187,7 @@ class ImageCapture:
                     # Use an RGB format that PIL / Picamera2 helpers support
                     main={"size": resolution, "format": "RGB888"},
                     # Low-res stream for fast brightness measurement (avoids disk I/O)
-                    lores={"size": (320, 240), "format": "RGB888"},
+                    lores={"size": (320, 240), "format": "YUV420"},
                     raw=None,  # Disable RAW for performance
                     buffer_count=3,  # CRITICAL: prevents frame queuing delays
                     queue=False,  # Ensures fresh frame after request
@@ -199,7 +199,7 @@ class ImageCapture:
                 camera_config = self.picam2.create_still_configuration(
                     main={"size": resolution},
                     # Low-res stream for fast brightness measurement
-                    lores={"size": (320, 240), "format": "RGB888"},
+                    lores={"size": (320, 240), "format": "YUV420"},
                     display=None,
                 )
 
@@ -320,16 +320,15 @@ class ImageCapture:
         try:
             import numpy as np
 
-            # Get lores array from request (RGB888 format)
+            # Get lores array from request (YUV420 format)
+            # In YUV420, the Y (luminance) plane comes first, followed by U and V
             lores_array = request.make_array("lores")
 
-            # Convert to grayscale using luminance formula
-            # Y = 0.299*R + 0.587*G + 0.114*B
-            gray = (
-                0.299 * lores_array[:, :, 0]
-                + 0.587 * lores_array[:, :, 1]
-                + 0.114 * lores_array[:, :, 2]
-            )
+            # For YUV420, the array shape is (height * 1.5, width) with Y plane first
+            # Extract just the Y (luminance) plane - first 240 rows for 320x240 lores
+            # The Y values are already brightness (0-255), no conversion needed
+            height = 240
+            gray = lores_array[:height, :].astype(np.float32)
 
             # Compute statistics
             mean_brightness = float(np.mean(gray))

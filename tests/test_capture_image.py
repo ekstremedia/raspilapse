@@ -593,6 +593,32 @@ class TestControlMapping:
         assert call_args[1]["buffer_count"] == 3
         assert call_args[1]["queue"] is False
 
+    def test_lores_stream_format_must_be_yuv(self, mock_picamera2, test_config_file):
+        """
+        Test that lores stream uses YUV420 format, NOT RGB888.
+
+        This is critical because Picamera2 requires lores stream to be YUV format.
+        Using RGB888 causes: 'lores stream must be YUV' error.
+
+        Regression test for bug fixed 2025-12-24.
+        """
+        config = CameraConfig(test_config_file)
+        capture = ImageCapture(config)
+
+        capture.initialize_camera()
+
+        call_args = mock_picamera2.create_still_configuration.call_args
+        lores_config = call_args[1].get("lores")
+
+        # Verify lores stream is configured
+        assert lores_config is not None, "lores stream should be configured"
+
+        # Verify format is YUV420, NOT RGB888
+        assert lores_config["format"] == "YUV420", (
+            f"lores stream must use YUV420 format, not {lores_config['format']}. "
+            "RGB888 causes 'lores stream must be YUV' error at runtime."
+        )
+
     def test_update_controls(self, mock_picamera2, test_config_file):
         """Test updating controls on running camera."""
         config = CameraConfig(test_config_file)
