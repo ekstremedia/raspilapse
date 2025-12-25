@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Handle globs that don't match any files
+shopt -s nullglob
+
 # Get today's date components
 YEAR=$(date +%Y)
 MONTH=$(date +%m)
@@ -20,7 +23,7 @@ START_TIME="0600"
 # Create a temporary file list with images from 06:00 to now
 TEMP_LIST=$(mktemp)
 
-for img in "$INPUT_DIR"/*.jpg "$INPUT_DIR"/*.JPG 2>/dev/null; do
+for img in "$INPUT_DIR"/*.jpg "$INPUT_DIR"/*.JPG; do
     [ -f "$img" ] || continue
 
     # Extract timestamp from filename or use file modification time
