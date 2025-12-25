@@ -75,6 +75,11 @@ class AdaptiveTimelapse:
         self._last_brightness: float = None  # Previous frame's mean brightness
         self._brightness_correction_factor: float = 1.0  # Multiplier for exposure adjustment
 
+        # Overexposure detection for fast ramp-down
+        self._overexposure_detected: bool = False  # True when image is overexposed
+        # Fast ramp-down speed from config (default 0.30 = 3x normal speed, still smooth)
+        self._fast_rampdown_speed: float = transition_config.get("fast_rampdown_speed", 0.30)
+
         # Holy Grail transition state - seeded from actual camera metadata
         self._transition_seeded: bool = False  # True once we've seeded from metadata
         self._seed_exposure: float = None  # Actual exposure from last auto frame
@@ -344,7 +349,9 @@ class AdaptiveTimelapse:
         logger.debug(f"Gain interpolation: target={target_gain:.2f} → actual={new_gain:.2f}")
         return new_gain
 
-    def _interpolate_exposure(self, target_exposure_s: float) -> float:
+    def _interpolate_exposure(
+        self, target_exposure_s: float, speed_override: float = None
+    ) -> float:
         """
         Smoothly interpolate exposure time to prevent sudden brightness jumps.
 
@@ -352,6 +359,7 @@ class AdaptiveTimelapse:
 
         Args:
             target_exposure_s: Target exposure time in seconds
+            speed_override: Optional speed override (0.0-1.0) for fast ramp-down
 
         Returns:
             Interpolated exposure time in seconds
@@ -368,7 +376,7 @@ class AdaptiveTimelapse:
         # This gives smoother perceived brightness changes
         import math
 
-        speed = self._exposure_transition_speed
+        speed = speed_override if speed_override is not None else self._exposure_transition_speed
 
         # Log-space interpolation for more natural exposure transitions
         log_last = math.log10(max(0.0001, self._last_exposure_time))
@@ -383,6 +391,7 @@ class AdaptiveTimelapse:
 
         logger.debug(
             f"Exposure interpolation: target={target_exposure_s:.4f}s → actual={new_exposure:.4f}s"
+            + (f" (fast: {speed:.2f})" if speed_override else "")
         )
         return new_exposure
 
@@ -458,6 +467,57 @@ class AdaptiveTimelapse:
         )
 
         return self._brightness_correction_factor
+
+    def _check_overexposure(self, brightness_metrics: Dict) -> bool:
+        """
+        Check if the image is overexposed and update fast ramp-down state.
+
+        Triggers fast ramp-down when:
+        - Mean brightness > 180 (significantly overexposed)
+        - OR overexposed_percent > 10% (many clipped pixels)
+
+        Clears fast ramp-down when:
+        - Mean brightness < 150 (back to normal range)
+        - AND overexposed_percent < 5%
+
+        Args:
+            brightness_metrics: Dictionary with brightness analysis results
+
+        Returns:
+            True if overexposure detected (fast ramp-down active)
+        """
+        if not brightness_metrics:
+            return self._overexposure_detected
+
+        mean_brightness = brightness_metrics.get("mean_brightness", 0)
+        overexposed_pct = brightness_metrics.get("overexposed_percent", 0)
+
+        # Thresholds for triggering fast ramp-down
+        brightness_high = 180  # Trigger fast ramp-down above this
+        brightness_safe = 150  # Clear fast ramp-down below this
+        overexposed_high = 10  # Trigger if >10% pixels clipped
+        overexposed_safe = 5  # Clear if <5% pixels clipped
+
+        was_overexposed = self._overexposure_detected
+
+        if mean_brightness > brightness_high or overexposed_pct > overexposed_high:
+            # Overexposure detected - activate fast ramp-down
+            self._overexposure_detected = True
+            if not was_overexposed:
+                logger.warning(
+                    f"[FastRamp] OVEREXPOSURE DETECTED: brightness={mean_brightness:.1f}, "
+                    f"clipped={overexposed_pct:.1f}% - activating fast ramp-down"
+                )
+        elif mean_brightness < brightness_safe and overexposed_pct < overexposed_safe:
+            # Back to safe range - deactivate fast ramp-down
+            self._overexposure_detected = False
+            if was_overexposed:
+                logger.info(
+                    f"[FastRamp] Overexposure cleared: brightness={mean_brightness:.1f}, "
+                    f"clipped={overexposed_pct:.1f}% - resuming normal interpolation"
+                )
+
+        return self._overexposure_detected
 
     def _calculate_target_gain_from_lux(self, lux: float) -> float:
         """
@@ -659,7 +719,9 @@ class AdaptiveTimelapse:
         # Tuning history:
         #   - 1.0: Original - too dark in day mode (brightness ~40 at lux 600)
         #   - 2.5: 2024-12-24 - increased for brighter day images (target brightness ~120)
-        reference_lux = 2.5  # Higher = brighter images across all lux levels
+        #   - 3.5: 2024-12-25 - increased further, daytime still too dark (~80-100 vs target 120)
+        #   - 4.5: 2024-12-25 - increased again per user feedback, still a bit dark
+        reference_lux = 4.5  # Higher = brighter images across all lux levels
 
         # Calculate base target exposure using inverse relationship
         base_exposure = (night_exposure * reference_lux) / lux
@@ -1025,8 +1087,10 @@ class AdaptiveTimelapse:
             target_exposure = night["max_exposure_time"]
 
             # Apply smooth interpolation even in night mode for seamless transitions
+            # Use fast ramp-down if overexposure was detected in previous frame
+            exposure_speed = self._fast_rampdown_speed if self._overexposure_detected else None
             smooth_gain = self._interpolate_gain(target_gain)
-            smooth_exposure = self._interpolate_exposure(target_exposure)
+            smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
             settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
             settings["AnalogueGain"] = smooth_gain
@@ -1061,8 +1125,10 @@ class AdaptiveTimelapse:
                 target_exposure = self._calculate_target_exposure_from_lux(lux)
 
                 # Apply smooth interpolation to prevent jumps
+                # Use fast ramp-down if overexposure was detected in previous frame
+                exposure_speed = self._fast_rampdown_speed if self._overexposure_detected else None
                 smooth_gain = self._interpolate_gain(target_gain)
-                smooth_exposure = self._interpolate_exposure(target_exposure)
+                smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
                 settings["AnalogueGain"] = smooth_gain
                 settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
@@ -1147,8 +1213,10 @@ class AdaptiveTimelapse:
                 )
 
                 # Apply smooth interpolation to prevent jumps
+                # Use fast ramp-down if overexposure was detected in previous frame
+                exposure_speed = self._fast_rampdown_speed if self._overexposure_detected else None
                 smooth_gain = self._interpolate_gain(target_gain)
-                smooth_exposure = self._interpolate_exposure(target_exposure)
+                smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
                 settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
                 settings["AnalogueGain"] = smooth_gain
@@ -1639,6 +1707,8 @@ class AdaptiveTimelapse:
                             if brightness_metrics:
                                 actual_brightness = brightness_metrics.get("mean_brightness")
                                 self._apply_brightness_feedback(actual_brightness)
+                                # Check for overexposure and enable fast ramp-down if needed
+                                self._check_overexposure(brightness_metrics)
                         except Exception as e:
                             logger.debug(f"Could not apply brightness feedback: {e}")
 
