@@ -537,6 +537,20 @@ graphs:
   # Default time window for analysis (hours)
   default_hours: 24
 
+# Video Upload Settings (for daily_timelapse.py)
+video_upload:
+  # Enable/disable automatic upload after timelapse creation
+  enabled: false
+
+  # Server endpoint URL for video uploads
+  url: "https://example.com/api/video/upload"
+
+  # API key for authentication (Bearer token)
+  api_key: "your-api-key-here"
+
+  # Camera ID for the upload (used to identify this camera on the server)
+  camera_id: "camera_01"
+
 # Weather Data Settings
 weather:
   # Enable/disable weather data fetching

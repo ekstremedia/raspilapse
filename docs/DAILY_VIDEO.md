@@ -4,310 +4,259 @@ This document describes the automatic daily timelapse video generation feature f
 
 ## Overview
 
-The daily video feature automatically creates a timelapse video from the last 24 hours of captured images every day at 04:00. This is perfect for creating daily summary videos of your timelapse project.
+The daily video feature automatically creates a timelapse video and keogram from the last 24 hours of captured images every day at 05:00, then uploads them to your server.
 
 ## Features
 
-- **Automatic daily generation**: Creates a video every day at 04:00
-- **Last 24 hours**: Always captures exactly 24 hours of footage
-- **Smart naming**: Videos are named `{project_name}_daily_YYYY-MM-DD.mp4`
+- **Automatic daily generation**: Creates video + keogram every day at 05:00
+- **24-hour window**: Captures from 05:00 yesterday to 05:00 today
+- **Keogram generation**: Creates a time-slice image alongside the video
+- **Server upload**: Automatically uploads video and keogram to your webserver
+- **Smart naming**: Videos named `{project_name}_YYYY-MM-DD_0500-0500.mp4`
 - **Date-organized**: Saves to `/var/www/html/videos/YYYY/MM/` for easy browsing
 - **Memory-optimized**: Uses ultrafast preset and limited threads for 4K encoding
-- **No timeout**: Service runs until completion (no arbitrary time limits)
-- **Persistent timer**: Will catch up if the system was offline during scheduled time
+- **Deflicker**: Smooths exposure transitions (sunrise/sunset spikes)
 
-## Installation
+## Quick Start
 
-To enable automatic daily video generation, run:
-
-```bash
-cd /home/pi/raspilapse
-./install_daily_video.sh
-```
-
-This will:
-1. Create the video output directory (`/var/www/html/videos/`)
-2. Install systemd service and timer files
-3. Enable and start the timer
-4. Show you when the next video will be generated
-
-## Manual Usage
-
-### Generate Last 24 Hours (Default)
+The daily timelapse runs automatically via cron at 05:00. To test manually:
 
 ```bash
-python3 src/make_timelapse.py
+# Run for yesterday (same as cron job)
+cd /home/pi/raspilapse && python3 src/daily_timelapse.py
+
+# Run for a specific date
+python3 src/daily_timelapse.py --date 2025-12-23
+
+# Skip upload (just create video + keogram)
+python3 src/daily_timelapse.py --no-upload
+
+# Dry run (see what would happen)
+python3 src/daily_timelapse.py --dry-run
 ```
 
-This creates a video from the last 24 hours with automatic naming.
+## Configuration
 
-### Generate Custom Time Range
+### Video Upload Settings
+
+Add to `config/config.yml`:
+
+```yaml
+video_upload:
+  # Enable/disable automatic upload after timelapse creation
+  enabled: true
+
+  # Server endpoint URL for video uploads
+  url: "https://your-server.com/api/video/upload"
+
+  # API key for authentication (Bearer token)
+  api_key: "your-api-key-here"
+
+  # Camera ID for the upload
+  camera_id: "camera_01"
+```
+
+### Video Output Settings
+
+```yaml
+video:
+  # Directory for generated timelapse videos
+  directory: "/var/www/html/videos"
+
+  # Organize videos by date subdirectories (YYYY/MM format)
+  organize_by_date: true
+  date_format: "%Y/%m"
+
+  # Video codec settings
+  codec:
+    name: "libx264"
+    pixel_format: "yuv420p"
+    crf: 20
+    preset: "ultrafast"
+    threads: 2
+
+  # Frame rate
+  fps: 25
+
+  # Deflicker to smooth exposure transitions
+  deflicker: true
+  deflicker_size: 10
+```
+
+## Cron Setup
+
+The cron job is configured to run at 05:00 daily:
 
 ```bash
-# From 04:00 yesterday to 04:00 today
-python3 src/make_timelapse.py --start 04:00 --end 04:00
+# View current crontab
+crontab -l
 
-# From 20:00 yesterday to 08:00 today
-python3 src/make_timelapse.py --start 20:00 --end 08:00
+# The entry looks like:
+0 5 * * * cd /home/pi/raspilapse && /usr/bin/python3 src/daily_timelapse.py >> logs/daily_timelapse_cron.log 2>&1
 ```
 
-### Test Mode (Limited Frames)
+To modify the schedule:
 
 ```bash
-# Process only first 100 images for quick testing
-python3 src/make_timelapse.py --limit 100
+crontab -e
 ```
 
-### Custom Output Directory
+## Command Line Options
 
-```bash
-# Save to specific directory
-python3 src/make_timelapse.py --output-dir /path/to/videos
+```
+usage: daily_timelapse.py [-h] [--date DATE] [-c CONFIG] [--no-upload]
+                          [--only-upload] [--dry-run]
+
+Daily timelapse runner - creates video and uploads to server
+
+options:
+  --date DATE      Date for timelapse in YYYY-MM-DD format (default: yesterday)
+  -c, --config     Path to configuration file (default: config/config.yml)
+  --no-upload      Skip upload step (just create video and keogram)
+  --only-upload    Skip video creation (just upload existing files)
+  --dry-run        Show what would be done without actually doing it
 ```
 
-## Service Management
+## What Gets Uploaded
 
-### Check Status
+The script uploads the following to your server:
 
-```bash
-# Check timer status (when next video will be generated)
-sudo systemctl status raspilapse-daily-video.timer
+| Field | Description |
+|-------|-------------|
+| `video` | The timelapse MP4 file (required) |
+| `keogram` | The keogram/time-slice image (optional) |
+| `camera_id` | Camera identifier from config |
+| `date` | Date in YYYY-MM-DD format |
 
-# Check service logs (see video generation output)
-sudo journalctl -u raspilapse-daily-video.service -f
+## Process Flow
 
-# See next scheduled runs
-sudo systemctl list-timers raspilapse-daily-video.timer
-```
+1. **Create Timelapse Video**
+   - Runs `make_timelapse.py` with 05:00→05:00 time window
+   - Uses ffmpeg with deflicker and configured codec settings
+   - Saves to `/var/www/html/videos/YYYY/MM/`
 
-### Manual Trigger
+2. **Create Keogram**
+   - Generated automatically by `make_timelapse.py`
+   - Takes center vertical slice from each image
+   - Shows day/night transitions in single image
 
-```bash
-# Generate daily video right now (doesn't affect schedule)
-sudo systemctl start raspilapse-daily-video.service
-```
+3. **Upload to Server**
+   - POSTs video + keogram to configured endpoint
+   - Uses Bearer token authentication
+   - Logs success/failure
 
-### Disable/Enable
+## Output Files
 
-```bash
-# Temporarily stop daily videos
-sudo systemctl stop raspilapse-daily-video.timer
+### Video Naming
 
-# Disable daily videos completely
-sudo systemctl disable --now raspilapse-daily-video.timer
+- **Same-day range**: `{project}_YYYY-MM-DD_HHMM-HHMM.mp4`
+  - Example: `kringelen_2025-12-24_0500-0500.mp4`
+- **Multi-day range**: `{project}_YYYY-MM-DD_HHMM_to_YYYY-MM-DD_HHMM.mp4`
+  - Example: `kringelen_2025-12-23_0500_to_2025-12-24_0500.mp4`
 
-# Re-enable daily videos
-sudo systemctl enable --now raspilapse-daily-video.timer
-```
+### Keogram Naming
 
-### Change Schedule
-
-To change when videos are generated (default is 04:00):
-
-```bash
-sudo systemctl edit raspilapse-daily-video.timer
-```
-
-Add these lines to override the schedule:
-```ini
-[Timer]
-OnCalendar=
-OnCalendar=*-*-* 06:00:00
-```
-
-This example changes it to 06:00. The first `OnCalendar=` line clears the default.
-
-## Uninstallation
-
-To remove the daily video service:
-
-```bash
-cd /home/pi/raspilapse
-./uninstall_daily_video.sh
-```
-
-This removes the service but keeps your existing videos.
-
-## Video Output
-
-### Naming Convention
-
-- **Daily videos**: `{project_name}_daily_YYYY-MM-DD.mp4`
-  - Example: `kringelen_daily_2025-11-09.mp4`
-- **Custom ranges**: `{project_name}_{start_date}_to_{end_date}.mp4`
-  - Example: `kringelen_2025-11-08_to_2025-11-09.mp4`
+- `keogram_{project}_YYYY-MM-DD_HHMM-HHMM.jpg`
+  - Example: `keogram_kringelen_2025-12-24_0500-0500.jpg`
 
 ### Location
 
-Videos are saved to date-organized directories by default:
-- `/var/www/html/videos/2025/12/kringelen_nord_daily_2025-12-23.mp4`
+Videos and keograms are saved to date-organized directories:
+- `/var/www/html/videos/2025/12/kringelen_2025-12-24_0500-0500.mp4`
+- `/var/www/html/videos/2025/12/keogram_kringelen_2025-12-24_0500-0500.jpg`
 
-Accessible via:
-- Local web server: `http://raspberrypi.local/videos/2025/12/`
-- Direct file access: `/var/www/html/videos/YYYY/MM/`
+## Logs
 
-### Video Settings
+Logs are written to `logs/daily_timelapse_cron.log`:
 
-From `config/config.yml`:
-- **Frame rate**: 25 fps (smooth European standard)
-- **Codec**: H.264 (libx264)
-- **Preset**: ultrafast (memory-optimized for 4K)
-- **Threads**: 2 (prevents OOM on 4GB Pi)
-- **Quality**: CRF 23 (good quality)
-- **Format**: MP4 with YUV420p (maximum compatibility)
+```bash
+# View recent logs
+tail -50 logs/daily_timelapse_cron.log
+
+# Follow logs in real-time
+tail -f logs/daily_timelapse_cron.log
+```
 
 ## Troubleshooting
 
 ### No Video Generated
 
-Check if the service ran:
+Check the logs:
 ```bash
-sudo journalctl -u raspilapse-daily-video.service --since today
+cat logs/daily_timelapse_cron.log
 ```
 
-### Videos Too Large
+Verify images exist for the date:
+```bash
+ls /var/www/html/images/2025/12/24/
+```
+
+### Upload Failed
+
+Check server endpoint and API key in config:
+```yaml
+video_upload:
+  url: "https://your-server.com/api/video/upload"
+  api_key: "your-api-key"
+```
+
+Test with dry-run:
+```bash
+python3 src/daily_timelapse.py --dry-run
+```
+
+### Wrong Time Window
+
+The default is 05:00→05:00. This is configured in `daily_timelapse.py`. To change:
+
+```python
+# In daily_timelapse.py, modify the make_timelapse_cmd:
+"--start", "06:00",  # Change start time
+"--end", "06:00",    # Change end time
+```
+
+### Video Too Large
 
 Adjust quality in `config/config.yml`:
 ```yaml
 video:
   codec:
-    crf: 23  # Higher = smaller files (20-23 recommended)
+    crf: 23  # Higher = smaller files (20-28 range)
 ```
 
-### Video Not Playable (moov atom not found)
+## Manual Video Creation
 
-**Problem:** Video file exists but won't play, ffprobe shows "moov atom not found"
+To create a video without the upload wrapper:
 
-**Cause:** ffmpeg was killed before it could finalize the file (usually OOM killer)
-
-**Solutions:**
-1. Check if OOM killed ffmpeg:
-   ```bash
-   dmesg | grep -i "oom\|killed"
-   ```
-
-2. Use memory-optimized settings in `config/config.yml`:
-   ```yaml
-   video:
-     codec:
-       preset: "ultrafast"
-       threads: 2
-   ```
-
-3. Delete the corrupt video and regenerate:
-   ```bash
-   rm /var/www/html/videos/2025/12/broken_video.mp4
-   sudo systemctl start --no-block raspilapse-daily-video.service
-   ```
-
-### Wrong Time
-
-Check system time:
 ```bash
-timedatectl
+# Using make_timelapse.py directly
+python3 src/make_timelapse.py --start 05:00 --end 05:00 --start-date 2025-12-23 --end-date 2025-12-24
+
+# Custom time range (same day)
+python3 src/make_timelapse.py --start 08:00 --end 18:00 --today
+
+# Limit frames for testing
+python3 src/make_timelapse.py --limit 100
 ```
 
-Set correct timezone:
-```bash
-sudo timedatectl set-timezone Europe/Oslo
+## Server API Requirements
+
+Your server endpoint should accept:
+
 ```
+POST /api/video/upload
+Authorization: Bearer <api_key>
+Content-Type: multipart/form-data
 
-### Missing Images
-
-Verify images exist for the time range:
-```bash
-ls -la /var/www/html/images/$(date +%Y/%m/%d)/
+Fields:
+- video: (file) MP4 video file
+- keogram: (file) JPEG keogram image
+- camera_id: (string) Camera identifier
+- date: (string) Date in YYYY-MM-DD format
 ```
-
-## Web Integration
-
-To display videos on a web page, create an index.html in `/var/www/html/videos/`:
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Daily Timelapse Videos</title>
-    <style>
-        body { font-family: Arial; padding: 20px; }
-        video { width: 100%; max-width: 1920px; }
-        .video-item { margin: 20px 0; }
-    </style>
-</head>
-<body>
-    <h1>Daily Timelapse Videos</h1>
-    <div class="video-list">
-        <!-- Videos will be listed here by a script -->
-    </div>
-</body>
-</html>
-```
-
-## Performance Notes
-
-### 1080p (1920x1080)
-- Processing 2,880 images takes approximately 5-10 minutes
-- Video size is typically 150-200 MB for 24 hours
-
-### 4K (3840x2160)
-- Processing 2,880 images takes approximately 60-90 minutes
-- Video size is typically 400-600 MB for 24 hours
-- Uses ultrafast preset and 2 threads to prevent OOM
-
-### Service Timeout
-- The service has **no timeout** (`TimeoutStartSec=infinity`)
-- Encoding runs until completion, regardless of how long it takes
-- Monitor progress with: `journalctl -u raspilapse-daily-video -f`
-
-## Advanced Configuration
-
-### Custom Filename Pattern
-
-Edit `config/config.yml`:
-```yaml
-video:
-  filename_pattern: "{name}_{start_date}_to_{end_date}.mp4"
-```
-
-### Different Frame Rates
-
-Override in the service file:
-```bash
-sudo systemctl edit raspilapse-daily-video.service
-```
-
-Add:
-```ini
-[Service]
-ExecStart=
-ExecStart=/usr/bin/python3 /home/pi/raspilapse/src/make_timelapse.py --output-dir /var/www/html/videos --fps 30
-```
-
-## Integration with Adaptive Timelapse
-
-The daily video generation works seamlessly with the adaptive timelapse system:
-- Uses all images captured by `auto_timelapse.py`
-- Includes day, night, and transition images
-- Maintains chronological order
-- Preserves overlay information if enabled
-
-## Tips
-
-1. **Storage Management**: Set up a cron job to delete videos older than 30 days:
-   ```bash
-   0 5 * * * find /var/www/html/videos -name "*.mp4" -mtime +30 -delete
-   ```
-
-2. **Notification**: Add a webhook to notify when videos are ready:
-   ```bash
-   sudo systemctl edit raspilapse-daily-video.service
-   ```
-   Add `ExecStartPost=/usr/bin/curl -X POST https://your-webhook-url`
-
-3. **Multiple Cameras**: Use different project names and separate services for each camera
 
 ## Related Documentation
 
-- [README.md](README.md) - Main project documentation
+- [TIMELAPSE_VIDEO.md](TIMELAPSE_VIDEO.md) - Video creation details
 - [ADAPTIVE_TIMELAPSE_FLOW.md](ADAPTIVE_TIMELAPSE_FLOW.md) - How images are captured
-- [OVERLAY.md](OVERLAY.md) - Adding text overlays to videos
+- [OVERLAY.md](OVERLAY.md) - Adding text overlays to images
