@@ -77,8 +77,6 @@ class AdaptiveTimelapse:
 
         # Overexposure detection for fast ramp-down
         self._overexposure_detected: bool = False  # True when image is overexposed
-        # Fast ramp-down speed from config (default 0.30 = 3x normal speed, still smooth)
-        self._fast_rampdown_speed: float = transition_config.get("fast_rampdown_speed", 0.30)
 
         # Holy Grail transition state - seeded from actual camera metadata
         self._transition_seeded: bool = False  # True once we've seeded from metadata
@@ -102,6 +100,9 @@ class AdaptiveTimelapse:
         self._brightness_feedback_strength = transition_config.get(
             "brightness_feedback_strength", 0.3
         )
+
+        # Fast ramp-down speed for overexposure correction (default 0.30 = 3x normal speed)
+        self._fast_rampdown_speed = transition_config.get("fast_rampdown_speed", 0.30)
 
         # Polar awareness - sun position for high latitude locations (68°N)
         self._location = None
@@ -1498,22 +1499,32 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.error(f"Failed to create symlink: {e}")
 
-    def capture_frame(self, capture: ImageCapture, mode: str) -> Tuple[str, Optional[str]]:
+    def capture_frame(
+        self, capture: ImageCapture, mode: str, calculated_lux: float = None
+    ) -> Tuple[str, Optional[str]]:
         """
         Capture a single frame with the camera's current settings.
 
         Args:
             capture: ImageCapture instance with initialized camera
             mode: Light mode
+            calculated_lux: Calculated lux value to use in overlay (overrides camera's estimate)
 
         Returns:
             Tuple of (image_path, metadata_path)
         """
         logger.info(f"Capturing frame #{self.frame_count} in {mode} mode...")
 
+        # Prepare extra metadata with calculated lux (overrides camera's unreliable estimate)
+        extra_metadata = {}
+        if calculated_lux is not None:
+            extra_metadata["Lux"] = calculated_lux
+
         # Capture the image (controls were set during initialization)
-        # Pass mode so overlay knows the light mode
-        image_path, metadata_path = capture.capture(mode=mode)
+        # Pass mode so overlay knows the light mode, and calculated lux for accurate display
+        image_path, metadata_path = capture.capture(
+            mode=mode, extra_metadata=extra_metadata if extra_metadata else None
+        )
 
         # Create symlink to latest image if enabled
         self._create_latest_symlink(image_path)
@@ -1596,8 +1607,16 @@ class AdaptiveTimelapse:
                     try:
                         test_image_path, test_metadata = self.take_test_shot()
 
-                        # Calculate raw lux from test shot
-                        raw_lux = self.calculate_lux(test_image_path, test_metadata)
+                        # Get lux from test shot metadata (camera's estimate with auto settings)
+                        # Fall back to calculated lux if metadata doesn't have it
+                        metadata_lux = test_metadata.get("Lux")
+                        if metadata_lux is not None and metadata_lux > 0:
+                            raw_lux = metadata_lux
+                            logger.debug(f"Using metadata Lux: {raw_lux:.2f}")
+                        else:
+                            # Calculate lux from image brightness as fallback
+                            raw_lux = self.calculate_lux(test_image_path, test_metadata)
+                            logger.debug(f"Using calculated Lux: {raw_lux:.2f}")
 
                         # Apply exponential moving average smoothing
                         lux = self._smooth_lux(raw_lux)
@@ -1670,7 +1689,7 @@ class AdaptiveTimelapse:
 
                 # Capture actual frame
                 try:
-                    image_path, metadata_path = self.capture_frame(capture, mode)
+                    image_path, metadata_path = self.capture_frame(capture, mode, lux)
                     logger.info(f"Frame captured: {image_path}")
 
                     # Enrich metadata with diagnostic information (if enabled)

@@ -400,7 +400,10 @@ class ImageCapture:
             self.picam2.set_controls(control_map)
 
     def capture(
-        self, output_path: Optional[str] = None, mode: Optional[str] = None
+        self,
+        output_path: Optional[str] = None,
+        mode: Optional[str] = None,
+        extra_metadata: Optional[Dict] = None,
     ) -> Tuple[str, Optional[str]]:
         """
         Capture an image.
@@ -408,6 +411,7 @@ class ImageCapture:
         Args:
             output_path: Optional custom output path. If None, uses config pattern.
             mode: Optional light mode (day/night/transition) for overlay display
+            extra_metadata: Optional dict of extra metadata to merge (e.g., calculated lux)
 
         Returns:
             Tuple of (image_path, metadata_path)
@@ -466,6 +470,10 @@ class ImageCapture:
 
                 # Get metadata from request (always, for overlay)
                 metadata_dict = request.get_metadata()
+
+                # Merge extra metadata (e.g., calculated lux) - overrides camera values
+                if extra_metadata:
+                    metadata_dict.update(extra_metadata)
 
                 # Save metadata if enabled (from request, no blocking!)
                 metadata_path = None
