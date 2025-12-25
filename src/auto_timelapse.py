@@ -717,14 +717,11 @@ class AdaptiveTimelapse:
         # Formula: exposure = (night_exposure * reference_lux) / lux
         # where reference_lux controls the overall brightness level
         #
-        # Tuning history:
-        #   - 1.0: Original - too dark in day mode (brightness ~40 at lux 600)
-        #   - 2.5: 2024-12-24 - increased for brighter day images (target brightness ~120)
-        #   - 3.5: 2024-12-25 - "better but could be a little brighter"
-        #   - 4.5: 2024-12-25 - way too bright
-        #   - 4.0: 2024-12-25 - still way too bright
-        #   - 3.6: 2024-12-25 - just slightly above 3.5
-        reference_lux = 3.6  # Higher = brighter images across all lux levels
+        # Reference lux controls overall image brightness
+        # Higher = brighter images, Lower = darker images
+        # Can be configured per-camera in config.yml under adaptive_timelapse.reference_lux
+        # Default 3.8 - slightly brighter than 3.5 which was "good but could be a bit brighter"
+        reference_lux = adaptive_config.get("reference_lux", 3.8)
 
         # Calculate base target exposure using inverse relationship
         base_exposure = (night_exposure * reference_lux) / lux
@@ -1609,16 +1606,9 @@ class AdaptiveTimelapse:
                     try:
                         test_image_path, test_metadata = self.take_test_shot()
 
-                        # Get lux from test shot metadata (camera's estimate with auto settings)
-                        # Fall back to calculated lux if metadata doesn't have it
-                        metadata_lux = test_metadata.get("Lux")
-                        if metadata_lux is not None and metadata_lux > 0:
-                            raw_lux = metadata_lux
-                            logger.debug(f"Using metadata Lux: {raw_lux:.2f}")
-                        else:
-                            # Calculate lux from image brightness as fallback
-                            raw_lux = self.calculate_lux(test_image_path, test_metadata)
-                            logger.debug(f"Using calculated Lux: {raw_lux:.2f}")
+                        # Calculate lux from test shot image brightness
+                        # This is more reliable than camera's metadata lux estimate
+                        raw_lux = self.calculate_lux(test_image_path, test_metadata)
 
                         # Apply exponential moving average smoothing
                         lux = self._smooth_lux(raw_lux)
