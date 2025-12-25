@@ -24,8 +24,10 @@ if project_root not in sys.path:
 
 try:
     from src.logging_config import get_logger
+    from src.create_keogram import create_keogram_from_images
 except ModuleNotFoundError:
     from logging_config import get_logger
+    from create_keogram import create_keogram_from_images
 
 
 # ANSI color codes for pretty output
@@ -380,6 +382,16 @@ Examples:
     parser.add_argument(
         "--output-dir", help="Override output directory from config (e.g., /var/www/html/videos)"
     )
+    parser.add_argument(
+        "--no-keogram",
+        action="store_true",
+        help="Skip keogram generation (default: keogram is created alongside video)",
+    )
+    parser.add_argument(
+        "--keogram-only",
+        action="store_true",
+        help="Only generate keogram, skip video creation",
+    )
 
     args = parser.parse_args()
 
@@ -532,23 +544,63 @@ Examples:
             )
         output_file = video_path / filename
 
-    # Create video
-    success = create_video(
-        images,
-        output_file,
-        fps=fps,
-        codec=codec,
-        pixel_format=pixel_format,
-        crf=crf,
-        preset=preset,
-        threads=threads,
-        bitrate=bitrate,
-        resolution=None,  # Use original resolution
-        logger=logger,
-    )
+    # Create video (unless keogram-only mode)
+    video_success = True
+    if not args.keogram_only:
+        video_success = create_video(
+            images,
+            output_file,
+            fps=fps,
+            codec=codec,
+            pixel_format=pixel_format,
+            crf=crf,
+            preset=preset,
+            threads=threads,
+            bitrate=bitrate,
+            resolution=None,  # Use original resolution
+            logger=logger,
+        )
 
-    if success:
-        print_section("✓ TIMELAPSE VIDEO CREATED SUCCESSFULLY!")
+    # Create keogram (unless --no-keogram)
+    keogram_success = True
+    if not args.no_keogram:
+        print_subsection("🌅 Generating Keogram")
+        logger.info("Starting keogram generation")
+
+        # Generate keogram filename (same as video but with keogram_ prefix and .jpg)
+        if args.keogram_only and args.output:
+            keogram_file = video_path / args.output
+        else:
+            keogram_filename = output_file.stem.replace("_daily_", "_keogram_") + ".jpg"
+            if "_daily_" not in output_file.stem:
+                keogram_filename = f"keogram_{output_file.stem}.jpg"
+            keogram_file = video_path / keogram_filename
+
+        keogram_success = create_keogram_from_images(
+            images,
+            keogram_file,
+            quality=95,
+            logger=logger,
+        )
+
+        if keogram_success:
+            logger.info(f"Keogram created: {keogram_file}")
+        else:
+            logger.warning("Keogram generation failed")
+
+    # Report final status
+    if args.keogram_only:
+        if keogram_success:
+            print_section("✓ KEOGRAM CREATED SUCCESSFULLY!")
+            return 0
+        else:
+            print_section("✗ FAILED TO CREATE KEOGRAM")
+            return 1
+    elif video_success:
+        if keogram_success:
+            print_section("✓ TIMELAPSE VIDEO AND KEOGRAM CREATED SUCCESSFULLY!")
+        else:
+            print_section("✓ TIMELAPSE VIDEO CREATED (keogram failed)")
         logger.info("Timelapse video generation completed successfully")
         return 0
     else:
