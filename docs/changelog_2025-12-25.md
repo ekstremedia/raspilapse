@@ -25,7 +25,7 @@ Added automatic fast exposure ramp-down when overexposure is detected:
 Previously hardcoded, now configurable per-camera in config.yml:
 ```yaml
 adaptive_timelapse:
-  reference_lux: 3.6  # Higher = brighter, Lower = darker
+  reference_lux: 3.8  # Higher = brighter, Lower = darker
 ```
 
 **Tuning history:**
@@ -33,7 +33,8 @@ adaptive_timelapse:
 - 3.5: "better but could be a little brighter"
 - 4.5: way too bright
 - 4.0: still way too bright
-- 3.6: current setting (OK on this camera)
+- 3.6: OK but still slightly dark
+- 3.8: final value (default)
 
 ### 3. Lux Calculation (Reverted)
 **File:** `src/auto_timelapse.py`
@@ -101,6 +102,53 @@ After reviewing the change to use metadata lux instead of calculated lux, decide
 - `calculate_lux()` computes lux from image brightness (reliable)
 - This value is used for mode detection and exposure calculations
 - Same value is passed to overlay for accurate display
+
+### 6. Added FFMPEG Deflicker Filter
+**Files:** `src/make_timelapse.py`, `config/config.yml`
+
+Added deflicker video filter to smooth remaining exposure jumps in final timelapse video:
+- Filter: `deflicker=mode=pm:size=10`
+- `mode=pm`: Predictive Mean (best for timelapses)
+- `size=10`: Averages luminance over 10 frames (smooths single spikes)
+- Configurable in config.yml:
+  ```yaml
+  video:
+    deflicker: true
+    deflicker_size: 10
+  ```
+
+### 7. Enhanced make_timelapse.py Parameters
+**Files:** `src/make_timelapse.py`, `config/config.yml`
+
+Improved timelapse script with better date/time handling:
+
+**New parameters:**
+- `--start-date YYYY-MM-DD` - Specify start date
+- `--end-date YYYY-MM-DD` - Specify end date
+- `--today` - Both start and end on today's date
+
+**Config-based defaults:**
+```yaml
+video:
+  default_start_time: "05:00"
+  default_end_time: "05:00"
+```
+
+**Improved filename format** (includes times to avoid overwrites):
+- Same day: `projectname_2025-12-25_0700-1500.mp4`
+- Different days: `projectname_2025-12-24_0500_to_2025-12-25_0500.mp4`
+
+**Usage examples:**
+```bash
+# Default: config times (05:00 yesterday to 05:00 today)
+python3 src/make_timelapse.py
+
+# Today 07:00 to 15:00
+python3 src/make_timelapse.py --start 07:00 --end 15:00 --today
+
+# Specific date range
+python3 src/make_timelapse.py --start 07:00 --end 15:00 --start-date 2025-12-24 --end-date 2025-12-25
+```
 
 ## Next Steps
 - Monitor tomorrow's dawn transition to see if fast ramp-down helps

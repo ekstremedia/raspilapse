@@ -466,6 +466,9 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 - [x] Lores stream for fast brightness measurement (implemented 2025-12-24)
 - [x] Fixed day WB gains config option (implemented 2025-12-24)
 - [x] Test shot frequency control (implemented 2025-12-24)
+- [x] Fast overexposure ramp-down (implemented 2025-12-25)
+- [x] Configurable reference_lux per camera (implemented 2025-12-25)
+- [x] FFMPEG deflicker filter in video output (implemented 2025-12-25)
 - [ ] Adaptive WB transition speed based on lux rate of change
 - [ ] Per-channel WB smoothing (red and blue could have different speeds)
 - [ ] Sunset/sunrise detection for optimized transition timing
@@ -475,6 +478,25 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 ---
 
 ## Changelog
+
+### 2025-12-25 - Overexposure Detection & Brightness Tuning
+
+**Fast Overexposure Ramp-Down:**
+- Added automatic detection of overexposed frames (brightness > 180 or >10% clipped pixels)
+- When detected, exposure interpolation speed increases from 0.10 to 0.30 (3x faster)
+- Prevents the "light flash" problem at dawn when 20s exposure stays on too long
+- Configurable via `fast_rampdown_speed` in config.yml
+- Logs `[FastRamp] OVEREXPOSURE DETECTED` when triggered
+
+**Configurable Reference Lux:**
+- New config option `adaptive_timelapse.reference_lux` (default: 3.8)
+- Controls overall image brightness: higher = brighter images
+- Allows per-camera tuning based on scene and sensor sensitivity
+- Formula: `exposure = (20 * reference_lux) / lux`
+
+**Calculated Lux to Overlay:**
+- Overlay now shows calculated lux instead of camera's unreliable metadata estimate
+- Fixed "lux: 400 at night" display issue on some cameras
 
 ### 2025-12-24 - Performance & Configuration Improvements
 - Added lores stream for fast in-memory brightness measurement

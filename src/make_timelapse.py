@@ -196,6 +196,8 @@ def create_video(
     threads: int = 2,
     bitrate: str = "10M",
     resolution: Tuple[int, int] = None,
+    deflicker: bool = True,
+    deflicker_size: int = 10,
     logger: logging.Logger = None,
 ) -> bool:
     """
@@ -209,6 +211,8 @@ def create_video(
         pixel_format: Pixel format (e.g., "yuv420p")
         crf: Constant Rate Factor (quality, 0-51, lower = better)
         resolution: Optional (width, height) to scale video
+        deflicker: Enable deflicker filter to smooth exposure transitions
+        deflicker_size: Deflicker window size (frames to average)
         logger: Optional logger instance
 
     Returns:
@@ -259,10 +263,23 @@ def create_video(
             # libx264: use preset and threads to control memory usage
             cmd.extend(["-preset", preset, "-threads", str(threads), "-crf", str(crf)])
 
+        # Build video filter chain
+        filters = []
+
         # Add resolution scaling if specified
         if resolution:
             width, height = resolution
-            cmd.extend(["-vf", f"scale={width}:{height}"])
+            filters.append(f"scale={width}:{height}")
+
+        # Add deflicker filter to smooth exposure transitions (like sunrise spikes)
+        # mode=pm: Predictive Mean (best for timelapses)
+        # size: Averages luminance over N frames (smooths single spikes)
+        if deflicker:
+            filters.append(f"deflicker=mode=pm:size={deflicker_size}")
+
+        # Apply filter chain if any filters exist
+        if filters:
+            cmd.extend(["-vf", ",".join(filters)])
 
         # Add faststart flag for web streaming and better resilience
         # This writes the moov atom at the beginning of the file
@@ -281,6 +298,8 @@ def create_video(
                 "Codec", f"{Colors.bold(codec)} (CRF {crf}, preset {preset}, {threads} threads)"
             )
         print_info("Pixel format", Colors.bold(pixel_format))
+        if deflicker:
+            print_info("Deflicker", f"{Colors.bold('enabled')} (size={deflicker_size} frames)")
 
         duration_seconds = len(image_list) / fps
         print_info(
@@ -336,13 +355,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Create video from last 24 hours (default)
+  # Create video using default times from config (e.g., 04:00 yesterday to 04:00 today)
   python3 src/make_timelapse.py
 
-  # Create video from 04:00 yesterday to 04:00 today
-  python3 src/make_timelapse.py --start 04:00 --end 04:00
+  # Create video from 07:00 to 15:00 today
+  python3 src/make_timelapse.py --start 07:00 --end 15:00 --today
 
-  # Create video from 20:00 yesterday to 08:00 today (test)
+  # Create video from specific dates and times
+  python3 src/make_timelapse.py --start 07:00 --end 15:00 --start-date 2025-12-24 --end-date 2025-12-25
+
+  # Create video from 20:00 yesterday to 08:00 today
   python3 src/make_timelapse.py --start 20:00 --end 08:00
 
   # Use first 100 images only (for testing)
@@ -358,10 +380,24 @@ Examples:
 
     parser.add_argument(
         "--start",
-        help="Start time in HH:MM format (e.g., 04:00). If end time is same or earlier, assumes previous day. Default: 24 hours ago from now.",
+        help="Start time in HH:MM format (e.g., 07:00). Default: from config or 00:00.",
     )
     parser.add_argument(
-        "--end", help="End time in HH:MM format (e.g., 04:00). Default: current time."
+        "--end",
+        help="End time in HH:MM format (e.g., 15:00). Default: from config or current time.",
+    )
+    parser.add_argument(
+        "--start-date",
+        help="Start date in YYYY-MM-DD format (e.g., 2025-12-24). Default: yesterday if end time <= start time, else today.",
+    )
+    parser.add_argument(
+        "--end-date",
+        help="End date in YYYY-MM-DD format (e.g., 2025-12-25). Default: today.",
+    )
+    parser.add_argument(
+        "--today",
+        action="store_true",
+        help="Both start and end on today's date (use with --start and --end times).",
     )
     parser.add_argument(
         "--limit",
@@ -410,39 +446,101 @@ Examples:
 
     # Calculate datetime range
     now = datetime.now()
+    today = now.date()
+    yesterday = today - timedelta(days=1)
 
-    # Default to last 24 hours if no start/end times provided
-    if not args.start and not args.end:
-        # Default: last 24 hours
-        end_datetime = now
-        start_datetime = now - timedelta(hours=24)
-        logger.info("Using default time range: last 24 hours")
-    elif args.start and args.end:
-        # Both start and end provided
+    # Get default times from config (or use sensible defaults)
+    default_start_time = config.get("video", {}).get("default_start_time", "05:00")
+    default_end_time = config.get("video", {}).get("default_end_time", "05:00")
+
+    # Parse start time
+    if args.start:
         try:
             start_hour, start_min = parse_time(args.start)
+        except ValueError as e:
+            print(Colors.error(f"✗ {e}"))
+            logger.error(str(e))
+            return 1
+    else:
+        # Use config default
+        try:
+            start_hour, start_min = parse_time(default_start_time)
+        except ValueError:
+            start_hour, start_min = 5, 0
+
+    # Parse end time
+    if args.end:
+        try:
             end_hour, end_min = parse_time(args.end)
         except ValueError as e:
             print(Colors.error(f"✗ {e}"))
             logger.error(str(e))
             return 1
-
-        end_datetime = now.replace(hour=end_hour, minute=end_min, second=0, microsecond=0)
-
-        # If end time is same or earlier than start time, assume start was yesterday
-        if (end_hour < start_hour) or (end_hour == start_hour and end_min <= start_min):
-            start_datetime = (end_datetime - timedelta(days=1)).replace(
-                hour=start_hour, minute=start_min
-            )
-        else:
-            start_datetime = end_datetime.replace(hour=start_hour, minute=start_min)
     else:
-        # Only one provided - error
-        print(
-            Colors.error("✗ Must provide both --start and --end, or neither for default 24 hours")
+        # Use config default
+        try:
+            end_hour, end_min = parse_time(default_end_time)
+        except ValueError:
+            end_hour, end_min = 5, 0
+    use_current_time = False
+
+    # Parse dates
+    if args.start_date:
+        try:
+            start_date = datetime.strptime(args.start_date, "%Y-%m-%d").date()
+        except ValueError:
+            print(
+                Colors.error(
+                    f"✗ Invalid start date format '{args.start_date}'. Expected YYYY-MM-DD"
+                )
+            )
+            return 1
+    else:
+        start_date = None  # Will be determined below
+
+    if args.end_date:
+        try:
+            end_date = datetime.strptime(args.end_date, "%Y-%m-%d").date()
+        except ValueError:
+            print(Colors.error(f"✗ Invalid end date format '{args.end_date}'. Expected YYYY-MM-DD"))
+            return 1
+    else:
+        end_date = today  # Default to today
+
+    # Determine start date if not provided
+    if start_date is None:
+        if args.today:
+            # Both start and end on today
+            start_date = today
+        elif (end_hour < start_hour) or (end_hour == start_hour and end_min <= start_min):
+            # End time is same or earlier than start time - start was yesterday
+            start_date = yesterday
+        else:
+            # Same day
+            start_date = end_date
+
+    # Build datetime objects
+    start_datetime = datetime.combine(start_date, datetime.min.time()).replace(
+        hour=start_hour, minute=start_min, second=0, microsecond=0
+    )
+    if use_current_time:
+        end_datetime = now
+    else:
+        end_datetime = datetime.combine(end_date, datetime.min.time()).replace(
+            hour=end_hour, minute=end_min, second=0, microsecond=0
         )
-        logger.error("Invalid time arguments")
+
+    # Validate range
+    if start_datetime >= end_datetime:
+        print(
+            Colors.error(
+                f"✗ Start time ({start_datetime}) must be before end time ({end_datetime})"
+            )
+        )
+        logger.error("Invalid time range: start >= end")
         return 1
+
+    logger.info(f"Time range: {start_datetime} to {end_datetime}")
 
     logger.info(f"Starting timelapse generation: {start_datetime} to {end_datetime}")
 
@@ -471,6 +569,8 @@ Examples:
     preset = config["video"]["codec"].get("preset", "ultrafast")
     threads = config["video"]["codec"].get("threads", 2)
     bitrate = config["video"]["codec"].get("bitrate", "10M")
+    deflicker = config["video"].get("deflicker", True)
+    deflicker_size = config["video"].get("deflicker_size", 10)
 
     # Get camera name from overlay config for better video naming
     camera_name = config.get("overlay", {}).get("camera_name", project_name)
@@ -528,20 +628,19 @@ Examples:
     if args.output:
         output_file = video_path / args.output
     else:
-        # Enhanced filename generation for better organization
-        # If it's a 24-hour video (default), use simpler naming
-        if not args.start and not args.end:
-            # For daily videos, use the date of the end time (today)
-            # Format: cameraname_daily_YYYY-MM-DD.mp4
-            filename = f"{project_name}_daily_{end_datetime.strftime('%Y-%m-%d')}.mp4"
+        # Generate filename with dates and times to avoid overwrites
+        # Format: projectname_YYYY-MM-DD_HHMM_to_YYYY-MM-DD_HHMM.mp4
+        start_str = start_datetime.strftime("%Y-%m-%d_%H%M")
+        end_str = end_datetime.strftime("%Y-%m-%d_%H%M")
+
+        # If same date, use shorter format
+        if start_datetime.date() == end_datetime.date():
+            # Same day: projectname_YYYY-MM-DD_HHMM-HHMM.mp4
+            filename = f"{project_name}_{start_datetime.strftime('%Y-%m-%d')}_{start_datetime.strftime('%H%M')}-{end_datetime.strftime('%H%M')}.mp4"
         else:
-            # For custom time ranges, use the pattern from config
-            filename_pattern = config["video"]["filename_pattern"]
-            filename = filename_pattern.format(
-                name=project_name,
-                start_date=start_datetime.strftime("%Y-%m-%d"),
-                end_date=end_datetime.strftime("%Y-%m-%d"),
-            )
+            # Different days: projectname_YYYY-MM-DD_HHMM_to_YYYY-MM-DD_HHMM.mp4
+            filename = f"{project_name}_{start_str}_to_{end_str}.mp4"
+
         output_file = video_path / filename
 
     # Create video (unless keogram-only mode)
@@ -558,6 +657,8 @@ Examples:
             threads=threads,
             bitrate=bitrate,
             resolution=None,  # Use original resolution
+            deflicker=deflicker,
+            deflicker_size=deflicker_size,
             logger=logger,
         )
 
