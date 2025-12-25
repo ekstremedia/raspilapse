@@ -720,9 +720,11 @@ class AdaptiveTimelapse:
         # Tuning history:
         #   - 1.0: Original - too dark in day mode (brightness ~40 at lux 600)
         #   - 2.5: 2024-12-24 - increased for brighter day images (target brightness ~120)
-        #   - 3.5: 2024-12-25 - increased further, daytime still too dark (~80-100 vs target 120)
-        #   - 4.5: 2024-12-25 - increased again per user feedback, still a bit dark
-        reference_lux = 4.5  # Higher = brighter images across all lux levels
+        #   - 3.5: 2024-12-25 - "better but could be a little brighter"
+        #   - 4.5: 2024-12-25 - way too bright
+        #   - 4.0: 2024-12-25 - still way too bright
+        #   - 3.6: 2024-12-25 - just slightly above 3.5
+        reference_lux = 3.6  # Higher = brighter images across all lux levels
 
         # Calculate base target exposure using inverse relationship
         base_exposure = (night_exposure * reference_lux) / lux
