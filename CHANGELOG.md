@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Initialization order bug where `_fast_rampdown_speed` was set before config loaded
+- **daily_timelapse.py file search**: Now searches recursively in date-organized subdirectories
+  - Previously failed to find videos in `/var/www/html/videos/YYYY/MM/` structure
+  - Both video and keogram file finding now use `**/` glob pattern
+- **Keogram overlay crop**: Increased from 5% to 7% (108px → 151px at 4K)
+  - 5% wasn't enough to fully remove 2-line overlay bar with padding
+  - Updated defaults in `create_keogram.py` and `make_timelapse.py`
 
 ### Documentation
 - Added `docs/changelog_2025-12-25.md` with detailed session notes

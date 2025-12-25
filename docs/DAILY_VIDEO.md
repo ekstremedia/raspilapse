@@ -139,6 +139,7 @@ The script uploads the following to your server:
    - Generated automatically by `make_timelapse.py`
    - Takes center vertical slice from each image
    - Shows day/night transitions in single image
+   - Automatically crops 7% from top to remove overlay bar
 
 3. **Upload to Server**
    - POSTs video + keogram to configured endpoint

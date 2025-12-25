@@ -114,7 +114,7 @@ def create_keogram(
     image_paths: List[Path],
     output_path: Path,
     quality: int = 95,
-    crop_top_percent: float = 5.0,
+    crop_top_percent: float = 7.0,
     crop_bottom_percent: float = 0.0,
     logger: Optional[logging.Logger] = None,
 ) -> bool:
@@ -128,7 +128,7 @@ def create_keogram(
         image_paths: List of image paths (must be sorted chronologically)
         output_path: Path for the output keogram image
         quality: JPEG quality (1-100, default 95)
-        crop_top_percent: Percentage of image height to crop from top (for overlay)
+        crop_top_percent: Percentage of image height to crop from top (default 7% for overlay bar)
         crop_bottom_percent: Percentage of image height to crop from bottom
         logger: Optional logger instance
 
@@ -258,7 +258,7 @@ def create_keogram_from_images(
     images: List[Path],
     output_path: Path,
     quality: int = 95,
-    crop_top_percent: float = 5.0,
+    crop_top_percent: float = 7.0,
     crop_bottom_percent: float = 0.0,
     logger: Optional[logging.Logger] = None,
 ) -> bool:
@@ -271,7 +271,7 @@ def create_keogram_from_images(
         images: List of image paths (sorted chronologically)
         output_path: Output path for the keogram
         quality: JPEG quality (1-100)
-        crop_top_percent: Percentage to crop from top (default 5% for overlay)
+        crop_top_percent: Percentage to crop from top (default 7% for overlay bar)
         crop_bottom_percent: Percentage to crop from bottom
         logger: Optional logger
 
@@ -340,8 +340,8 @@ What is a Keogram?
     parser.add_argument(
         "--crop-top",
         type=float,
-        default=5.0,
-        help="Percentage of image height to crop from top (default: 5%% for overlay removal)",
+        default=7.0,
+        help="Percentage of image height to crop from top (default: 7%% for overlay bar removal)",
     )
     parser.add_argument(
         "--crop-bottom",

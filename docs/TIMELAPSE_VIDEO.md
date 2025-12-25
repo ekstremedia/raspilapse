@@ -147,6 +147,11 @@ Optional:
   --no-keogram        Skip keogram generation
   --keogram-only      Only generate keogram, skip video
   -c, --config FILE   Path to config file (default: config/config.yml)
+
+Keogram Options (standalone create_keogram.py):
+  --crop-top PERCENT  Percentage to crop from top (default: 7% for overlay bar)
+  --crop-bottom PCT   Percentage to crop from bottom (default: 0%)
+  --no-crop           Disable automatic top cropping
 ```
 
 ## How It Works
@@ -505,6 +510,45 @@ file '/var/www/html/images/2025/11/05/kringelen_2025_11_05_20_00_48.jpg'
 file '/var/www/html/images/2025/11/05/kringelen_2025_11_05_20_01_18.jpg'
 ...
 ```
+
+## Keogram Generation
+
+A keogram (time-slice image) is automatically generated alongside the video. It shows the passage of time by taking the center vertical column from each image and combining them horizontally.
+
+### What is a Keogram?
+
+A keogram displays an entire day's sky in a single image:
+- Sunrise/sunset transitions appear as color gradients
+- Clouds appear as horizontal streaks
+- Aurora activity shows as colored bands
+- Day/night cycles are clearly visible
+
+### Automatic Cropping
+
+By default, keograms crop 7% from the top to remove the overlay bar:
+- 7% of 2160px (4K) = 151px cropped
+- This removes the timestamp/camera info overlay
+
+### Standalone Keogram Generation
+
+```bash
+# Create keogram from a day's images
+python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/
+
+# Custom output location
+python3 src/create_keogram.py --dir /path/to/images --output keogram.jpg
+
+# Adjust crop (e.g., larger overlay)
+python3 src/create_keogram.py --dir /path/to/images --crop-top 10
+
+# No cropping (include overlay in keogram)
+python3 src/create_keogram.py --dir /path/to/images --no-crop
+```
+
+### Keogram Output
+
+Keograms are saved alongside videos:
+- `/var/www/html/videos/2025/12/keogram_kringelen_2025-12-24_0500_to_2025-12-25_0500.jpg`
 
 ## See Also
 

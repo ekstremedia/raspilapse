@@ -43,6 +43,8 @@ def find_video_file(video_dir: Path, project_name: str, date: datetime.date) -> 
     date_str = date.strftime("%Y-%m-%d")
 
     patterns = [
+        f"**/{project_name}_{date_str}_*.mp4",
+        f"**/{project_name}_{date_str}*.mp4",
         f"{project_name}_{date_str}_*.mp4",
         f"{project_name}_{date_str}*.mp4",
     ]
@@ -61,10 +63,10 @@ def find_keogram_file(video_dir: Path, project_name: str, date: datetime.date) -
     date_str = date.strftime("%Y-%m-%d")
 
     patterns = [
+        f"**/keogram_{project_name}_{date_str}*.jpg",
+        f"**/keogram*{date_str}*.jpg",
         f"keogram_{project_name}_{date_str}*.jpg",
         f"keogram*{date_str}*.jpg",
-        f"*keogram*{date_str}*.jpg",
-        f"keogram*.jpg",  # Fallback: any keogram in directory
     ]
 
     for pattern in patterns:
@@ -74,9 +76,6 @@ def find_keogram_file(video_dir: Path, project_name: str, date: datetime.date) -
             date_matches = [m for m in matches if date_str in m.name]
             if date_matches:
                 return sorted(date_matches)[-1]
-            # If no exact date match on last pattern, return most recent
-            if pattern == "keogram*.jpg":
-                return sorted(matches, key=lambda p: p.stat().st_mtime)[-1]
 
     return None
 

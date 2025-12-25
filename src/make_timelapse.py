@@ -681,6 +681,7 @@ Examples:
             images,
             keogram_file,
             quality=95,
+            crop_top_percent=7.0,  # Crop overlay bar (2 lines + padding)
             logger=logger,
         )
 
