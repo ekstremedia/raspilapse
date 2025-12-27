@@ -5,6 +5,9 @@ Tests the timelapse video generation functionality including:
 - Time parsing
 - Image finding in date ranges
 - Video creation with ffmpeg
+- CLI main function
+- Colors and print utilities
+- Deflicker and resolution options
 """
 
 import pytest
@@ -15,12 +18,22 @@ import shutil
 import yaml
 import sys
 import os
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from make_timelapse import parse_time, find_images_in_range, load_config
+from make_timelapse import (
+    parse_time,
+    find_images_in_range,
+    load_config,
+    create_video,
+    Colors,
+    print_section,
+    print_subsection,
+    print_info,
+    main,
+)
 
 
 class TestParseTime:
@@ -425,6 +438,457 @@ class TestVideoDirectoryOrganization:
         # Test %Y format (year only)
         date_subdir = end_datetime.strftime("%Y")
         assert date_subdir == "2025"
+
+
+class TestColors:
+    """Test Colors ANSI color class."""
+
+    def test_color_constants(self):
+        """Test color constants are defined."""
+        assert Colors.HEADER == "\033[95m"
+        assert Colors.BLUE == "\033[94m"
+        assert Colors.CYAN == "\033[96m"
+        assert Colors.GREEN == "\033[92m"
+        assert Colors.YELLOW == "\033[93m"
+        assert Colors.RED == "\033[91m"
+        assert Colors.BOLD == "\033[1m"
+        assert Colors.END == "\033[0m"
+
+    def test_header_method(self):
+        """Test header static method."""
+        result = Colors.header("Test")
+        assert Colors.BOLD in result
+        assert Colors.CYAN in result
+        assert "Test" in result
+        assert Colors.END in result
+
+    def test_success_method(self):
+        """Test success static method."""
+        result = Colors.success("Success")
+        assert Colors.GREEN in result
+        assert "Success" in result
+
+    def test_error_method(self):
+        """Test error static method."""
+        result = Colors.error("Error")
+        assert Colors.RED in result
+        assert "Error" in result
+
+    def test_warning_method(self):
+        """Test warning static method."""
+        result = Colors.warning("Warning")
+        assert Colors.YELLOW in result
+        assert "Warning" in result
+
+    def test_info_method(self):
+        """Test info static method."""
+        result = Colors.info("Info")
+        assert Colors.BLUE in result
+        assert "Info" in result
+
+    def test_bold_method(self):
+        """Test bold static method."""
+        result = Colors.bold("Bold")
+        assert Colors.BOLD in result
+        assert "Bold" in result
+
+
+class TestPrintFunctions:
+    """Test print helper functions."""
+
+    def test_print_section(self, capsys):
+        """Test print_section outputs section header."""
+        print_section("Test Section")
+        captured = capsys.readouterr()
+        assert "Test Section" in captured.out
+        assert "═" in captured.out
+
+    def test_print_subsection(self, capsys):
+        """Test print_subsection outputs subsection header."""
+        print_subsection("Test Subsection")
+        captured = capsys.readouterr()
+        assert "Test Subsection" in captured.out
+        assert "─" in captured.out
+
+    def test_print_info(self, capsys):
+        """Test print_info outputs label and value."""
+        print_info("Label", "Value")
+        captured = capsys.readouterr()
+        assert "Label:" in captured.out
+        assert "Value" in captured.out
+
+
+class TestDeflickerOptions:
+    """Test deflicker filter options."""
+
+    @pytest.fixture
+    def temp_images(self):
+        """Create temporary test images."""
+        temp_dir = tempfile.mkdtemp()
+        images = []
+        for i in range(3):
+            img_path = Path(temp_dir) / f"test_{i:03d}.jpg"
+            img_path.touch()
+            images.append(img_path)
+        yield images
+        shutil.rmtree(temp_dir)
+
+    @pytest.fixture
+    def temp_output(self):
+        """Create temporary output path."""
+        temp_dir = tempfile.mkdtemp()
+        output = Path(temp_dir) / "test_output.mp4"
+        yield output
+        shutil.rmtree(temp_dir)
+
+    @patch("make_timelapse.subprocess.run")
+    def test_deflicker_enabled(self, mock_run, temp_images, temp_output):
+        """Test deflicker filter is applied when enabled."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(
+            temp_images,
+            temp_output,
+            deflicker=True,
+            deflicker_size=10,
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert "-vf" in cmd
+        vf_index = cmd.index("-vf")
+        filter_string = cmd[vf_index + 1]
+        assert "deflicker" in filter_string
+        assert "size=10" in filter_string
+
+    @patch("make_timelapse.subprocess.run")
+    def test_deflicker_disabled(self, mock_run, temp_images, temp_output):
+        """Test no deflicker filter when disabled."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(
+            temp_images,
+            temp_output,
+            deflicker=False,
+        )
+
+        cmd = mock_run.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        assert "deflicker" not in cmd_str
+
+    @patch("make_timelapse.subprocess.run")
+    def test_deflicker_custom_size(self, mock_run, temp_images, temp_output):
+        """Test custom deflicker size."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(
+            temp_images,
+            temp_output,
+            deflicker=True,
+            deflicker_size=20,
+        )
+
+        cmd = mock_run.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        assert "size=20" in cmd_str
+
+
+class TestResolutionScaling:
+    """Test video resolution scaling."""
+
+    @pytest.fixture
+    def temp_images(self):
+        """Create temporary test images."""
+        temp_dir = tempfile.mkdtemp()
+        images = []
+        for i in range(3):
+            img_path = Path(temp_dir) / f"test_{i:03d}.jpg"
+            img_path.touch()
+            images.append(img_path)
+        yield images
+        shutil.rmtree(temp_dir)
+
+    @pytest.fixture
+    def temp_output(self):
+        """Create temporary output path."""
+        temp_dir = tempfile.mkdtemp()
+        output = Path(temp_dir) / "test_output.mp4"
+        yield output
+        shutil.rmtree(temp_dir)
+
+    @patch("make_timelapse.subprocess.run")
+    def test_resolution_scaling(self, mock_run, temp_images, temp_output):
+        """Test resolution scaling filter is applied."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(
+            temp_images,
+            temp_output,
+            resolution=(1920, 1080),
+            deflicker=False,
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert "-vf" in cmd
+        vf_index = cmd.index("-vf")
+        filter_string = cmd[vf_index + 1]
+        assert "scale=1920:1080" in filter_string
+
+    @patch("make_timelapse.subprocess.run")
+    def test_no_resolution_scaling(self, mock_run, temp_images, temp_output):
+        """Test no scaling filter when resolution is None."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(
+            temp_images,
+            temp_output,
+            resolution=None,
+            deflicker=False,
+        )
+
+        cmd = mock_run.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        assert "scale=" not in cmd_str
+
+    @patch("make_timelapse.subprocess.run")
+    def test_resolution_and_deflicker_combined(self, mock_run, temp_images, temp_output):
+        """Test resolution and deflicker filters are combined."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(
+            temp_images,
+            temp_output,
+            resolution=(1280, 720),
+            deflicker=True,
+            deflicker_size=15,
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert "-vf" in cmd
+        vf_index = cmd.index("-vf")
+        filter_string = cmd[vf_index + 1]
+        # Both filters should be in the chain
+        assert "scale=1280:720" in filter_string
+        assert "deflicker" in filter_string
+        # Filters should be comma-separated
+        assert "," in filter_string
+
+
+class TestCreateVideoErrorHandling:
+    """Test error handling in create_video."""
+
+    @pytest.fixture
+    def temp_images(self):
+        """Create temporary test images."""
+        temp_dir = tempfile.mkdtemp()
+        images = []
+        for i in range(3):
+            img_path = Path(temp_dir) / f"test_{i:03d}.jpg"
+            img_path.touch()
+            images.append(img_path)
+        yield images
+        shutil.rmtree(temp_dir)
+
+    @pytest.fixture
+    def temp_output(self):
+        """Create temporary output path."""
+        temp_dir = tempfile.mkdtemp()
+        output = Path(temp_dir) / "test_output.mp4"
+        yield output
+        shutil.rmtree(temp_dir)
+
+    @patch("make_timelapse.subprocess.run")
+    def test_ffmpeg_failure(self, mock_run, temp_images, temp_output):
+        """Test handling of ffmpeg failure."""
+        mock_run.return_value = Mock(returncode=1)
+
+        result = create_video(temp_images, temp_output)
+
+        assert result is False
+
+    @patch("make_timelapse.subprocess.run")
+    def test_ffmpeg_success(self, mock_run, temp_images, temp_output):
+        """Test handling of ffmpeg success."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        result = create_video(temp_images, temp_output)
+
+        assert result is True
+
+    def test_create_video_with_logger(self, temp_images, temp_output):
+        """Test create_video with logger."""
+        import logging
+
+        logger = logging.getLogger("test")
+
+        with patch("make_timelapse.subprocess.run") as mock_run:
+            mock_run.return_value = Mock(returncode=0)
+            temp_output.touch()
+
+            with patch.object(logger, "info") as mock_info:
+                create_video(temp_images, temp_output, logger=logger)
+
+            assert mock_info.called
+
+
+class TestMainCLI:
+    """Test main CLI function."""
+
+    def test_main_help(self, monkeypatch, capsys):
+        """Test main with --help flag."""
+        monkeypatch.setattr("sys.argv", ["make_timelapse.py", "--help"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 0
+
+    def test_main_missing_config(self, monkeypatch, capsys):
+        """Test main with missing config file."""
+        monkeypatch.setattr(
+            "sys.argv",
+            ["make_timelapse.py", "-c", "/nonexistent/config.yml"],
+        )
+
+        result = main()
+        assert result == 1
+
+        captured = capsys.readouterr()
+        assert "Config file not found" in captured.out
+
+    def test_main_invalid_start_time(self, monkeypatch, capsys):
+        """Test main with invalid start time format."""
+        # Create a valid config first
+        temp_dir = tempfile.mkdtemp()
+        try:
+            config_file = Path(temp_dir) / "config.yml"
+            config_data = {
+                "output": {
+                    "directory": str(temp_dir),
+                    "project_name": "test",
+                },
+                "video": {
+                    "directory": str(temp_dir),
+                    "fps": 25,
+                    "codec": {"name": "libx264"},
+                },
+                "logging": {"enabled": False},
+            }
+            with open(config_file, "w") as f:
+                yaml.dump(config_data, f)
+
+            monkeypatch.setattr(
+                "sys.argv",
+                ["make_timelapse.py", "-c", str(config_file), "--start", "invalid"],
+            )
+
+            result = main()
+            assert result == 1
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_main_invalid_end_time(self, monkeypatch, capsys):
+        """Test main with invalid end time format."""
+        temp_dir = tempfile.mkdtemp()
+        try:
+            config_file = Path(temp_dir) / "config.yml"
+            config_data = {
+                "output": {
+                    "directory": str(temp_dir),
+                    "project_name": "test",
+                },
+                "video": {
+                    "directory": str(temp_dir),
+                    "fps": 25,
+                    "codec": {"name": "libx264"},
+                },
+                "logging": {"enabled": False},
+            }
+            with open(config_file, "w") as f:
+                yaml.dump(config_data, f)
+
+            monkeypatch.setattr(
+                "sys.argv",
+                ["make_timelapse.py", "-c", str(config_file), "--end", "25:00"],
+            )
+
+            result = main()
+            assert result == 1
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_main_invalid_date_format(self, monkeypatch, capsys):
+        """Test main with invalid date format."""
+        temp_dir = tempfile.mkdtemp()
+        try:
+            config_file = Path(temp_dir) / "config.yml"
+            config_data = {
+                "output": {
+                    "directory": str(temp_dir),
+                    "project_name": "test",
+                },
+                "video": {
+                    "directory": str(temp_dir),
+                    "fps": 25,
+                    "codec": {"name": "libx264"},
+                },
+                "logging": {"enabled": False},
+            }
+            with open(config_file, "w") as f:
+                yaml.dump(config_data, f)
+
+            monkeypatch.setattr(
+                "sys.argv",
+                ["make_timelapse.py", "-c", str(config_file), "--start-date", "invalid-date"],
+            )
+
+            result = main()
+            assert result == 1
+        finally:
+            shutil.rmtree(temp_dir)
+
+
+class TestFastStartFlag:
+    """Test ffmpeg faststart flag for web streaming."""
+
+    @pytest.fixture
+    def temp_images(self):
+        """Create temporary test images."""
+        temp_dir = tempfile.mkdtemp()
+        images = []
+        for i in range(3):
+            img_path = Path(temp_dir) / f"test_{i:03d}.jpg"
+            img_path.touch()
+            images.append(img_path)
+        yield images
+        shutil.rmtree(temp_dir)
+
+    @pytest.fixture
+    def temp_output(self):
+        """Create temporary output path."""
+        temp_dir = tempfile.mkdtemp()
+        output = Path(temp_dir) / "test_output.mp4"
+        yield output
+        shutil.rmtree(temp_dir)
+
+    @patch("make_timelapse.subprocess.run")
+    def test_faststart_flag_present(self, mock_run, temp_images, temp_output):
+        """Test that faststart flag is included for web streaming."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(temp_images, temp_output)
+
+        cmd = mock_run.call_args[0][0]
+        assert "-movflags" in cmd
+        movflags_index = cmd.index("-movflags")
+        assert "+faststart" in cmd[movflags_index + 1]
 
 
 if __name__ == "__main__":
