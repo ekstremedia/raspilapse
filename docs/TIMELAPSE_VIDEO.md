@@ -17,29 +17,38 @@ The timelapse video generator (`src/make_timelapse.py`) creates smooth timelapse
 
 ### Basic Usage
 
-Create a 24-hour timelapse from 04:00 yesterday to 04:00 today:
+Create a 24-hour timelapse using default times from config (05:00 yesterday to 05:00 today):
 
 ```bash
-python3 src/make_timelapse.py --start 04:00 --end 04:00
+python3 src/make_timelapse.py
 ```
 
 ### Common Examples
 
 ```bash
-# 12-hour timelapse (20:00 yesterday to 08:00 today)
+# Default: uses config times (05:00 yesterday to 05:00 today)
+python3 src/make_timelapse.py
+
+# Custom time range (20:00 yesterday to 08:00 today)
 python3 src/make_timelapse.py --start 20:00 --end 08:00
 
+# Same-day timelapse (07:00 to 15:00 today)
+python3 src/make_timelapse.py --start 07:00 --end 15:00 --today
+
+# Specific date range
+python3 src/make_timelapse.py --start 07:00 --end 15:00 --start-date 2025-12-24 --end-date 2025-12-25
+
 # Test with first 100 images only
-python3 src/make_timelapse.py --start 20:00 --end 08:00 --limit 100
+python3 src/make_timelapse.py --limit 100
 
 # Custom framerate (30 fps instead of 25)
-python3 src/make_timelapse.py --start 04:00 --end 04:00 --fps 30
+python3 src/make_timelapse.py --fps 30
 
 # Custom output filename
-python3 src/make_timelapse.py --start 04:00 --end 04:00 --output my_timelapse.mp4
+python3 src/make_timelapse.py --output my_timelapse.mp4
 
 # Use custom config file
-python3 src/make_timelapse.py --start 04:00 --end 04:00 -c config/custom.yml
+python3 src/make_timelapse.py -c config/custom.yml
 ```
 
 ## Configuration
@@ -92,6 +101,16 @@ video:
   # 30 fps = smooth NTSC standard
   # 24 fps = cinematic
   fps: 25
+
+  # Deflicker filter - smooths exposure transitions (like sunrise spikes)
+  # Uses ffmpeg's deflicker filter with Predictive Mean mode
+  deflicker: true
+  deflicker_size: 10  # Frames to average (higher = smoother)
+
+  # Default time range (used when no --start/--end provided)
+  # If end <= start, assumes start is from previous day
+  default_start_time: "05:00"
+  default_end_time: "05:00"
 ```
 
 ### Quality Settings
@@ -113,15 +132,26 @@ video:
 ```
 python3 src/make_timelapse.py [OPTIONS]
 
-Required:
-  --start TIME        Start time in HH:MM format (e.g., 04:00)
-  --end TIME          End time in HH:MM format (e.g., 04:00)
+Time Selection:
+  --start TIME        Start time in HH:MM format (default: from config or 05:00)
+  --end TIME          End time in HH:MM format (default: from config or 05:00)
+  --start-date DATE   Start date in YYYY-MM-DD format (default: auto-determined)
+  --end-date DATE     End date in YYYY-MM-DD format (default: today)
+  --today             Both start and end on today's date
 
 Optional:
   --limit N           Limit to first N images (0 = all, for testing)
   --fps N             Override frame rate from config
   --output FILE       Override output filename
+  --output-dir DIR    Override output directory from config
+  --no-keogram        Skip keogram generation
+  --keogram-only      Only generate keogram, skip video
   -c, --config FILE   Path to config file (default: config/config.yml)
+
+Keogram Options (standalone create_keogram.py):
+  --crop-top PERCENT  Percentage to crop from top (default: 7% for overlay bar)
+  --crop-bottom PCT   Percentage to crop from bottom (default: 0%)
+  --no-crop           Disable automatic top cropping
 ```
 
 ## How It Works
@@ -222,11 +252,19 @@ Videos are saved to date-organized directories when `organize_by_date: true`:
 
 ### Filename Pattern
 
-Default pattern: `{name}_{start_date}_to_{end_date}.mp4`
+Filenames now include times to avoid overwrites:
 
-For daily videos (default 24h): `{name}_daily_YYYY-MM-DD.mp4`
+**Same-day timelapse:**
+```
+{project}_{YYYY-MM-DD}_{HHMM}-{HHMM}.mp4
+Example: kringelen_nord_2025-12-25_0700-1500.mp4
+```
 
-Example: `kringelen_nord_daily_2025-12-23.mp4`
+**Multi-day timelapse:**
+```
+{project}_{YYYY-MM-DD}_{HHMM}_to_{YYYY-MM-DD}_{HHMM}.mp4
+Example: kringelen_nord_2025-12-24_0500_to_2025-12-25_0500.mp4
+```
 
 ## Logging
 
@@ -472,6 +510,45 @@ file '/var/www/html/images/2025/11/05/kringelen_2025_11_05_20_00_48.jpg'
 file '/var/www/html/images/2025/11/05/kringelen_2025_11_05_20_01_18.jpg'
 ...
 ```
+
+## Keogram Generation
+
+A keogram (time-slice image) is automatically generated alongside the video. It shows the passage of time by taking the center vertical column from each image and combining them horizontally.
+
+### What is a Keogram?
+
+A keogram displays an entire day's sky in a single image:
+- Sunrise/sunset transitions appear as color gradients
+- Clouds appear as horizontal streaks
+- Aurora activity shows as colored bands
+- Day/night cycles are clearly visible
+
+### Automatic Cropping
+
+By default, keograms crop 7% from the top to remove the overlay bar:
+- 7% of 2160px (4K) = 151px cropped
+- This removes the timestamp/camera info overlay
+
+### Standalone Keogram Generation
+
+```bash
+# Create keogram from a day's images
+python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/
+
+# Custom output location
+python3 src/create_keogram.py --dir /path/to/images --output keogram.jpg
+
+# Adjust crop (e.g., larger overlay)
+python3 src/create_keogram.py --dir /path/to/images --crop-top 10
+
+# No cropping (include overlay in keogram)
+python3 src/create_keogram.py --dir /path/to/images --no-crop
+```
+
+### Keogram Output
+
+Keograms are saved alongside videos:
+- `/var/www/html/videos/2025/12/keogram_kringelen_2025-12-24_0500_to_2025-12-25_0500.jpg`
 
 ## See Also
 

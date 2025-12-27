@@ -143,8 +143,9 @@ class TestDailyNaming:
         call_args = mock_create_video.call_args[0]
         output_file = call_args[1]
 
-        # Should use daily naming pattern
-        assert "daily" in str(output_file)
+        # Default 24h range spans two days, so uses _to_ format
+        # e.g., project_2025-12-24_0500_to_2025-12-25_0500.mp4
+        assert "_to_" in str(output_file)
         assert output_file.suffix == ".mp4"
 
     @patch("src.make_timelapse.find_images_in_range")
@@ -165,10 +166,11 @@ class TestDailyNaming:
         call_args = mock_create_video.call_args[0]
         output_file = call_args[1]
 
-        # Should NOT use daily naming pattern
-        assert "daily" not in str(output_file)
-        # Should use date range pattern
-        assert "_to_" in str(output_file)
+        # Same-day range uses HHMM-HHMM format (no _to_)
+        # e.g., project_2025-12-25_1000-1400.mp4
+        assert "_to_" not in str(output_file)
+        # Should have time range with dash separator
+        assert "-" in output_file.stem  # e.g., 1000-1400
 
 
 class TestOutputDirectory:

@@ -12,3 +12,9 @@ Pillow>=10.0.0
 matplotlib>=3.5.0
 numpy>=1.21.0
 openpyxl>=3.0.0
+
+# Sun position calculation for polar regions (68°N)
+astral>=3.2
+
+# HTTP requests for weather API
+requests>=2.28.0

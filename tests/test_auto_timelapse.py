@@ -964,3 +964,392 @@ class TestTimelapseCaptureFlow:
         timelapse.capture_frame(mock_capture, "day")
 
         assert timelapse.frame_count == 3
+
+
+class TestPolarAwareness:
+    """Test polar day/night awareness functionality."""
+
+    def test_init_location_with_config(self, test_config_file):
+        """Test location initialization with valid config."""
+        with open(test_config_file, "r") as f:
+            config_data = yaml.safe_load(f)
+        config_data["location"] = {
+            "latitude": 68.7,
+            "longitude": 15.4,
+            "timezone": "Europe/Oslo",
+            "civil_twilight_threshold": -6.0,
+        }
+        with open(test_config_file, "w") as f:
+            yaml.dump(config_data, f)
+
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Location should be initialized (if astral is available)
+        # The test is valid regardless of astral availability
+        assert timelapse._civil_twilight_threshold == -6.0
+
+    def test_init_location_without_config(self, test_config_file):
+        """Test location initialization without config."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Without location config, location should be None
+        assert timelapse._location is None
+
+    def test_is_polar_day_returns_false_without_location(self, test_config_file):
+        """Test polar day returns False when no location configured."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        result = timelapse._is_polar_day(lux=100.0)
+
+        assert result is False
+
+    def test_get_sun_elevation_without_location(self, test_config_file):
+        """Test sun elevation returns None without location."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        result = timelapse._get_sun_elevation()
+
+        assert result is None
+
+
+class TestOverexposureDetection:
+    """Test overexposure detection and fast ramp-down."""
+
+    def test_check_overexposure_triggers_on_high_brightness(self, test_config_file):
+        """Test overexposure detected with high brightness."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        brightness_metrics = {
+            "mean_brightness": 190,  # Above 180 threshold
+            "overexposed_percent": 5,
+        }
+
+        result = timelapse._check_overexposure(brightness_metrics)
+
+        assert result is True
+        assert timelapse._overexposure_detected is True
+
+    def test_check_overexposure_triggers_on_clipped_pixels(self, test_config_file):
+        """Test overexposure detected with many clipped pixels."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        brightness_metrics = {
+            "mean_brightness": 150,  # Normal brightness
+            "overexposed_percent": 15,  # Above 10% threshold
+        }
+
+        result = timelapse._check_overexposure(brightness_metrics)
+
+        assert result is True
+
+    def test_check_overexposure_clears_on_safe_values(self, test_config_file):
+        """Test overexposure cleared when values are safe."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._overexposure_detected = True  # Previously triggered
+
+        brightness_metrics = {
+            "mean_brightness": 140,  # Below 150 threshold
+            "overexposed_percent": 3,  # Below 5% threshold
+        }
+
+        result = timelapse._check_overexposure(brightness_metrics)
+
+        assert result is False
+        assert timelapse._overexposure_detected is False
+
+    def test_check_overexposure_empty_metrics(self, test_config_file):
+        """Test overexposure handling with empty metrics."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._overexposure_detected = True
+
+        result = timelapse._check_overexposure({})
+
+        # Should retain previous state
+        assert result is True
+
+    def test_check_overexposure_none_metrics(self, test_config_file):
+        """Test overexposure handling with None metrics."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        result = timelapse._check_overexposure(None)
+
+        assert result is False  # Default state
+
+
+class TestTransitionSeeding:
+    """Test transition seeding from metadata."""
+
+    def test_seed_from_metadata(self, test_config_file):
+        """Test seeding transition state from captured metadata."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Test shot metadata has ColourGains from AWB
+        test_shot_metadata = {
+            "ColourGains": [2.0, 1.5],
+        }
+        # Capture metadata has exposure/gain from last actual capture
+        capture_metadata = {
+            "ExposureTime": 5000,  # 5ms in microseconds
+            "AnalogueGain": 2.5,
+        }
+
+        timelapse._seed_from_metadata(test_shot_metadata, capture_metadata)
+
+        assert timelapse._seed_exposure == 0.005  # Converted to seconds
+        assert timelapse._seed_gain == 2.5
+        assert timelapse._seed_wb_gains == (2.0, 1.5)
+        assert timelapse._transition_seeded is True
+
+    def test_seed_from_metadata_updates_last_values(self, test_config_file):
+        """Test seeding updates interpolation state."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        test_shot_metadata = {
+            "ColourGains": [2.2, 1.6],
+        }
+        capture_metadata = {
+            "ExposureTime": 10000,  # 10ms
+            "AnalogueGain": 3.0,
+        }
+
+        timelapse._seed_from_metadata(test_shot_metadata, capture_metadata)
+
+        # Last values should also be updated for smooth interpolation
+        assert timelapse._last_exposure_time == 0.01
+        assert timelapse._last_analogue_gain == 3.0
+        assert timelapse._last_colour_gains == (2.2, 1.6)
+
+
+class TestDiagnosticEnrichment:
+    """Test metadata enrichment with diagnostics."""
+
+    def test_enrich_metadata_with_diagnostics(self, test_config_file):
+        """Test diagnostic data is added to metadata."""
+        import json
+
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._smoothed_lux = 500.0
+        timelapse._last_mode = LightMode.DAY
+        timelapse._sun_elevation = 15.0
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            # Create test metadata file
+            metadata_path = os.path.join(temp_dir, "test_meta.json")
+            image_path = os.path.join(temp_dir, "test_image.jpg")
+
+            with open(metadata_path, "w") as f:
+                json.dump({"ExposureTime": 5000}, f)
+
+            # Create dummy image
+            with open(image_path, "wb") as f:
+                f.write(b"\xff\xd8\xff\xe0")
+
+            result = timelapse._enrich_metadata_with_diagnostics(
+                metadata_path, image_path, LightMode.DAY, lux=500.0, raw_lux=520.0
+            )
+
+            assert result is True
+
+            # Read enriched metadata
+            with open(metadata_path, "r") as f:
+                enriched = json.load(f)
+
+            assert "diagnostics" in enriched
+            diag = enriched["diagnostics"]
+            assert diag["mode"] == LightMode.DAY
+            assert diag["raw_lux"] == 520.0
+            assert diag["smoothed_lux"] == 500.0
+            assert diag["sun_elevation"] == 15.0
+        finally:
+            import shutil
+
+            shutil.rmtree(temp_dir)
+
+    def test_enrich_metadata_with_transition_position(self, test_config_file):
+        """Test transition position is added to diagnostics."""
+        import json
+
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._sun_elevation = 5.0
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            metadata_path = os.path.join(temp_dir, "test_meta.json")
+            image_path = os.path.join(temp_dir, "test_image.jpg")
+
+            with open(metadata_path, "w") as f:
+                json.dump({}, f)
+
+            with open(image_path, "wb") as f:
+                f.write(b"\xff\xd8\xff\xe0")
+
+            result = timelapse._enrich_metadata_with_diagnostics(
+                metadata_path,
+                image_path,
+                LightMode.TRANSITION,
+                lux=100.0,
+                transition_position=0.5,
+            )
+
+            assert result is True
+
+            with open(metadata_path, "r") as f:
+                enriched = json.load(f)
+
+            assert "diagnostics" in enriched
+            assert enriched["diagnostics"]["transition_position"] == 0.5
+        finally:
+            import shutil
+
+            shutil.rmtree(temp_dir)
+
+
+class TestSymlinkCreation:
+    """Test latest image symlink creation."""
+
+    def test_create_latest_symlink(self):
+        """Test symlink is created to latest image."""
+        import yaml
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            # Create config with symlink enabled
+            symlink_path = os.path.join(temp_dir, "latest.jpg")
+            config_path = os.path.join(temp_dir, "config.yml")
+            config = {
+                "output": {
+                    "directory": temp_dir,
+                    "symlink_latest": {
+                        "enabled": True,
+                        "path": symlink_path,
+                    },
+                },
+                "camera": {"resolution": {"width": 640, "height": 480}},
+            }
+            with open(config_path, "w") as f:
+                yaml.dump(config, f)
+
+            timelapse = AdaptiveTimelapse(config_path)
+
+            # Create test image
+            image_path = os.path.join(temp_dir, "test_image.jpg")
+            with open(image_path, "wb") as f:
+                f.write(b"\xff\xd8\xff\xe0")
+
+            # Test symlink creation
+            timelapse._create_latest_symlink(image_path)
+
+            assert os.path.islink(symlink_path)
+            assert os.path.realpath(symlink_path) == os.path.realpath(image_path)
+        finally:
+            import shutil
+
+            shutil.rmtree(temp_dir)
+
+    def test_create_latest_symlink_updates_existing(self):
+        """Test symlink is updated when already exists."""
+        import yaml
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            symlink_path = os.path.join(temp_dir, "latest.jpg")
+            config_path = os.path.join(temp_dir, "config.yml")
+            config = {
+                "output": {
+                    "directory": temp_dir,
+                    "symlink_latest": {
+                        "enabled": True,
+                        "path": symlink_path,
+                    },
+                },
+                "camera": {"resolution": {"width": 640, "height": 480}},
+            }
+            with open(config_path, "w") as f:
+                yaml.dump(config, f)
+
+            timelapse = AdaptiveTimelapse(config_path)
+
+            # Create test images
+            image1 = os.path.join(temp_dir, "image1.jpg")
+            image2 = os.path.join(temp_dir, "image2.jpg")
+            with open(image1, "wb") as f:
+                f.write(b"\xff\xd8\xff\xe0")
+            with open(image2, "wb") as f:
+                f.write(b"\xff\xd8\xff\xe0")
+
+            # Create initial symlink
+            timelapse._create_latest_symlink(image1)
+            assert os.path.realpath(symlink_path) == os.path.realpath(image1)
+
+            # Update symlink
+            timelapse._create_latest_symlink(image2)
+            assert os.path.realpath(symlink_path) == os.path.realpath(image2)
+        finally:
+            import shutil
+
+            shutil.rmtree(temp_dir)
+
+
+class TestExposureCalculation:
+    """Test exposure calculation from lux values."""
+
+    def test_calculate_target_exposure_from_lux_night(self, test_config_file):
+        """Test exposure calculation for night conditions."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Very low lux should give max night exposure
+        exposure = timelapse._calculate_target_exposure_from_lux(0.1)
+
+        assert exposure > 10.0  # Should be long exposure
+
+    def test_calculate_target_exposure_from_lux_day(self, test_config_file):
+        """Test exposure calculation for day conditions."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # High lux should give short exposure
+        exposure = timelapse._calculate_target_exposure_from_lux(10000.0)
+
+        assert exposure < 0.1  # Should be short exposure
+
+    def test_calculate_target_exposure_from_lux_transition(self, test_config_file):
+        """Test exposure calculation for transition conditions."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Transition lux should give intermediate exposure
+        exposure = timelapse._calculate_target_exposure_from_lux(50.0)
+
+        # Should be between day and night extremes
+        assert 0.01 < exposure < 20.0
+
+
+class TestMainFunction:
+    """Test main function entry point."""
+
+    def test_main_missing_config(self, monkeypatch, capsys):
+        """Test main with missing config file."""
+        monkeypatch.setattr(
+            "sys.argv",
+            ["auto_timelapse.py", "--config", "/nonexistent/config.yml"],
+        )
+
+        # Import and run main
+        from src.auto_timelapse import main
+
+        result = main()
+        assert result == 1
+
+    def test_main_help(self, monkeypatch, capsys):
+        """Test main with --help flag."""
+        monkeypatch.setattr("sys.argv", ["auto_timelapse.py", "--help"])
+
+        from src.auto_timelapse import main
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 0
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
