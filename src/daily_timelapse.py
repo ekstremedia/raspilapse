@@ -52,8 +52,8 @@ def find_video_file(video_dir: Path, project_name: str, date: datetime.date) -> 
     for pattern in patterns:
         matches = list(video_dir.glob(pattern))
         if matches:
-            # Return most recent match
-            return sorted(matches)[-1]
+            # Return most recently modified file (not alphabetically sorted)
+            return max(matches, key=lambda p: p.stat().st_mtime)
 
     return None
 
@@ -75,7 +75,8 @@ def find_keogram_file(video_dir: Path, project_name: str, date: datetime.date) -
             # Filter to only include files with the target date
             date_matches = [m for m in matches if date_str in m.name]
             if date_matches:
-                return sorted(date_matches)[-1]
+                # Return most recently modified file (not alphabetically sorted)
+                return max(date_matches, key=lambda p: p.stat().st_mtime)
 
     return None
 
