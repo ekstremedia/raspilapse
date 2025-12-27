@@ -182,7 +182,8 @@ Examples:
         help="Date for timelapse in YYYY-MM-DD format (default: yesterday)",
     )
     parser.add_argument(
-        "-c", "--config",
+        "-c",
+        "--config",
         default="config/config.yml",
         help="Path to configuration file (default: config/config.yml)",
     )
@@ -240,7 +241,9 @@ Examples:
 
     # Get upload config
     upload_config = config.get("video_upload", {})
-    camera_id = upload_config.get("camera_id", config.get("output", {}).get("project_name", "unknown"))
+    camera_id = upload_config.get(
+        "camera_id", config.get("output", {}).get("project_name", "unknown")
+    )
 
     # Fallback: load upload config from old config file if not in new config
     if not upload_config.get("url"):
@@ -262,11 +265,16 @@ Examples:
         make_timelapse_cmd = [
             sys.executable,
             os.path.join(project_root, "src", "make_timelapse.py"),
-            "--config", args.config,
-            "--start", "05:00",
-            "--end", "05:00",
-            "--start-date", target_date.strftime("%Y-%m-%d"),
-            "--end-date", (target_date + timedelta(days=1)).strftime("%Y-%m-%d"),
+            "--config",
+            args.config,
+            "--start",
+            "05:00",
+            "--end",
+            "05:00",
+            "--start-date",
+            target_date.strftime("%Y-%m-%d"),
+            "--end-date",
+            (target_date + timedelta(days=1)).strftime("%Y-%m-%d"),
         ]
 
         if args.dry_run:
