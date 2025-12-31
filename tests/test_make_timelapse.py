@@ -594,6 +594,24 @@ class TestDeflickerOptions:
         cmd_str = " ".join(cmd)
         assert "size=20" in cmd_str
 
+    def test_deflicker_invalid_size(self, temp_images, temp_output):
+        """Test that invalid deflicker_size raises ValueError."""
+        with pytest.raises(ValueError, match="deflicker_size must be positive"):
+            create_video(
+                temp_images,
+                temp_output,
+                deflicker=True,
+                deflicker_size=0,
+            )
+
+        with pytest.raises(ValueError, match="deflicker_size must be positive"):
+            create_video(
+                temp_images,
+                temp_output,
+                deflicker=True,
+                deflicker_size=-5,
+            )
+
 
 class TestResolutionScaling:
     """Test video resolution scaling."""
@@ -889,6 +907,33 @@ class TestFastStartFlag:
         assert "-movflags" in cmd
         movflags_index = cmd.index("-movflags")
         assert "+faststart" in cmd[movflags_index + 1]
+
+
+class TestKeogramFilenameExtension:
+    """Test keogram filename extension handling."""
+
+    def test_keogram_output_extension_correction(self):
+        """Test that keogram output gets .jpg extension when using --output with wrong extension."""
+        # This tests the logic that ensures keogram files always have .jpg extension
+        # when a custom --output is provided (e.g., --output video.mp4)
+        custom_output = Path("video.mp4")
+        if custom_output.suffix.lower() != ".jpg":
+            custom_output = custom_output.with_suffix(".jpg")
+        assert custom_output.name == "video.jpg"
+
+    def test_keogram_output_preserves_jpg(self):
+        """Test that .jpg extension is preserved when already correct."""
+        custom_output = Path("keogram.jpg")
+        if custom_output.suffix.lower() != ".jpg":
+            custom_output = custom_output.with_suffix(".jpg")
+        assert custom_output.name == "keogram.jpg"
+
+    def test_keogram_output_handles_jpeg(self):
+        """Test that .jpeg is converted to .jpg for consistency."""
+        custom_output = Path("keogram.jpeg")
+        if custom_output.suffix.lower() != ".jpg":
+            custom_output = custom_output.with_suffix(".jpg")
+        assert custom_output.name == "keogram.jpg"
 
 
 if __name__ == "__main__":

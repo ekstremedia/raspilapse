@@ -218,6 +218,10 @@ def create_video(
     Returns:
         True if successful, False otherwise
     """
+    # Validate deflicker_size
+    if deflicker and deflicker_size < 1:
+        raise ValueError(f"deflicker_size must be positive, got {deflicker_size}")
+
     if not image_list:
         msg = "No images to process"
         print(Colors.error(f"✗ {msg}"))
@@ -391,7 +395,8 @@ Examples:
     )
     parser.add_argument(
         "--start-date",
-        help="Start date in YYYY-MM-DD format (e.g., 2025-12-24). Default: yesterday if end time <= start time, else today.",
+        help="Start date in YYYY-MM-DD format (e.g., 2025-12-24). "
+        "Default: yesterday if end time <= start time, else today.",
     )
     parser.add_argument(
         "--end-date",
@@ -497,7 +502,6 @@ Examples:
             end_hour, end_min = parse_time(default_end_time)
         except ValueError:
             end_hour, end_min = 5, 0
-    use_current_time = False
 
     # Parse dates
     if args.start_date:
@@ -538,12 +542,9 @@ Examples:
     start_datetime = datetime.combine(start_date, datetime.min.time()).replace(
         hour=start_hour, minute=start_min, second=0, microsecond=0
     )
-    if use_current_time:
-        end_datetime = now
-    else:
-        end_datetime = datetime.combine(end_date, datetime.min.time()).replace(
-            hour=end_hour, minute=end_min, second=0, microsecond=0
-        )
+    end_datetime = datetime.combine(end_date, datetime.min.time()).replace(
+        hour=end_hour, minute=end_min, second=0, microsecond=0
+    )
 
     # Validate range
     if start_datetime >= end_datetime:
@@ -667,7 +668,10 @@ Examples:
         # If same date, use shorter format
         if start_datetime.date() == end_datetime.date():
             # Same day: projectname_YYYY-MM-DD_HHMM-HHMM.mp4
-            filename = f"{project_name}_{start_datetime.strftime('%Y-%m-%d')}_{start_datetime.strftime('%H%M')}-{end_datetime.strftime('%H%M')}.mp4"
+            date_str = start_datetime.strftime("%Y-%m-%d")
+            start_time = start_datetime.strftime("%H%M")
+            end_time = end_datetime.strftime("%H%M")
+            filename = f"{project_name}_{date_str}_{start_time}-{end_time}.mp4"
         else:
             # Different days: projectname_YYYY-MM-DD_HHMM_to_YYYY-MM-DD_HHMM.mp4
             filename = f"{project_name}_{start_str}_to_{end_str}.mp4"
@@ -701,7 +705,11 @@ Examples:
 
         # Generate keogram filename (same as video but with keogram_ prefix and .jpg)
         if args.keogram_only and args.output:
-            keogram_file = video_path / args.output
+            # Ensure .jpg extension for keogram
+            custom_output = Path(args.output)
+            if custom_output.suffix.lower() != ".jpg":
+                custom_output = custom_output.with_suffix(".jpg")
+            keogram_file = video_path / custom_output.name
         else:
             keogram_filename = output_file.stem.replace("_daily_", "_keogram_") + ".jpg"
             if "_daily_" not in output_file.stem:
