@@ -375,6 +375,9 @@ Examples:
 
   # Save to specific output directory (for automated daily videos)
   python3 src/make_timelapse.py --output-dir /var/www/html/videos
+
+  # Create 1080p video using hardware encoder (faster on Raspberry Pi)
+  python3 src/make_timelapse.py -hd -hw
         """,
     )
 
@@ -427,6 +430,18 @@ Examples:
         "--keogram-only",
         action="store_true",
         help="Only generate keogram, skip video creation",
+    )
+    parser.add_argument(
+        "-hd",
+        "--hd",
+        action="store_true",
+        help="Scale output to 1080p resolution (1920x1080)",
+    )
+    parser.add_argument(
+        "-hw",
+        "--hw",
+        action="store_true",
+        help="Use hardware H264 encoder (h264_v4l2m2m) instead of libx264",
     )
 
     args = parser.parse_args()
@@ -579,7 +594,23 @@ Examples:
     print_info("Image directory", Colors.bold(base_dir))
     print_info("Project name", Colors.bold(project_name))
     print_info("Camera name", Colors.bold(camera_name))
-    print_info("Video settings", f"{Colors.bold(str(fps))} fps, {codec}, CRF {crf}")
+
+    # Apply --hw flag: use hardware encoder
+    if args.hw:
+        codec = "h264_v4l2m2m"
+        logger.info("Using hardware encoder: h264_v4l2m2m")
+
+    # Apply --hd flag: set 1080p resolution
+    resolution = (1920, 1080) if args.hd else None
+
+    # Build video settings string
+    if codec in ["h264_v4l2m2m", "h264_omx"]:
+        video_settings_str = f"{Colors.bold(str(fps))} fps, {codec} (HW), bitrate {bitrate}"
+    else:
+        video_settings_str = f"{Colors.bold(str(fps))} fps, {codec}, CRF {crf}"
+    if args.hd:
+        video_settings_str += ", 1080p"
+    print_info("Video settings", video_settings_str)
 
     # Find images
     print_subsection("🔍 Searching for Images")
@@ -656,7 +687,7 @@ Examples:
             preset=preset,
             threads=threads,
             bitrate=bitrate,
-            resolution=None,  # Use original resolution
+            resolution=resolution,
             deflicker=deflicker,
             deflicker_size=deflicker_size,
             logger=logger,
