@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2025-12-25
+
+### Added
+- **Fast overexposure ramp-down**: Automatic faster exposure reduction when overexposure detected
+  - Triggers when brightness > 180 or > 10% clipped pixels
+  - Uses 3x faster interpolation speed (0.30 vs 0.10) to quickly reduce exposure
+  - Configurable via `fast_rampdown_speed` in config.yml
+  - Prevents "light flash" at dawn when 20s exposure stays on too long
+
+- **Configurable reference_lux**: Per-camera brightness tuning
+  - New config option `adaptive_timelapse.reference_lux` (default: 3.8)
+  - Higher values = brighter images, lower = darker
+  - Allows tuning each camera independently based on scene/sensor
+
+- **FFMPEG deflicker filter**: Smooths exposure transitions in rendered videos
+  - Filter: `deflicker=mode=pm:size=10` (Predictive Mean, 10-frame window)
+  - Configurable via `video.deflicker` and `video.deflicker_size`
+  - Eliminates remaining brightness flicker in final timelapse
+
+- **Enhanced make_timelapse.py parameters**:
+  - `--start-date` and `--end-date` for specific date ranges
+  - `--today` flag for same-day timelapses
+  - Config-based default times (`default_start_time`, `default_end_time`)
+  - Improved filename format with times to avoid overwrites:
+    - Same day: `project_2025-12-25_0700-1500.mp4`
+    - Multi-day: `project_2025-12-24_0500_to_2025-12-25_0500.mp4`
+
+- **Calculated lux passed to overlay**: Overlay now shows accurate calculated lux
+  - Previously showed camera's unreliable metadata estimate
+  - Fixed "lux: 400 at night" issue on some cameras
+
+### Changed
+- Default timelapse time range now 05:00 to 05:00 (configurable in config.yml)
+- reference_lux default changed from 2.5 to 3.8 for brighter daytime images
+
+### Fixed
+- Initialization order bug where `_fast_rampdown_speed` was set before config loaded
+- **daily_timelapse.py file search**: Now searches recursively in date-organized subdirectories
+  - Previously failed to find videos in `/var/www/html/videos/YYYY/MM/` structure
+  - Both video and keogram file finding now use `**/` glob pattern
+- **Keogram overlay crop**: Increased from 5% to 7% (108px → 151px at 4K)
+  - 5% wasn't enough to fully remove 2-line overlay bar with padding
+  - Updated defaults in `create_keogram.py` and `make_timelapse.py`
+
+### Documentation
+- Added `docs/changelog_2025-12-25.md` with detailed session notes
+- Updated TIMELAPSE_VIDEO.md with new parameters and deflicker filter
+- Updated TRANSITION_SMOOTHING.md with overexposure detection
+
 ## [1.0.4] - 2025-12-23
 
 ### Added

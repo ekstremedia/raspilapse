@@ -9,10 +9,19 @@ import os
 import sys
 import time
 import signal
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 import yaml
+
+# Optional: Sun position calculation for polar regions
+try:
+    from astral import LocationInfo
+    from astral.sun import elevation
+
+    ASTRAL_AVAILABLE = True
+except ImportError:
+    ASTRAL_AVAILABLE = False
 
 # Handle imports for both module and script execution
 try:
@@ -66,6 +75,17 @@ class AdaptiveTimelapse:
         self._last_brightness: float = None  # Previous frame's mean brightness
         self._brightness_correction_factor: float = 1.0  # Multiplier for exposure adjustment
 
+        # Overexposure detection for fast ramp-down
+        self._overexposure_detected: bool = False  # True when image is overexposed
+
+        # Holy Grail transition state - seeded from actual camera metadata
+        self._transition_seeded: bool = False  # True once we've seeded from metadata
+        self._seed_exposure: float = None  # Actual exposure from last auto frame
+        self._seed_gain: float = None  # Actual gain from last auto frame
+        self._seed_wb_gains: tuple = None  # Actual WB gains from last auto frame
+        self._previous_mode: str = None  # Track mode changes for seeding detection
+        self._last_day_capture_metadata: Dict = None  # Metadata from last day mode capture
+
         # Load transition smoothing config with defaults
         transition_config = self.config.get("adaptive_timelapse", {}).get("transition_mode", {})
         self._lux_smoothing_factor = transition_config.get("lux_smoothing_factor", 0.3)
@@ -81,6 +101,15 @@ class AdaptiveTimelapse:
             "brightness_feedback_strength", 0.3
         )
 
+        # Fast ramp-down speed for overexposure correction (default 0.30 = 3x normal speed)
+        self._fast_rampdown_speed = transition_config.get("fast_rampdown_speed", 0.30)
+
+        # Polar awareness - sun position for high latitude locations (68°N)
+        self._location = None
+        self._sun_elevation: float = None  # Current sun elevation in degrees
+        self._civil_twilight_threshold = -6.0  # Default: Civil twilight
+        self._init_location()
+
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -89,6 +118,83 @@ class AdaptiveTimelapse:
         """Handle shutdown signals gracefully."""
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         self.running = False
+
+    def _init_location(self):
+        """Initialize location for sun position calculations (Polar awareness)."""
+        if not ASTRAL_AVAILABLE:
+            logger.debug("Astral not available - sun position features disabled")
+            return
+
+        location_config = self.config.get("location", {})
+        if not location_config:
+            logger.debug("No location configured - sun position features disabled")
+            return
+
+        try:
+            lat = location_config.get("latitude", 68.7)
+            lon = location_config.get("longitude", 15.4)
+            tz = location_config.get("timezone", "Europe/Oslo")
+            self._civil_twilight_threshold = location_config.get("civil_twilight_threshold", -6.0)
+
+            self._location = LocationInfo(
+                name="Timelapse Location",
+                region="",
+                timezone=tz,
+                latitude=lat,
+                longitude=lon,
+            )
+            logger.info(
+                f"[Polar] Location initialized: {lat}°N, {lon}°E "
+                f"(Civil twilight threshold: {self._civil_twilight_threshold}°)"
+            )
+        except Exception as e:
+            logger.warning(f"Could not initialize location: {e}")
+            self._location = None
+
+    def _get_sun_elevation(self) -> Optional[float]:
+        """
+        Calculate current sun elevation angle in degrees.
+
+        Returns:
+            Sun elevation in degrees (positive = above horizon, negative = below)
+            None if location not configured or calculation fails
+        """
+        if not ASTRAL_AVAILABLE or self._location is None:
+            return None
+
+        try:
+            now = datetime.now(timezone.utc)
+            self._sun_elevation = elevation(self._location.observer, now)
+            return self._sun_elevation
+        except Exception as e:
+            logger.debug(f"Could not calculate sun elevation: {e}")
+            return None
+
+    def _is_polar_day(self, lux: float = None) -> bool:
+        """
+        Check if we're in Polar Day conditions (Civil Twilight override).
+
+        In polar regions, even when lux is low, we should stay in Day mode
+        if the sun is above the civil twilight threshold (-6°) to capture
+        beautiful twilight colors with AWB instead of locked night settings.
+
+        Args:
+            lux: Current measured lux (for logging)
+
+        Returns:
+            True if sun elevation indicates Polar Day (civil twilight or brighter)
+        """
+        sun_elev = self._get_sun_elevation()
+        if sun_elev is None:
+            return False
+
+        is_polar_day = sun_elev > self._civil_twilight_threshold
+        if is_polar_day:
+            logger.debug(
+                f"[Polar] Civil twilight override: Sun={sun_elev:.1f}° > {self._civil_twilight_threshold}° "
+                f"(forcing Day mode despite lux={lux:.1f if lux else 'N/A'})"
+            )
+        return is_polar_day
 
     def _load_config(self) -> Dict:
         """Load configuration from YAML file."""
@@ -244,7 +350,9 @@ class AdaptiveTimelapse:
         logger.debug(f"Gain interpolation: target={target_gain:.2f} → actual={new_gain:.2f}")
         return new_gain
 
-    def _interpolate_exposure(self, target_exposure_s: float) -> float:
+    def _interpolate_exposure(
+        self, target_exposure_s: float, speed_override: float = None
+    ) -> float:
         """
         Smoothly interpolate exposure time to prevent sudden brightness jumps.
 
@@ -252,6 +360,7 @@ class AdaptiveTimelapse:
 
         Args:
             target_exposure_s: Target exposure time in seconds
+            speed_override: Optional speed override (0.0-1.0) for fast ramp-down
 
         Returns:
             Interpolated exposure time in seconds
@@ -268,7 +377,7 @@ class AdaptiveTimelapse:
         # This gives smoother perceived brightness changes
         import math
 
-        speed = self._exposure_transition_speed
+        speed = speed_override if speed_override is not None else self._exposure_transition_speed
 
         # Log-space interpolation for more natural exposure transitions
         log_last = math.log10(max(0.0001, self._last_exposure_time))
@@ -283,6 +392,7 @@ class AdaptiveTimelapse:
 
         logger.debug(
             f"Exposure interpolation: target={target_exposure_s:.4f}s → actual={new_exposure:.4f}s"
+            + (f" (fast: {speed:.2f})" if speed_override else "")
         )
         return new_exposure
 
@@ -359,6 +469,57 @@ class AdaptiveTimelapse:
 
         return self._brightness_correction_factor
 
+    def _check_overexposure(self, brightness_metrics: Dict) -> bool:
+        """
+        Check if the image is overexposed and update fast ramp-down state.
+
+        Triggers fast ramp-down when:
+        - Mean brightness > 180 (significantly overexposed)
+        - OR overexposed_percent > 10% (many clipped pixels)
+
+        Clears fast ramp-down when:
+        - Mean brightness < 150 (back to normal range)
+        - AND overexposed_percent < 5%
+
+        Args:
+            brightness_metrics: Dictionary with brightness analysis results
+
+        Returns:
+            True if overexposure detected (fast ramp-down active)
+        """
+        if not brightness_metrics:
+            return self._overexposure_detected
+
+        mean_brightness = brightness_metrics.get("mean_brightness", 0)
+        overexposed_pct = brightness_metrics.get("overexposed_percent", 0)
+
+        # Thresholds for triggering fast ramp-down
+        brightness_high = 180  # Trigger fast ramp-down above this
+        brightness_safe = 150  # Clear fast ramp-down below this
+        overexposed_high = 10  # Trigger if >10% pixels clipped
+        overexposed_safe = 5  # Clear if <5% pixels clipped
+
+        was_overexposed = self._overexposure_detected
+
+        if mean_brightness > brightness_high or overexposed_pct > overexposed_high:
+            # Overexposure detected - activate fast ramp-down
+            self._overexposure_detected = True
+            if not was_overexposed:
+                logger.warning(
+                    f"[FastRamp] OVEREXPOSURE DETECTED: brightness={mean_brightness:.1f}, "
+                    f"clipped={overexposed_pct:.1f}% - activating fast ramp-down"
+                )
+        elif mean_brightness < brightness_safe and overexposed_pct < overexposed_safe:
+            # Back to safe range - deactivate fast ramp-down
+            self._overexposure_detected = False
+            if was_overexposed:
+                logger.info(
+                    f"[FastRamp] Overexposure cleared: brightness={mean_brightness:.1f}, "
+                    f"clipped={overexposed_pct:.1f}% - resuming normal interpolation"
+                )
+
+        return self._overexposure_detected
+
     def _calculate_target_gain_from_lux(self, lux: float) -> float:
         """
         Calculate target analogue gain based on current lux level.
@@ -417,6 +578,106 @@ class AdaptiveTimelapse:
 
             return target_gain
 
+    def _calculate_sequential_ramping(self, lux: float, position: float) -> Tuple[float, float]:
+        """
+        Calculate exposure and gain using Sequential Ramping for noise reduction.
+
+        This prioritizes shutter speed to keep ISO (gain) low:
+        - Phase 1 (Shutter Priority): Ramp exposure from seed to max, keep gain locked
+        - Phase 2 (Gain Priority): Only after exposure is maxed, ramp gain up
+
+        This produces cleaner images by minimizing sensor noise from high gain.
+
+        Args:
+            lux: Current light level in lux
+            position: Transition position (0.0=at night threshold, 1.0=at day threshold)
+
+        Returns:
+            Tuple of (target_exposure_seconds, target_gain)
+        """
+        import math
+
+        adaptive_config = self.config["adaptive_timelapse"]
+        night_config = adaptive_config["night_mode"]
+
+        # Get limits
+        max_exposure = night_config["max_exposure_time"]  # e.g., 20s
+        max_gain = night_config["analogue_gain"]  # e.g., 8.0
+
+        # Get seed values (from last day mode capture) or reasonable defaults
+        seed_exposure = self._seed_exposure if self._seed_exposure else 0.01  # 10ms default
+        seed_gain = self._seed_gain if self._seed_gain else 1.0
+
+        # Transition goes from position=1.0 (day) to position=0.0 (night)
+        # So we invert to get progress towards night (0=start, 1=end)
+        night_progress = 1.0 - position
+
+        # Calculate the total EV range we need to cover
+        # EV_night = max_exposure * max_gain
+        # EV_seed = seed_exposure * seed_gain
+        # Total EV increase needed = log2(EV_night / EV_seed)
+
+        ev_seed = seed_exposure * seed_gain
+        ev_night = max_exposure * max_gain
+
+        if ev_seed <= 0 or ev_night <= 0:
+            # Fallback to simple calculation
+            return self._calculate_target_exposure_from_lux(
+                lux
+            ), self._calculate_target_gain_from_lux(lux)
+
+        # Phase boundary: when does exposure hit max?
+        # Exposure range: seed_exposure → max_exposure
+        # This represents a portion of total EV range
+        exposure_ev_range = math.log2(max_exposure / seed_exposure) if seed_exposure > 0 else 10
+        total_ev_range = math.log2(ev_night / ev_seed) if ev_seed > 0 else 12
+
+        # Phase 1 ends when exposure is maxed
+        phase1_end = exposure_ev_range / total_ev_range if total_ev_range > 0 else 0.5
+        phase1_end = max(0.1, min(0.9, phase1_end))  # Clamp to reasonable range
+
+        if night_progress <= phase1_end:
+            # === PHASE 1: Shutter Priority ===
+            # Ramp exposure from seed to max, keep gain locked at seed
+            phase1_progress = night_progress / phase1_end  # 0 to 1 within phase 1
+
+            # Logarithmic interpolation for exposure
+            log_seed = math.log10(max(0.0001, seed_exposure))
+            log_max = math.log10(max_exposure)
+            log_target = log_seed + phase1_progress * (log_max - log_seed)
+            target_exposure = 10**log_target
+
+            # Keep gain locked at seed value
+            target_gain = seed_gain
+
+            logger.debug(
+                f"[Sequential] Phase 1 (Shutter): progress={night_progress:.2f}/{phase1_end:.2f}, "
+                f"exposure={target_exposure:.4f}s, gain={target_gain:.2f} (locked)"
+            )
+        else:
+            # === PHASE 2: Gain Priority ===
+            # Exposure is maxed, now ramp gain from seed to night target
+            phase2_progress = (night_progress - phase1_end) / (
+                1.0 - phase1_end
+            )  # 0 to 1 within phase 2
+            phase2_progress = max(0.0, min(1.0, phase2_progress))
+
+            # Exposure stays at max
+            target_exposure = max_exposure
+
+            # Logarithmic interpolation for gain
+            log_seed = math.log10(max(0.5, seed_gain))
+            log_max = math.log10(max_gain)
+            log_target = log_seed + phase2_progress * (log_max - log_seed)
+            target_gain = 10**log_target
+
+            logger.debug(
+                f"[Sequential] Phase 2 (Gain): progress={night_progress:.2f}, "
+                f"exposure={target_exposure:.4f}s (maxed), gain={target_gain:.2f}"
+            )
+
+        return target_exposure, target_gain
+
     def _calculate_target_exposure_from_lux(self, lux: float) -> float:
         """
         Calculate target exposure time based on current lux level.
@@ -456,10 +717,11 @@ class AdaptiveTimelapse:
         # Formula: exposure = (night_exposure * reference_lux) / lux
         # where reference_lux controls the overall brightness level
         #
-        # Tuning history:
-        #   - 1.0: Original - too dark in day mode (brightness ~40 at lux 600)
-        #   - 2.5: 2024-12-24 - increased for brighter day images (target brightness ~120)
-        reference_lux = 2.5  # Higher = brighter images across all lux levels
+        # Reference lux controls overall image brightness
+        # Higher = brighter images, Lower = darker images
+        # Can be configured per-camera in config.yml under adaptive_timelapse.reference_lux
+        # Default 3.8 - slightly brighter than 3.5 which was "good but could be a bit brighter"
+        reference_lux = adaptive_config.get("reference_lux", 3.8)
 
         # Calculate base target exposure using inverse relationship
         base_exposure = (night_exposure * reference_lux) / lux
@@ -503,6 +765,142 @@ class AdaptiveTimelapse:
                     f"at {lux:.0f} lux"
                 )
 
+    def _apply_ev_safety_clamp(
+        self, target_exposure: float, target_gain: float
+    ) -> Tuple[float, float]:
+        """
+        Apply EV Safety Clamp to ensure seamless auto-to-manual handover.
+
+        Compares proposed manual EV to the seeded auto EV. If they differ by >5%,
+        forces the manual values to match the auto EV exactly.
+
+        This guarantees the first manual frame is mathematically identical to
+        the last auto frame, preventing any visible "flash" or brightness jump.
+
+        Args:
+            target_exposure: Proposed exposure time in seconds
+            target_gain: Proposed analogue gain
+
+        Returns:
+            Tuple of (clamped_exposure, clamped_gain)
+        """
+        # Only apply clamp on first manual frame (when we have seed values)
+        if not self._transition_seeded or self._seed_exposure is None or self._seed_gain is None:
+            return target_exposure, target_gain
+
+        # Calculate EVs (EV = exposure * gain, proportional to light captured)
+        seed_ev = self._seed_exposure * self._seed_gain
+        proposed_ev = target_exposure * target_gain
+
+        if seed_ev <= 0 or proposed_ev <= 0:
+            return target_exposure, target_gain
+
+        # Calculate percentage difference
+        ev_ratio = proposed_ev / seed_ev
+        ev_diff_percent = abs(ev_ratio - 1.0) * 100
+
+        if ev_diff_percent > 5.0:
+            # Clamp: adjust exposure to match seed EV while keeping proposed gain
+            # EV_seed = exposure_new * gain_proposed
+            # exposure_new = EV_seed / gain_proposed
+            clamped_exposure = seed_ev / target_gain
+
+            # Ensure within valid range
+            night_config = self.config["adaptive_timelapse"]["night_mode"]
+            max_exposure = night_config["max_exposure_time"]
+            min_exposure = 0.0001  # 100µs
+
+            clamped_exposure = max(min_exposure, min(max_exposure, clamped_exposure))
+
+            logger.info(
+                f"[Safety] EV clamp applied: proposed EV differs by {ev_diff_percent:.1f}%. "
+                f"Adjusted exposure {target_exposure:.4f}s → {clamped_exposure:.4f}s "
+                f"to match auto EV={seed_ev:.4f}"
+            )
+            return clamped_exposure, target_gain
+
+        return target_exposure, target_gain
+
+    def _seed_from_metadata(self, metadata: Dict, capture_metadata: Dict = None):
+        """
+        Seed interpolation state from actual camera metadata (Holy Grail technique).
+
+        This captures the REAL camera settings and uses them as the starting point
+        for manual control. This eliminates the "flash" that occurs when switching
+        from auto to manual mode.
+
+        For WB gains: Uses test shot metadata (AWB is enabled during test shots)
+        For exposure/gain: Uses last actual capture metadata (if available) or
+        calculates from current lux (already handled by interpolation init)
+
+        Called when entering transition mode from day mode.
+
+        Args:
+            metadata: Test shot metadata (has AWB-chosen ColourGains)
+            capture_metadata: Optional metadata from last actual capture
+        """
+        # AWB gains from test shot ARE useful - test shot has AWB enabled
+        colour_gains = metadata.get("ColourGains")
+
+        if colour_gains is not None:
+            # Validate gains are reasonable
+            if 1.0 < colour_gains[0] < 4.0 and 1.0 < colour_gains[1] < 4.0:
+                self._seed_wb_gains = tuple(colour_gains)
+                self._last_colour_gains = tuple(colour_gains)
+                # Update day WB reference since this is what AWB chose at transition
+                self._day_wb_reference = tuple(colour_gains)
+                logger.info(
+                    f"[Holy Grail] Seeded WB from AWB: "
+                    f"[{colour_gains[0]:.2f}, {colour_gains[1]:.2f}]"
+                )
+
+        # If we have actual capture metadata (from last day mode frame), use its exposure/gain
+        if capture_metadata:
+            exposure_time_us = capture_metadata.get("ExposureTime")
+            analogue_gain = capture_metadata.get("AnalogueGain")
+
+            if exposure_time_us is not None:
+                self._seed_exposure = exposure_time_us / 1_000_000
+                self._last_exposure_time = self._seed_exposure
+                logger.info(
+                    f"[Holy Grail] Seeded exposure from last capture: {self._seed_exposure:.4f}s"
+                )
+
+            if analogue_gain is not None:
+                self._seed_gain = analogue_gain
+                self._last_analogue_gain = analogue_gain
+                logger.info(f"[Holy Grail] Seeded gain from last capture: {self._seed_gain:.2f}")
+
+        self._transition_seeded = True
+        logger.info(
+            "[Holy Grail] Transition seeded - AWB locked, "
+            "smooth interpolation will prevent flash"
+        )
+
+    def _log_transition_progress(self, lux: float, position: float):
+        """
+        Log transition progress in Holy Grail format.
+
+        Args:
+            lux: Current smoothed lux value
+            position: Transition position (0.0=night, 1.0=day)
+        """
+        progress_pct = (1.0 - position) * 100  # 0% at day threshold, 100% at night
+        exposure_ms = (self._last_exposure_time or 0) * 1000
+        gain = self._last_analogue_gain or 0
+        wb_status = "Locked" if self._transition_seeded else "Learning"
+
+        if exposure_ms >= 1000:
+            shutter_str = f"{exposure_ms/1000:.1f}s"
+        else:
+            shutter_str = f"{exposure_ms:.0f}ms"
+
+        logger.info(
+            f"[Transition] Progress: {progress_pct:.0f}% | "
+            f"Lux: {lux:.1f} | Shutter: {shutter_str} | "
+            f"Gain: {gain:.2f} | AWB: {wb_status}"
+        )
+
     def _get_target_colour_gains(self, mode: str, position: float = None) -> tuple:
         """
         Get target colour gains based on mode and transition position.
@@ -524,8 +922,13 @@ class AdaptiveTimelapse:
             return night_gains
 
         # For day and transition, we need day reference
-        # Use stored reference or a reasonable default for daylight
-        day_gains = self._day_wb_reference or (2.5, 1.6)
+        # Priority: 1) Fixed config gains, 2) Learned AWB reference, 3) Default
+        day_config = self.config["adaptive_timelapse"].get("day_mode", {})
+        fixed_gains = day_config.get("fixed_colour_gains")
+        if fixed_gains:
+            day_gains = tuple(fixed_gains)
+        else:
+            day_gains = self._day_wb_reference or (2.5, 1.6)
 
         if mode == LightMode.DAY:
             return day_gains
@@ -617,7 +1020,11 @@ class AdaptiveTimelapse:
 
     def determine_mode(self, lux: float) -> str:
         """
-        Determine light mode based on lux value.
+        Determine light mode based on lux value and sun position.
+
+        Includes Polar Day override: In polar regions, force Day mode when
+        sun elevation is above civil twilight threshold (-6°), even if lux
+        readings suggest otherwise. This captures twilight colors with AWB.
 
         Args:
             lux: Calculated lux value
@@ -629,6 +1036,17 @@ class AdaptiveTimelapse:
         night_threshold = thresholds["night"]
         day_threshold = thresholds["day"]
 
+        # === POLAR DAY OVERRIDE ===
+        # In polar regions, force Day mode during civil twilight to capture
+        # beautiful pink/blue twilight colors with AWB instead of locked night WB
+        if self._is_polar_day(lux):
+            sun_elev = self._sun_elevation  # Cached from _is_polar_day call
+            logger.info(
+                f"[Polar] Sun: {sun_elev:.1f}° | Lux: {lux:.1f} | Mode: Polar Day (override)"
+            )
+            return LightMode.DAY
+
+        # Standard lux-based mode determination
         if lux < night_threshold:
             mode = LightMode.NIGHT
         elif lux > day_threshold:
@@ -636,7 +1054,13 @@ class AdaptiveTimelapse:
         else:
             mode = LightMode.TRANSITION
 
-        logger.info(f"Light level: {lux:.2f} lux → Mode: {mode}")
+        # Log with sun elevation if available
+        sun_elev = self._sun_elevation
+        if sun_elev is not None:
+            logger.info(f"[Status] Sun: {sun_elev:.1f}° | Lux: {lux:.1f} | Mode: {mode}")
+        else:
+            logger.info(f"Light level: {lux:.2f} lux → Mode: {mode}")
+
         return mode
 
     def get_camera_settings(self, mode: str, lux: float = None) -> Dict:
@@ -663,8 +1087,10 @@ class AdaptiveTimelapse:
             target_exposure = night["max_exposure_time"]
 
             # Apply smooth interpolation even in night mode for seamless transitions
+            # Use fast ramp-down if overexposure was detected in previous frame
+            exposure_speed = self._fast_rampdown_speed if self._overexposure_detected else None
             smooth_gain = self._interpolate_gain(target_gain)
-            smooth_exposure = self._interpolate_exposure(target_exposure)
+            smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
             settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
             settings["AnalogueGain"] = smooth_gain
@@ -699,8 +1125,10 @@ class AdaptiveTimelapse:
                 target_exposure = self._calculate_target_exposure_from_lux(lux)
 
                 # Apply smooth interpolation to prevent jumps
+                # Use fast ramp-down if overexposure was detected in previous frame
+                exposure_speed = self._fast_rampdown_speed if self._overexposure_detected else None
                 smooth_gain = self._interpolate_gain(target_gain)
-                smooth_exposure = self._interpolate_exposure(target_exposure)
+                smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
                 settings["AnalogueGain"] = smooth_gain
                 settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
@@ -763,13 +1191,32 @@ class AdaptiveTimelapse:
                 position = (lux - night_threshold) / lux_range
                 position = max(0.0, min(1.0, position))
 
-                # Calculate target values based on current lux
-                target_gain = self._calculate_target_gain_from_lux(lux)
-                target_exposure = self._calculate_target_exposure_from_lux(lux)
+                # === SEQUENTIAL RAMPING ===
+                # Use shutter-first ramping when transition is seeded (Holy Grail mode)
+                # This keeps ISO low for cleaner images
+                use_sequential = (
+                    transition.get("sequential_ramping", True) and self._transition_seeded
+                )
+
+                if use_sequential:
+                    # Sequential: Shutter first, then gain
+                    target_exposure, target_gain = self._calculate_sequential_ramping(lux, position)
+                else:
+                    # Legacy: Simultaneous ramping based on lux
+                    target_gain = self._calculate_target_gain_from_lux(lux)
+                    target_exposure = self._calculate_target_exposure_from_lux(lux)
+
+                # === EV SAFETY CLAMP ===
+                # Ensure first manual frame matches last auto frame exactly
+                target_exposure, target_gain = self._apply_ev_safety_clamp(
+                    target_exposure, target_gain
+                )
 
                 # Apply smooth interpolation to prevent jumps
+                # Use fast ramp-down if overexposure was detected in previous frame
+                exposure_speed = self._fast_rampdown_speed if self._overexposure_detected else None
                 smooth_gain = self._interpolate_gain(target_gain)
-                smooth_exposure = self._interpolate_exposure(target_exposure)
+                smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
                 settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
                 settings["AnalogueGain"] = smooth_gain
@@ -789,10 +1236,11 @@ class AdaptiveTimelapse:
                     f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
                 )
             else:
-                # Use middle values
+                # Legacy fallback when smooth_transition is disabled
+                # Use middle values between day and night
                 exposure_seconds = 5.0
                 settings["ExposureTime"] = int(exposure_seconds * 1_000_000)  # 5 seconds
-                settings["AnalogueGain"] = transition["analogue_gain_max"]
+                settings["AnalogueGain"] = 2.5  # Sensible middle value
                 settings["AwbEnable"] = 0
                 # Use interpolated colour gains
                 target_gains = self._get_target_colour_gains(mode, 0.5)
@@ -963,6 +1411,9 @@ class AdaptiveTimelapse:
                 "transition_position": (
                     round(transition_position, 4) if transition_position is not None else None
                 ),
+                "sun_elevation": (
+                    round(self._sun_elevation, 2) if self._sun_elevation is not None else None
+                ),
             }
 
             # Add exposure calculation targets (what we calculated, before interpolation)
@@ -1047,22 +1498,32 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.error(f"Failed to create symlink: {e}")
 
-    def capture_frame(self, capture: ImageCapture, mode: str) -> Tuple[str, Optional[str]]:
+    def capture_frame(
+        self, capture: ImageCapture, mode: str, calculated_lux: float = None
+    ) -> Tuple[str, Optional[str]]:
         """
         Capture a single frame with the camera's current settings.
 
         Args:
             capture: ImageCapture instance with initialized camera
             mode: Light mode
+            calculated_lux: Calculated lux value to use in overlay (overrides camera's estimate)
 
         Returns:
             Tuple of (image_path, metadata_path)
         """
         logger.info(f"Capturing frame #{self.frame_count} in {mode} mode...")
 
+        # Prepare extra metadata with calculated lux (overrides camera's unreliable estimate)
+        extra_metadata = {}
+        if calculated_lux is not None:
+            extra_metadata["Lux"] = calculated_lux
+
         # Capture the image (controls were set during initialization)
-        # Pass mode so overlay knows the light mode
-        image_path, metadata_path = capture.capture(mode=mode)
+        # Pass mode so overlay knows the light mode, and calculated lux for accurate display
+        image_path, metadata_path = capture.capture(
+            mode=mode, extra_metadata=extra_metadata if extra_metadata else None
+        )
 
         # Create symlink to latest image if enabled
         self._create_latest_symlink(image_path)
@@ -1121,9 +1582,15 @@ class AdaptiveTimelapse:
                     logger.info(f"Reached frame limit: {num_frames}")
                     break
 
+                # Determine if we should take a test shot based on frequency
+                test_shot_frequency = adaptive_config["test_shot"].get("frequency", 1)
+                should_take_test_shot = adaptive_config["test_shot"]["enabled"] and (
+                    self.frame_count % test_shot_frequency == 0
+                )
+
                 # CRITICAL: Close camera before taking test shot to avoid "Camera in Running state" error
                 # Test shot uses its own context-managed camera instance
-                if capture is not None and adaptive_config["test_shot"]["enabled"]:
+                if capture is not None and should_take_test_shot:
                     logger.debug("Closing camera before test shot...")
                     self._close_camera_fast(capture, last_mode)
                     capture = None
@@ -1134,12 +1601,13 @@ class AdaptiveTimelapse:
                 lux = None
                 transition_position = None
 
-                # Take test shot if enabled
-                if adaptive_config["test_shot"]["enabled"]:
+                # Take test shot if enabled and frequency allows
+                if should_take_test_shot:
                     try:
                         test_image_path, test_metadata = self.take_test_shot()
 
-                        # Calculate raw lux from test shot
+                        # Calculate lux from test shot image brightness
+                        # This is more reliable than camera's metadata lux estimate
                         raw_lux = self.calculate_lux(test_image_path, test_metadata)
 
                         # Apply exponential moving average smoothing
@@ -1160,18 +1628,49 @@ class AdaptiveTimelapse:
                             )
                             transition_position = max(0.0, min(1.0, transition_position))
 
+                        # === HOLY GRAIL: Seed from metadata when entering transition ===
+                        # Detect mode change: Day → Transition or Day → Night
+                        entering_manual_mode = self._previous_mode == LightMode.DAY and mode in (
+                            LightMode.TRANSITION,
+                            LightMode.NIGHT,
+                        )
+
+                        if entering_manual_mode and not self._transition_seeded:
+                            # Seed interpolation state from actual camera metadata
+                            # This makes first manual frame identical to last auto frame
+                            self._seed_from_metadata(test_metadata, self._last_day_capture_metadata)
+
+                        # Reset seed state when returning to day mode
+                        if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
+                            self._transition_seeded = False
+                            logger.info("[Holy Grail] Returned to Day mode - seed state reset")
+
+                        # Log transition progress
+                        if mode == LightMode.TRANSITION and transition_position is not None:
+                            self._log_transition_progress(lux, transition_position)
+
+                        # Track mode for next iteration
+                        self._previous_mode = mode
+
                         # Get settings for this mode (with smooth WB interpolation)
                         settings = self.get_camera_settings(mode, lux)
 
                     except Exception as e:
                         logger.error(f"Test shot failed: {e}")
-                        # Fall back to day mode
-                        mode = LightMode.DAY
-                        settings = self.get_camera_settings(mode)
+                        # Fall back to last mode or day mode
+                        mode = self._last_mode or LightMode.DAY
+                        lux = self._smoothed_lux
+                        settings = self.get_camera_settings(mode, lux)
                 else:
-                    # No test shot, use day mode
-                    mode = LightMode.DAY
-                    settings = self.get_camera_settings(mode)
+                    # Test shot skipped (frequency > 1) - reuse last known values
+                    # This keeps camera running and applies interpolation
+                    mode = self._last_mode or LightMode.DAY
+                    lux = self._smoothed_lux  # Use last smoothed lux
+                    settings = self.get_camera_settings(mode, lux)
+                    logger.debug(
+                        f"Skipping test shot (frame {self.frame_count}), "
+                        f"reusing mode={mode}, lux={lux:.2f if lux else 'N/A'}"
+                    )
 
                 # Initialize camera on first frame or if it was closed
                 if capture is None:
@@ -1182,7 +1681,7 @@ class AdaptiveTimelapse:
 
                 # Capture actual frame
                 try:
-                    image_path, metadata_path = self.capture_frame(capture, mode)
+                    image_path, metadata_path = self.capture_frame(capture, mode, lux)
                     logger.info(f"Frame captured: {image_path}")
 
                     # Enrich metadata with diagnostic information (if enabled)
@@ -1202,8 +1701,8 @@ class AdaptiveTimelapse:
                         )
 
                     # Apply brightness feedback for butter-smooth transitions
-                    # This analyzes actual image brightness and gradually adjusts
-                    # the exposure correction factor to maintain consistent brightness
+                    # Uses lores stream brightness (from capture.last_brightness_metrics)
+                    # which avoids disk I/O and overlay contamination
                     brightness_feedback_enabled = (
                         self.config.get("adaptive_timelapse", {})
                         .get("transition_mode", {})
@@ -1211,15 +1710,22 @@ class AdaptiveTimelapse:
                     )
                     if brightness_feedback_enabled:
                         try:
-                            brightness_analysis = self._analyze_image_brightness(image_path)
-                            if brightness_analysis:
-                                actual_brightness = brightness_analysis.get("mean_brightness")
+                            # Prefer lores brightness (fast, no overlay contamination)
+                            # Fall back to disk analysis if lores not available
+                            brightness_metrics = capture.last_brightness_metrics
+                            if not brightness_metrics:
+                                brightness_metrics = self._analyze_image_brightness(image_path)
+                            if brightness_metrics:
+                                actual_brightness = brightness_metrics.get("mean_brightness")
                                 self._apply_brightness_feedback(actual_brightness)
+                                # Check for overexposure and enable fast ramp-down if needed
+                                self._check_overexposure(brightness_metrics)
                         except Exception as e:
                             logger.debug(f"Could not apply brightness feedback: {e}")
 
                     # Update day WB reference from actual capture metadata
                     # This allows us to learn good daylight WB values for smooth transitions
+                    # Also store for Holy Grail seeding when entering transition
                     if metadata_path and mode == LightMode.DAY:
                         try:
                             import json
@@ -1227,6 +1733,8 @@ class AdaptiveTimelapse:
                             with open(metadata_path, "r") as f:
                                 capture_metadata = json.load(f)
                             self._update_day_wb_reference(capture_metadata)
+                            # Store for Holy Grail seeding
+                            self._last_day_capture_metadata = capture_metadata
                         except Exception as e:
                             logger.debug(f"Could not read capture metadata for WB reference: {e}")
 

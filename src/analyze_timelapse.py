@@ -181,6 +181,7 @@ def analyze_images(image_metadata_pairs: List[Tuple[Path, Path]], hours: int) ->
         "target_gain": [],
         "interpolated_gain": [],
         "transition_position": [],
+        "sun_elevation": [],  # Sun position in degrees (polar awareness)
         # Brightness analysis
         "brightness_mean": [],
         "brightness_median": [],
@@ -241,6 +242,7 @@ def analyze_images(image_metadata_pairs: List[Tuple[Path, Path]], hours: int) ->
         data["target_gain"].append(diagnostics.get("target_gain"))
         data["interpolated_gain"].append(diagnostics.get("interpolated_gain"))
         data["transition_position"].append(diagnostics.get("transition_position"))
+        data["sun_elevation"].append(diagnostics.get("sun_elevation"))
 
         # Brightness analysis data
         brightness = diagnostics.get("brightness", {})
@@ -264,6 +266,33 @@ def analyze_images(image_metadata_pairs: List[Tuple[Path, Path]], hours: int) ->
         print("ℹ️  No diagnostic metadata found (older captures)")
 
     return data
+
+
+def find_transition_zones(timestamps: List, modes: List) -> List[Tuple[datetime, datetime, str]]:
+    """
+    Find continuous time ranges for each mode (day, night, transition).
+
+    Returns list of tuples: (start_time, end_time, mode)
+    """
+    if not timestamps or not modes:
+        return []
+
+    zones = []
+    current_mode = modes[0] or "unknown"
+    zone_start = timestamps[0]
+
+    for i in range(1, len(timestamps)):
+        mode = modes[i] or "unknown"
+        if mode != current_mode:
+            # End current zone, start new one
+            zones.append((zone_start, timestamps[i - 1], current_mode))
+            zone_start = timestamps[i]
+            current_mode = mode
+
+    # Add final zone
+    zones.append((zone_start, timestamps[-1], current_mode))
+
+    return zones
 
 
 def create_graphs(data: Dict, output_dir: Path, config: dict):
@@ -957,6 +986,542 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
             plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
             plt.close()
             print(f"    ✅ Saved: {output_path}")
+
+    # === HOLY GRAIL TRANSITION ANALYSIS GRAPHS ===
+    # These graphs help verify the smoothness of day/night transitions
+    print("\n📊 Creating Holy Grail transition analysis graphs...")
+
+    # Find transition zones from mode data
+    transition_zones = find_transition_zones(data["timestamps"], data["mode"])
+    has_transition_data = any(m == "transition" for m in data["mode"] if m)
+
+    if has_transition_data:
+        print(
+            f"  Found {sum(1 for z in transition_zones if z[2] == 'transition')} transition periods"
+        )
+
+    # Mode colors for zone shading
+    mode_colors = {
+        "day": ("#ffff88", 0.15),  # Light yellow
+        "night": ("#4444aa", 0.20),  # Dark blue
+        "transition": ("#ff88ff", 0.25),  # Magenta/purple
+        "unknown": ("#888888", 0.10),  # Gray
+    }
+
+    # Helper function to add zone shading to an axis
+    def add_zone_shading(ax, zones, y_min, y_max):
+        for start, end, mode in zones:
+            color, alpha = mode_colors.get(mode, ("#888888", 0.1))
+            ax.axvspan(start, end, alpha=alpha, color=color, zorder=0)
+
+    # 12. HOLY GRAIL: Multi-Variable Comparison Plot (Lux vs Exposure vs Gain)
+    print("  Creating Holy Grail multi-variable comparison plot...")
+    fig, ax1 = plt.subplots(figsize=(fig_width, fig_height))
+
+    # Set dark background
+    fig.patch.set_facecolor("#1a1a1a")
+    ax1.set_facecolor("#2d2d2d")
+
+    # Add zone shading
+    if transition_zones:
+        y_min = min(data["lux"]) if data["lux"] else 0.1
+        y_max = max(data["lux"]) if data["lux"] else 100000
+        add_zone_shading(ax1, transition_zones, y_min, y_max)
+
+    # Plot Lux (primary y-axis, log scale)
+    color_lux = "#ffaa00"
+    ax1.semilogy(
+        data["timestamps"],
+        data["lux"],
+        color=color_lux,
+        linewidth=2.5,
+        label="Lux (light level)",
+        zorder=5,
+    )
+    ax1.set_xlabel("Time", fontsize=12, color="white")
+    ax1.set_ylabel("Lux (log scale)", fontsize=12, color=color_lux)
+    ax1.tick_params(axis="y", labelcolor=color_lux)
+    ax1.tick_params(axis="x", colors="white")
+
+    # Create second y-axis for Exposure Time
+    ax2 = ax1.twinx()
+    color_exp = "#88ff88"
+    # Convert exposure to milliseconds for better readability
+    exposure_ms = [e * 1000 for e in data["exposure_time"]]
+    ax2.semilogy(
+        data["timestamps"],
+        exposure_ms,
+        color=color_exp,
+        linewidth=2,
+        linestyle="--",
+        label="Exposure (ms)",
+        zorder=4,
+        alpha=0.8,
+    )
+    ax2.set_ylabel("Exposure Time (ms, log scale)", fontsize=12, color=color_exp)
+    ax2.tick_params(axis="y", labelcolor=color_exp)
+
+    # Create third y-axis for Analogue Gain
+    ax3 = ax1.twinx()
+    ax3.spines["right"].set_position(("axes", 1.12))  # Offset the third axis
+    color_gain = "#ff8888"
+    ax3.plot(
+        data["timestamps"],
+        data["analogue_gain"],
+        color=color_gain,
+        linewidth=2,
+        linestyle=":",
+        label="Gain (ISO)",
+        zorder=3,
+        alpha=0.8,
+    )
+    ax3.set_ylabel("Analogue Gain", fontsize=12, color=color_gain)
+    ax3.tick_params(axis="y", labelcolor=color_gain)
+
+    # Title and legend
+    ax1.set_title(
+        "Holy Grail Transition Analysis\n"
+        "Verify: Exposure should follow Lux inversely with smooth S-curve (no spikes)",
+        fontsize=14,
+        fontweight="bold",
+        color="white",
+        pad=20,
+    )
+
+    # Combined legend
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    lines3, labels3 = ax3.get_legend_handles_labels()
+    legend = ax1.legend(
+        lines1 + lines2 + lines3,
+        labels1 + labels2 + labels3,
+        loc="upper right",
+        fontsize=10,
+        facecolor="#3d3d3d",
+        edgecolor="gray",
+    )
+    plt.setp(legend.get_texts(), color="white")
+
+    # Add mode legend
+    if has_transition_data:
+        from matplotlib.patches import Patch
+
+        mode_patches = [
+            Patch(facecolor="#ffff88", alpha=0.3, label="Day Mode"),
+            Patch(facecolor="#ff88ff", alpha=0.4, label="Transition Mode"),
+            Patch(facecolor="#4444aa", alpha=0.4, label="Night Mode"),
+        ]
+        legend2 = ax1.legend(
+            handles=mode_patches,
+            loc="upper left",
+            fontsize=9,
+            facecolor="#3d3d3d",
+            edgecolor="gray",
+        )
+        plt.setp(legend2.get_texts(), color="white")
+        ax1.add_artist(legend)  # Keep both legends
+
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax1.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha="right")
+    ax1.grid(True, alpha=0.2, linestyle="--", color="gray")
+
+    for spine in ax1.spines.values():
+        spine.set_edgecolor("gray")
+
+    fig.tight_layout()
+    output_path = output_dir / "holy_grail_comparison.png"
+    plt.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"    ✅ Saved: {output_path}")
+
+    # 13. HOLY GRAIL: AWB Gain Stability Plot
+    print("  Creating Holy Grail AWB stability plot...")
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(fig_width, fig_height * 1.2))
+
+    # Set dark background
+    fig.patch.set_facecolor("#1a1a1a")
+    ax1.set_facecolor("#2d2d2d")
+    ax2.set_facecolor("#2d2d2d")
+
+    # Add zone shading to both axes
+    if transition_zones:
+        red_min = min(data["colour_gains_red"]) if data["colour_gains_red"] else 1
+        red_max = max(data["colour_gains_red"]) if data["colour_gains_red"] else 4
+        blue_min = min(data["colour_gains_blue"]) if data["colour_gains_blue"] else 1
+        blue_max = max(data["colour_gains_blue"]) if data["colour_gains_blue"] else 4
+        add_zone_shading(ax1, transition_zones, red_min, red_max)
+        add_zone_shading(ax2, transition_zones, blue_min, blue_max)
+
+    # Plot Red Gain
+    ax1.plot(
+        data["timestamps"],
+        data["colour_gains_red"],
+        color="#ff4444",
+        linewidth=2,
+        marker="o",
+        markersize=2,
+        label="Red Gain",
+    )
+    ax1.set_ylabel("Red AWB Gain", fontsize=12, color="#ff4444")
+    ax1.tick_params(axis="y", labelcolor="#ff4444")
+    ax1.tick_params(axis="x", colors="white")
+    ax1.set_title(
+        "AWB Red Gain - Should be FLAT during Transition (purple zones)",
+        fontsize=12,
+        fontweight="bold",
+        color="white",
+    )
+    ax1.grid(True, alpha=0.2, linestyle="--", color="gray")
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+
+    # Calculate jitter (standard deviation) in transition zones
+    transition_red_values = [
+        data["colour_gains_red"][i]
+        for i in range(len(data["timestamps"]))
+        if data["mode"][i] == "transition"
+    ]
+    if transition_red_values:
+        red_jitter = np.std(transition_red_values)
+        ax1.text(
+            0.02,
+            0.98,
+            f"Transition Jitter: {red_jitter:.4f}",
+            transform=ax1.transAxes,
+            fontsize=10,
+            color="white",
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="#3d3d3d", alpha=0.8),
+        )
+        if red_jitter < 0.01:
+            ax1.text(
+                0.02,
+                0.85,
+                "✓ AWB LOCKED",
+                transform=ax1.transAxes,
+                fontsize=12,
+                color="#88ff88",
+                fontweight="bold",
+                verticalalignment="top",
+            )
+        else:
+            ax1.text(
+                0.02,
+                0.85,
+                "⚠ AWB UNSTABLE",
+                transform=ax1.transAxes,
+                fontsize=12,
+                color="#ff8888",
+                fontweight="bold",
+                verticalalignment="top",
+            )
+
+    # Plot Blue Gain
+    ax2.plot(
+        data["timestamps"],
+        data["colour_gains_blue"],
+        color="#4488ff",
+        linewidth=2,
+        marker="o",
+        markersize=2,
+        label="Blue Gain",
+    )
+    ax2.set_xlabel("Time", fontsize=12, color="white")
+    ax2.set_ylabel("Blue AWB Gain", fontsize=12, color="#4488ff")
+    ax2.tick_params(axis="y", labelcolor="#4488ff")
+    ax2.tick_params(axis="x", colors="white")
+    ax2.set_title(
+        "AWB Blue Gain - Should be FLAT during Transition (purple zones)",
+        fontsize=12,
+        fontweight="bold",
+        color="white",
+    )
+    ax2.grid(True, alpha=0.2, linestyle="--", color="gray")
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+    # Calculate jitter for blue
+    transition_blue_values = [
+        data["colour_gains_blue"][i]
+        for i in range(len(data["timestamps"]))
+        if data["mode"][i] == "transition"
+    ]
+    if transition_blue_values:
+        blue_jitter = np.std(transition_blue_values)
+        ax2.text(
+            0.02,
+            0.98,
+            f"Transition Jitter: {blue_jitter:.4f}",
+            transform=ax2.transAxes,
+            fontsize=10,
+            color="white",
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="#3d3d3d", alpha=0.8),
+        )
+        if blue_jitter < 0.01:
+            ax2.text(
+                0.02,
+                0.85,
+                "✓ AWB LOCKED",
+                transform=ax2.transAxes,
+                fontsize=12,
+                color="#88ff88",
+                fontweight="bold",
+                verticalalignment="top",
+            )
+        else:
+            ax2.text(
+                0.02,
+                0.85,
+                "⚠ AWB UNSTABLE",
+                transform=ax2.transAxes,
+                fontsize=12,
+                color="#ff8888",
+                fontweight="bold",
+                verticalalignment="top",
+            )
+
+    for spine in ax1.spines.values():
+        spine.set_edgecolor("gray")
+    for spine in ax2.spines.values():
+        spine.set_edgecolor("gray")
+
+    fig.suptitle(
+        "Holy Grail AWB Stability Check\n"
+        "Verify: Gains should be perfectly flat (no jitter) in purple transition zones",
+        fontsize=14,
+        fontweight="bold",
+        color="white",
+    )
+    fig.tight_layout()
+
+    output_path = output_dir / "holy_grail_awb_stability.png"
+    plt.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"    ✅ Saved: {output_path}")
+
+    # 14. HOLY GRAIL: Transition Position / Factor Plot
+    # Shows the transition_position (0.0 = night threshold, 1.0 = day threshold)
+    transition_positions = [
+        (data["timestamps"][i], data["transition_position"][i])
+        for i in range(len(data["timestamps"]))
+        if data["transition_position"][i] is not None
+    ]
+
+    if transition_positions:
+        print("  Creating transition position plot...")
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+        fig.patch.set_facecolor("#1a1a1a")
+        ax.set_facecolor("#2d2d2d")
+
+        # Add zone shading
+        if transition_zones:
+            add_zone_shading(ax, transition_zones, 0, 1)
+
+        trans_times = [t[0] for t in transition_positions]
+        trans_values = [t[1] for t in transition_positions]
+
+        # Plot transition position
+        ax.plot(
+            trans_times,
+            trans_values,
+            color="#ff88ff",
+            linewidth=3,
+            marker="o",
+            markersize=4,
+            label="Transition Position",
+        )
+        ax.fill_between(trans_times, trans_values, alpha=0.3, color="#ff88ff")
+
+        # Add reference lines
+        ax.axhline(
+            y=0.0,
+            color="#4444ff",
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.7,
+            label="Night threshold (0.0)",
+        )
+        ax.axhline(
+            y=1.0,
+            color="#ffdd44",
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.7,
+            label="Day threshold (1.0)",
+        )
+        ax.axhline(
+            y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5, label="Midpoint (0.5)"
+        )
+
+        ax.set_xlabel("Time", fontsize=12, color="white")
+        ax.set_ylabel("Transition Position (0=Night, 1=Day)", fontsize=12, color="white")
+        ax.set_title(
+            "Holy Grail Transition Factor\n"
+            "Shows progress through twilight zone - should be smooth S-curve, not Z-shape",
+            fontsize=14,
+            fontweight="bold",
+            color="white",
+            pad=20,
+        )
+        ax.set_ylim(-0.1, 1.1)
+        ax.tick_params(colors="white")
+        ax.grid(True, alpha=0.2, linestyle="--", color="gray")
+
+        legend = ax.legend(loc="upper right", fontsize=10, facecolor="#3d3d3d", edgecolor="gray")
+        plt.setp(legend.get_texts(), color="white")
+
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+        for spine in ax.spines.values():
+            spine.set_edgecolor("gray")
+
+        fig.tight_layout()
+        output_path = output_dir / "holy_grail_transition_factor.png"
+        plt.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close()
+        print(f"    ✅ Saved: {output_path}")
+    else:
+        print("  ℹ️  No transition position data available (diagnostics may be disabled)")
+
+    # 15. POLAR: Sun Elevation + Lux Comparison
+    # Shows sun position alongside lux for polar region analysis
+    sun_data = [
+        (data["timestamps"][i], data["sun_elevation"][i])
+        for i in range(len(data["timestamps"]))
+        if data["sun_elevation"][i] is not None
+    ]
+
+    if sun_data:
+        print("  Creating sun elevation plot...")
+        fig, ax1 = plt.subplots(figsize=(fig_width, fig_height))
+
+        fig.patch.set_facecolor("#1a1a1a")
+        ax1.set_facecolor("#2d2d2d")
+
+        # Add zone shading
+        if transition_zones:
+            add_zone_shading(ax1, transition_zones, -20, 50)
+
+        sun_times = [t[0] for t in sun_data]
+        sun_values = [t[1] for t in sun_data]
+
+        # Plot Sun Elevation (primary axis)
+        color_sun = "#ffdd44"
+        ax1.plot(
+            sun_times,
+            sun_values,
+            color=color_sun,
+            linewidth=2.5,
+            label="Sun Elevation (°)",
+            zorder=5,
+        )
+        ax1.fill_between(
+            sun_times,
+            sun_values,
+            alpha=0.2,
+            color=color_sun,
+            zorder=4,
+        )
+
+        # Add reference lines for sun position
+        ax1.axhline(
+            y=0,
+            color="#ff8844",
+            linestyle="-",
+            linewidth=2,
+            alpha=0.7,
+            label="Horizon (0°)",
+        )
+        ax1.axhline(
+            y=-6,
+            color="#8888ff",
+            linestyle="--",
+            linewidth=2,
+            alpha=0.7,
+            label="Civil Twilight (-6°)",
+        )
+        ax1.axhline(
+            y=-12,
+            color="#4444ff",
+            linestyle=":",
+            linewidth=1.5,
+            alpha=0.5,
+            label="Nautical Twilight (-12°)",
+        )
+
+        ax1.set_xlabel("Time", fontsize=12, color="white")
+        ax1.set_ylabel("Sun Elevation (degrees)", fontsize=12, color=color_sun)
+        ax1.tick_params(axis="y", labelcolor=color_sun)
+        ax1.tick_params(axis="x", colors="white")
+
+        # Create second axis for Lux
+        ax2 = ax1.twinx()
+        color_lux = "#88ff88"
+
+        # Match lux data timestamps to sun data
+        lux_for_sun = []
+        for t, _ in sun_data:
+            # Find closest timestamp in lux data
+            idx = min(
+                range(len(data["timestamps"])),
+                key=lambda i: abs((data["timestamps"][i] - t).total_seconds()),
+            )
+            lux_for_sun.append(data["lux"][idx])
+
+        ax2.semilogy(
+            sun_times,
+            lux_for_sun,
+            color=color_lux,
+            linewidth=2,
+            linestyle="--",
+            label="Lux (light)",
+            alpha=0.8,
+            zorder=3,
+        )
+        ax2.set_ylabel("Lux (log scale)", fontsize=12, color=color_lux)
+        ax2.tick_params(axis="y", labelcolor=color_lux)
+
+        ax1.set_title(
+            "Polar Awareness: Sun Elevation vs Light Level\n"
+            "When sun > -6° (civil twilight), Day Mode is forced for twilight colors",
+            fontsize=14,
+            fontweight="bold",
+            color="white",
+            pad=20,
+        )
+
+        # Combined legend
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        legend = ax1.legend(
+            lines1 + lines2,
+            labels1 + labels2,
+            loc="upper right",
+            fontsize=10,
+            facecolor="#3d3d3d",
+            edgecolor="gray",
+        )
+        plt.setp(legend.get_texts(), color="white")
+
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax1.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+        plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha="right")
+        ax1.grid(True, alpha=0.2, linestyle="--", color="gray")
+
+        for spine in ax1.spines.values():
+            spine.set_edgecolor("gray")
+
+        fig.tight_layout()
+        output_path = output_dir / "polar_sun_elevation.png"
+        plt.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close()
+        print(f"    ✅ Saved: {output_path}")
+    else:
+        print("  ℹ️  No sun elevation data available (location may not be configured)")
 
     print("\n✅ All graphs created successfully!")
 

@@ -775,7 +775,8 @@ class ImageOverlay:
             if output_path is None:
                 output_path = image_path
 
-            img.save(output_path, quality=95)
+            output_quality = self.config.get("output", {}).get("quality", 95)
+            img.save(output_path, quality=output_quality)
             logger.debug(f"Overlay applied to {output_path}")
 
             return output_path

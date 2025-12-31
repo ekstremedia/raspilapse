@@ -7,6 +7,20 @@
 # Your config.yml will NOT be tracked by git, so you can safely
 # customize it with your personal settings (API keys, paths, etc.)
 
+# Location Settings (for sun position calculation)
+# Used for Polar Day/Night detection at high latitudes (68°N)
+# This enables "Civil Twilight Override" - forces Day mode when sun > -6°
+location:
+  # Latitude in decimal degrees (negative for South)
+  latitude: 68.7
+  # Longitude in decimal degrees (negative for West)
+  longitude: 15.4
+  # Timezone (for accurate sun calculations)
+  timezone: "Europe/Oslo"
+  # Civil twilight threshold (degrees below horizon)
+  # Sun > this value = force Day mode even if lux is low
+  civil_twilight_threshold: -6.0
+
 # Camera Settings
 camera:
   # Image resolution (width x height)
@@ -183,9 +197,6 @@ adaptive_timelapse:
     # Maximum exposure time in seconds (max 20 seconds to avoid star trails)
     max_exposure_time: 20.0
 
-    # Minimum exposure time in seconds
-    min_exposure_time: 1.0
-
     # Analogue gain (ISO equivalent)
     # Higher = brighter but more noise. Range: 1.0-8.0, recommended max: 4.0
     analogue_gain: 6
@@ -207,6 +218,12 @@ adaptive_timelapse:
     # Used when smooth_exposure_in_day_mode is enabled
     analogue_gain: 1.0  # Minimum gain for bright conditions
 
+    # Fixed white balance gains for day mode (red, blue)
+    # When specified, uses these fixed gains instead of learning from AWB
+    # Recommended for consistent color across sessions
+    # Comment out to learn from camera's AWB instead
+    # fixed_colour_gains: [2.5, 1.6]
+
     # Use auto white balance in day mode
     awb_enable: true
 
@@ -221,9 +238,12 @@ adaptive_timelapse:
     # Based on calculated lux value
     smooth_transition: true
 
-    # Analogue gain range for transition
-    analogue_gain_min: 1.0
-    analogue_gain_max: 2.5
+    # === SEQUENTIAL RAMPING (Noise Reduction) ===
+    # When enabled, prioritizes shutter speed over gain to minimize noise:
+    # - Phase 1: Ramp shutter from day value to max, keep gain locked at ~1.0
+    # - Phase 2: Only after shutter is maxed, ramp gain up to night target
+    # This produces cleaner twilight images by keeping ISO low as long as possible
+    sequential_ramping: true
 
     # === SMOOTH TRANSITION SETTINGS ===
     # These settings prevent flickering and ISO jumps during day/night transitions
@@ -299,6 +319,12 @@ adaptive_timelapse:
 
     # Test shot gain
     analogue_gain: 1.0
+
+    # Measurement frequency: how often to take test shots
+    # 1 = every capture (default), 2 = every other capture, etc.
+    # Higher values reduce overhead but may miss rapid light changes
+    # Recommended: 1 for dawn/dusk transitions, 2-3 for stable lighting
+    frequency: 1
 
   # Diagnostic metadata settings
   # Adds extra analysis data to each capture's metadata JSON
@@ -510,6 +536,20 @@ graphs:
 
   # Default time window for analysis (hours)
   default_hours: 24
+
+# Video Upload Settings (for daily_timelapse.py)
+video_upload:
+  # Enable/disable automatic upload after timelapse creation
+  enabled: false
+
+  # Server endpoint URL for video uploads
+  url: "https://example.com/api/video/upload"
+
+  # API key for authentication (Bearer token)
+  api_key: "your-api-key-here"
+
+  # Camera ID for the upload (used to identify this camera on the server)
+  camera_id: "camera_01"
 
 # Weather Data Settings
 weather:
