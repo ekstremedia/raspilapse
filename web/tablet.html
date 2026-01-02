@@ -95,10 +95,12 @@
     // Configuration
     const config = {
         interval: 120000,           // Time between slides (ms)
-        transitionDuration: 2000, // Duration of transition (ms)
-        preloadNext: true,        // Preload the next image
-        maxRetries: 3,            // Maximum number of retries for failed loads
-        retryDelay: 1000          // Delay between retries (ms)
+        transitionDuration: 2000,   // Duration of transition (ms)
+        preloadNext: true,          // Preload the next image
+        maxRetries: 3,              // Maximum number of retries for failed loads
+        retryDelay: 1000,           // Delay between retries (ms)
+        fetchTimeout: 20000,        // Fetch timeout (ms)
+        memoryCleanupInterval: 300000  // Clean up memory every 5 minutes
     };
 
     // Variables
@@ -107,8 +109,12 @@
     let imageElements = [];
     let loadingIndicator;
     let slideInterval;
+    let cleanupInterval;
     let touchStartX = 0;
     let touchEndX = 0;
+
+    // Track blob URLs for proper cleanup
+    const activeBlobUrls = new Map();
 
     // Initialize the slideshow
     window.onload = function() {
@@ -142,10 +148,37 @@
         // Start the slideshow
         startSlideshow();
 
+        // Start periodic memory cleanup
+        startMemoryCleanup();
+
         // Add touch event listeners for manual navigation
         container.addEventListener('touchstart', handleTouchStart, false);
         container.addEventListener('touchend', handleTouchEnd, false);
     };
+
+    // Revoke a blob URL and remove from tracking
+    function revokeBlobUrl(index) {
+        if (activeBlobUrls.has(index)) {
+            URL.revokeObjectURL(activeBlobUrls.get(index));
+            activeBlobUrls.delete(index);
+        }
+    }
+
+    // Periodic memory cleanup to prevent leaks
+    function startMemoryCleanup() {
+        if (cleanupInterval) clearInterval(cleanupInterval);
+        cleanupInterval = setInterval(() => {
+            // Force garbage collection hint by clearing non-visible images
+            imageElements.forEach((img, index) => {
+                if (index !== currentIndex && activeBlobUrls.has(index)) {
+                    // Keep the current image, clean up others
+                    revokeBlobUrl(index);
+                    img.src = '';
+                }
+            });
+            console.log('Memory cleanup performed at', new Date().toISOString());
+        }, config.memoryCleanupInterval);
+    }
 
     // Load an image by index using fetch to bypass WebView cache
     function loadImage(index, retryCount = 0) {
@@ -154,28 +187,51 @@
 
             const img = imageElements[index];
             const timestamp = new Date().getTime() + Math.random();
-            const src = sources[index] + "?t=" + timestamp;
+            const src = sources[index] + (sources[index].includes('?') ? '&' : '?') + "t=" + timestamp;
+
+            // Create an AbortController for fetch timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), config.fetchTimeout);
 
             // Use fetch with cache: 'no-store' to bypass aggressive WebView caching
-            fetch(src, { cache: 'no-store' })
-                .then(response => response.blob())
+            fetch(src, {
+                cache: 'no-store',
+                signal: controller.signal
+            })
+                .then(response => {
+                    clearTimeout(timeoutId);
+                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                    return response.blob();
+                })
                 .then(blob => {
+                    // Revoke previous blob URL BEFORE creating new one
+                    revokeBlobUrl(index);
+
                     const blobUrl = URL.createObjectURL(blob);
+                    activeBlobUrls.set(index, blobUrl);
+
+                    // Clear old event handlers to prevent memory leaks
+                    img.onload = null;
+                    img.onerror = null;
 
                     // Wait for image to actually load before resolving
                     img.onload = function() {
+                        this.onload = null; // Clear handler after use
                         showLoading(false);
                         resolve();
                     };
 
-                    // Revoke previous blob URL to prevent memory leaks
-                    if (img.src.startsWith('blob:')) {
-                        URL.revokeObjectURL(img.src);
-                    }
+                    img.onerror = function() {
+                        this.onerror = null;
+                        showLoading(false);
+                        resolve(); // Resolve anyway to not block slideshow
+                    };
+
                     img.src = blobUrl;
                 })
                 .catch(error => {
-                    console.warn(`Failed to load image ${index}:`, src, error);
+                    clearTimeout(timeoutId);
+                    console.warn(`Failed to load image ${index}:`, error.message);
                     if (retryCount < config.maxRetries) {
                         setTimeout(() => {
                             loadImage(index, retryCount + 1).then(resolve).catch(reject);
@@ -192,8 +248,13 @@
     // Preload the next image using fetch to bypass cache
     function preloadImage(index) {
         const timestamp = new Date().getTime() + Math.random();
-        const src = sources[index] + "?t=" + timestamp;
-        fetch(src, { cache: 'no-store' }).catch(() => {});
+        const src = sources[index] + (sources[index].includes('?') ? '&' : '?') + "t=" + timestamp;
+
+        // Use AbortController to prevent hanging requests
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), config.fetchTimeout);
+
+        fetch(src, { cache: 'no-store', signal: controller.signal }).catch(() => {});
     }
 
     // Show or hide loading indicator
