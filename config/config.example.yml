@@ -139,23 +139,37 @@ video:
 
     # Preset for libx264 (affects speed vs quality vs memory)
     # ultrafast = fastest, lowest memory, acceptable quality
-    # fast = good balance
+    # fast = good balance (recommended)
     # slow = best quality, highest memory (may OOM on 4K)
-    preset: "ultrafast"
+    preset: "fast"
 
     # Thread count (lower = less memory, slower encoding)
     # 2 = safe for Pi with 4GB RAM doing 4K
     threads: 2
 
     # Constant Rate Factor (0-51, lower = better quality)
-    # 18 = visually lossless, 23 = good quality, 28 = acceptable
-    crf: 23
+    # 18 = visually lossless, 23 = good quality, 25 = good balance, 28 = acceptable
+    crf: 25
 
   # Frame rate (frames per second)
   # 25 fps = smooth European standard
   # 30 fps = smooth NTSC standard
   # 24 fps = cinematic
   fps: 25
+
+  # Deflicker filter - smooths exposure transitions (like sunrise spikes)
+  # Uses ffmpeg's deflicker filter with Predictive Mean mode
+  deflicker: true
+  # Number of frames to average for deflicker (higher = smoother but may blur fast changes)
+  deflicker_size: 10
+
+  # Default time range for timelapse generation (used when no --start/--end provided)
+  # Format: HH:MM
+  # If end time <= start time, assumes start is from previous day
+  # Example: start 05:00, end 05:00 = yesterday 05:00 to today 05:00 (24h)
+  default_start_time: "05:00"
+  # End time (comment out or set to null to use current time)
+  default_end_time: "05:00"
 
 # Timelapse Settings (for future timelapse.py script)
 timelapse:
@@ -173,6 +187,12 @@ adaptive_timelapse:
   # Enable adaptive exposure based on light conditions
   enabled: true
 
+  # Reference lux - controls overall image brightness
+  # Higher = brighter images, Lower = darker images
+  # Tune per-camera based on scene and sensor sensitivity
+  # Typical range: 2.5 (darker) to 4.5 (brighter), default 3.8
+  reference_lux: 3.8
+
   # Interval between captures in seconds
   interval: 30
 
@@ -183,8 +203,9 @@ adaptive_timelapse:
   # These values determine when to switch between day/night/transition modes
   light_thresholds:
     # Lux below this = night mode (long exposure)
-    # Lower values = transition starts earlier (prevents overexposure)
-    night: 5
+    # Lower values = transition starts earlier (prevents morning overexposure)
+    # Recommended: 3 (starts transition before sky gets too bright)
+    night: 3
 
     # Lux above this = day mode (normal exposure)
     day: 80
@@ -308,6 +329,17 @@ adaptive_timelapse:
     # Lower = smoother but slower to correct (recommended: 0.1-0.3)
     # Higher = faster correction but may cause subtle jumps
     brightness_feedback_strength: 0.2
+
+    # === OVEREXPOSURE FAST RAMP-DOWN ===
+    # When overexposure is detected (brightness > 180 or >10% clipped pixels),
+    # exposure ramps down faster to prevent the "light flash" at dawn.
+    # This speed replaces the normal exposure_transition_speed temporarily.
+    #
+    # fast_rampdown_speed (0.1-0.5)
+    # - 0.30 = 3x faster than normal (conservative)
+    # - 0.40 = 4x faster (moderate)
+    # - 0.50 = 5x faster (recommended for quick overexposure correction)
+    fast_rampdown_speed: 0.50
 
   # Test shot settings (used to measure light levels)
   test_shot:
