@@ -81,9 +81,33 @@ def find_keogram_file(video_dir: Path, project_name: str, date: datetime.date) -
     return None
 
 
+def find_slitscan_file(video_dir: Path, project_name: str, date: datetime.date) -> Path:
+    """Find the generated slitscan file for a given date."""
+    date_str = date.strftime("%Y-%m-%d")
+
+    patterns = [
+        f"**/slitscan_{project_name}_{date_str}*.jpg",
+        f"**/slitscan*{date_str}*.jpg",
+        f"slitscan_{project_name}_{date_str}*.jpg",
+        f"slitscan*{date_str}*.jpg",
+    ]
+
+    for pattern in patterns:
+        matches = list(video_dir.glob(pattern))
+        if matches:
+            # Filter to only include files with the target date
+            date_matches = [m for m in matches if date_str in m.name]
+            if date_matches:
+                # Return most recently modified file (not alphabetically sorted)
+                return max(date_matches, key=lambda p: p.stat().st_mtime)
+
+    return None
+
+
 def upload_to_server(
     video_path: Path,
     keogram_path: Path,
+    slitscan_path: Path,
     date: str,
     upload_config: dict,
     camera_id: str,
@@ -116,6 +140,12 @@ def upload_to_server(
             file_handles.append(f)
             files["keogram"] = f
             logger.info(f"Keogram: {keogram_path}")
+
+        if slitscan_path and slitscan_path.exists():
+            f = open(slitscan_path, "rb")
+            file_handles.append(f)
+            files["slitscan"] = f
+            logger.info(f"Slitscan: {slitscan_path}")
 
         # Prepare request data
         data = {
@@ -261,13 +291,14 @@ Examples:
                 camera_id = old_config.get("camera_id", camera_id)
             logger.info("Using upload config from old config file (merged)")
 
-    # Step 1: Create timelapse video and keogram
+    # Step 1: Create timelapse video, keogram, and slitscan
     if not args.only_upload:
         print("\n=== Creating Timelapse Video ===")
         logger.info("Starting timelapse creation")
 
         # Build command for make_timelapse.py
         # Use 05:00 to 05:00 window (same as old script)
+        # Include --slitscan to generate slitscan image
         make_timelapse_cmd = [
             sys.executable,
             os.path.join(project_root, "src", "make_timelapse.py"),
@@ -281,6 +312,7 @@ Examples:
             target_date.strftime("%Y-%m-%d"),
             "--end-date",
             (target_date + timedelta(days=1)).strftime("%Y-%m-%d"),
+            "--slitscan",  # Generate slitscan image alongside keogram
         ]
 
         if args.dry_run:
@@ -315,15 +347,22 @@ Examples:
         if keogram_path:
             logger.info(f"Found keogram: {keogram_path}")
 
+        # Find slitscan
+        slitscan_path = find_slitscan_file(video_dir, project_name, target_date)
+        if slitscan_path:
+            logger.info(f"Found slitscan: {slitscan_path}")
+
         if args.dry_run:
             print(f"Would upload:")
             print(f"  Video: {video_path}")
             print(f"  Keogram: {keogram_path}")
+            print(f"  Slitscan: {slitscan_path}")
             print(f"  To: {upload_config.get('url', 'unknown')}")
         else:
             success = upload_to_server(
                 video_path=video_path,
                 keogram_path=keogram_path,
+                slitscan_path=slitscan_path,
                 date=target_date.strftime("%Y-%m-%d"),
                 upload_config=upload_config,
                 camera_id=camera_id,

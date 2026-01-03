@@ -39,7 +39,7 @@ def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:
     """
     Find all images in directory matching pattern, sorted by filename.
 
-    Automatically excludes keogram files to prevent recursive inclusion.
+    Automatically excludes keogram and slitscan files to prevent recursive inclusion.
 
     Args:
         directory: Directory to search
@@ -53,8 +53,8 @@ def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:
 
     images = []
     for img in directory.glob(pattern):
-        # Exclude keogram files and metadata
-        if img.name.startswith("keogram") or "_metadata" in img.name:
+        # Exclude keogram, slitscan files and metadata
+        if img.name.startswith(("keogram", "slitscan")) or "_metadata" in img.name:
             continue
         images.append(img)
 
@@ -242,14 +242,227 @@ def create_keogram_from_images(
     )
 
 
+def create_slitscan(
+    image_paths: List[Path],
+    output_path: Path,
+    quality: int = 95,
+    crop_top_percent: float = 7.0,
+    crop_bottom_percent: float = 0.0,
+    logger: Optional[logging.Logger] = None,
+) -> bool:
+    """
+    Create a slitscan image from a list of images.
+
+    Unlike a keogram which takes the center column from each image and creates
+    a narrow output, slitscan creates a full-width image where each frame
+    contributes columns at progressive positions from left to right.
+
+    For example, with 1920px wide images and 960 frames:
+    - Frame 0 contributes columns 0-1 (leftmost)
+    - Frame 1 contributes columns 2-3
+    - ...
+    - Frame 959 contributes columns 1918-1919 (rightmost)
+
+    The result shows the actual scene, but time progresses from left to right.
+
+    Args:
+        image_paths: List of image paths (must be sorted chronologically)
+        output_path: Path for the output slitscan image
+        quality: JPEG quality (1-100, default 95)
+        crop_top_percent: Percentage of image height to crop from top (default 7%)
+        crop_bottom_percent: Percentage of image height to crop from bottom
+        logger: Optional logger instance
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if not image_paths:
+        msg = "No images to process"
+        print(Colors.error(f"✗ {msg}"))
+        if logger:
+            logger.error(msg)
+        return False
+
+    num_images = len(image_paths)
+    print(f"  Processing {Colors.bold(str(num_images))} images...")
+
+    # Get dimensions from first image
+    try:
+        with Image.open(image_paths[0]) as first_img:
+            original_height = first_img.height
+            original_width = first_img.width
+    except Exception as e:
+        msg = f"Failed to read first image: {e}"
+        print(Colors.error(f"✗ {msg}"))
+        if logger:
+            logger.error(msg)
+        return False
+
+    # Calculate crop amounts
+    crop_top_px = int(original_height * crop_top_percent / 100)
+    crop_bottom_px = int(original_height * crop_bottom_percent / 100)
+    target_height = original_height - crop_top_px - crop_bottom_px
+
+    if crop_top_px > 0 or crop_bottom_px > 0:
+        print(f"  Cropping: top={crop_top_px}px, bottom={crop_bottom_px}px (overlay removal)")
+
+    if logger:
+        logger.info(f"Slitscan dimensions: {original_width}x{target_height}")
+        logger.info(f"Source image dimensions: {original_width}x{original_height}")
+        logger.info(f"Number of frames: {num_images}")
+        if crop_top_px > 0 or crop_bottom_px > 0:
+            logger.info(f"Cropping: top={crop_top_px}px, bottom={crop_bottom_px}px")
+
+    # Create the slitscan canvas (same width as original images)
+    slitscan = Image.new("RGB", (original_width, target_height))
+
+    # Calculate how many columns each frame contributes
+    # and track position using floating point for accuracy
+    columns_per_frame = original_width / num_images
+
+    if logger:
+        logger.info(f"Columns per frame: {columns_per_frame:.2f}")
+
+    # Process each image
+    processed = 0
+    skipped = 0
+    resized = 0
+    current_x = 0.0
+
+    for i, img_path in enumerate(image_paths):
+        try:
+            with Image.open(img_path) as img:
+                img_width, img_height = img.size
+
+                # Handle resolution changes - resize if dimensions differ
+                if img_width != original_width or img_height != original_height:
+                    source_dims = (img_width, img_height)
+                    img = img.resize((original_width, original_height), Image.Resampling.LANCZOS)
+                    img_width, img_height = original_width, original_height
+                    resized += 1
+                    if logger and resized == 1:
+                        logger.warning(
+                            f"Image {img_path.name} has different dimensions "
+                            f"({source_dims} vs {original_width}x{original_height}), resizing"
+                        )
+
+                # Calculate the x position in the source image for this frame
+                # Each frame's strip comes from the corresponding position in the source
+                start_x = int(current_x)
+                next_x = current_x + columns_per_frame
+                end_x = int(next_x)
+
+                # Ensure we have at least 1 pixel width
+                if end_x <= start_x:
+                    end_x = start_x + 1
+
+                # Ensure we don't exceed image bounds
+                if end_x > original_width:
+                    end_x = original_width
+
+                # Extract the vertical strip from the source position (with crop applied)
+                # The key insight: we take strip from position X in source,
+                # and place it at position X in output
+                strip = img.crop((start_x, crop_top_px, end_x, img_height - crop_bottom_px))
+
+                # Paste into slitscan at the same x position
+                slitscan.paste(strip, (start_x, 0))
+                processed += 1
+
+                current_x = next_x
+
+        except Exception as e:
+            skipped += 1
+            if logger:
+                logger.warning(f"Failed to process {img_path.name}: {e}")
+            # Still advance position even on failure
+            current_x += columns_per_frame
+            continue
+
+        # Progress update every 10%
+        if (i + 1) % max(1, num_images // 10) == 0:
+            pct = (i + 1) * 100 // num_images
+            print(f"  {Colors.CYAN}→{Colors.END} Progress: {pct}% ({i + 1}/{num_images})")
+
+    # Save the slitscan
+    try:
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        slitscan.save(str(output_path), "JPEG", quality=quality, optimize=True)
+
+        size_kb = output_path.stat().st_size / 1024
+        print(f"\n  {Colors.success('✓')} Slitscan saved: {Colors.bold(str(output_path))}")
+        print_info("Size", f"{size_kb:.1f} KB")
+        print_info("Dimensions", f"{original_width} x {target_height} pixels")
+        print_info("Processed", f"{processed} images")
+        print_info("Columns/frame", f"{columns_per_frame:.2f}")
+        if skipped > 0:
+            print(f"  {Colors.warning('⚠')} Skipped: {skipped} images")
+        if resized > 0:
+            print(f"  {Colors.warning('⚠')} Resized: {resized} images (different resolution)")
+
+        if logger:
+            logger.info(
+                f"Slitscan created: {output_path} "
+                f"({original_width}x{target_height}, {size_kb:.1f} KB)"
+            )
+
+        return True
+
+    except Exception as e:
+        msg = f"Failed to save slitscan: {e}"
+        print(Colors.error(f"✗ {msg}"))
+        if logger:
+            logger.error(msg)
+        return False
+
+
+def create_slitscan_from_images(
+    images: List[Path],
+    output_path: Path,
+    quality: int = 95,
+    crop_top_percent: float = 7.0,
+    crop_bottom_percent: float = 0.0,
+    logger: Optional[logging.Logger] = None,
+) -> bool:
+    """
+    Convenience function to create slitscan from a list of image paths.
+
+    This is the main entry point for integration with make_timelapse.py.
+
+    Args:
+        images: List of image paths (sorted chronologically)
+        output_path: Output path for the slitscan
+        quality: JPEG quality (1-100)
+        crop_top_percent: Percentage to crop from top (default 7% for overlay bar)
+        crop_bottom_percent: Percentage to crop from bottom
+        logger: Optional logger
+
+    Returns:
+        True if successful
+    """
+    return create_slitscan(
+        images,
+        output_path,
+        quality=quality,
+        crop_top_percent=crop_top_percent,
+        crop_bottom_percent=crop_bottom_percent,
+        logger=logger,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate keogram (time-slice) image from timelapse images",
+        description="Generate keogram or slitscan image from timelapse images",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Create keogram from a day folder
   python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/
+
+  # Create slitscan instead of keogram
+  python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/ --slitscan
 
   # Specify output filename
   python3 src/create_keogram.py --dir /path/to/images --output keogram_custom.jpg
@@ -262,6 +475,11 @@ What is a Keogram?
   (1 pixel wide) from each timelapse image and combining them horizontally.
   The result is a single image that shows clouds, day/night transitions,
   and aurora movement across the entire day.
+
+What is a Slitscan?
+  A slitscan creates a full-width image where each frame contributes columns
+  at progressive positions from left to right. Unlike a keogram (narrow strip),
+  slitscan shows the actual scene with time progressing across the width.
         """,
     )
 
@@ -309,6 +527,11 @@ What is a Keogram?
         help="Disable automatic top cropping (include overlay in keogram)",
     )
     parser.add_argument(
+        "--slitscan",
+        action="store_true",
+        help="Generate slitscan instead of keogram (full-width image with time progressing left to right)",
+    )
+    parser.add_argument(
         "-c",
         "--config",
         default="config/config.yml",
@@ -324,8 +547,14 @@ What is a Keogram?
         logger = logging.getLogger("create_keogram")
         logger.setLevel(logging.INFO)
 
+    # Determine mode
+    mode = "slitscan" if args.slitscan else "keogram"
+
     # Print header
-    print_section("🌅 KEOGRAM GENERATOR")
+    if args.slitscan:
+        print_section("🎞️ SLITSCAN GENERATOR")
+    else:
+        print_section("🌅 KEOGRAM GENERATOR")
 
     # Find images
     input_dir = Path(args.dir)
@@ -370,7 +599,7 @@ What is a Keogram?
         except Exception:
             date_str = datetime.now().strftime("%Y-%m-%d")
 
-        filename = f"keogram_{date_str}.jpg"
+        filename = f"{mode}_{date_str}.jpg"
 
         if args.output_dir:
             output_path = Path(args.output_dir) / filename
@@ -383,24 +612,35 @@ What is a Keogram?
     crop_top = 0.0 if args.no_crop else args.crop_top
     crop_bottom = 0.0 if args.no_crop else args.crop_bottom
 
-    # Create keogram
-    print_section("🎨 Creating Keogram")
-    success = create_keogram(
-        images,
-        output_path,
-        quality=args.quality,
-        crop_top_percent=crop_top,
-        crop_bottom_percent=crop_bottom,
-        logger=logger,
-    )
+    # Create keogram or slitscan
+    if args.slitscan:
+        print_section("🎨 Creating Slitscan")
+        success = create_slitscan(
+            images,
+            output_path,
+            quality=args.quality,
+            crop_top_percent=crop_top,
+            crop_bottom_percent=crop_bottom,
+            logger=logger,
+        )
+    else:
+        print_section("🎨 Creating Keogram")
+        success = create_keogram(
+            images,
+            output_path,
+            quality=args.quality,
+            crop_top_percent=crop_top,
+            crop_bottom_percent=crop_bottom,
+            logger=logger,
+        )
 
     if success:
-        print_section("✓ KEOGRAM CREATED SUCCESSFULLY!")
-        logger.info("Keogram generation completed successfully")
+        print_section(f"✓ {mode.upper()} CREATED SUCCESSFULLY!")
+        logger.info(f"{mode.capitalize()} generation completed successfully")
         return 0
     else:
-        print_section("✗ FAILED TO CREATE KEOGRAM")
-        logger.error("Keogram generation failed")
+        print_section(f"✗ FAILED TO CREATE {mode.upper()}")
+        logger.error(f"{mode.capitalize()} generation failed")
         return 1
 
 

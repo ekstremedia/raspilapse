@@ -24,10 +24,10 @@ if project_root not in sys.path:
 
 try:
     from src.logging_config import get_logger
-    from src.create_keogram import create_keogram_from_images
+    from src.create_keogram import create_keogram_from_images, create_slitscan_from_images
 except ModuleNotFoundError:
     from logging_config import get_logger
-    from create_keogram import create_keogram_from_images
+    from create_keogram import create_keogram_from_images, create_slitscan_from_images
 
 
 # ANSI color codes for pretty output
@@ -437,6 +437,11 @@ Examples:
         help="Only generate keogram, skip video creation",
     )
     parser.add_argument(
+        "--slitscan",
+        action="store_true",
+        help="Also generate slitscan image (full-width image where time progresses left to right)",
+    )
+    parser.add_argument(
         "-hd",
         "--hd",
         action="store_true",
@@ -729,6 +734,31 @@ Examples:
         else:
             logger.warning("Keogram generation failed")
 
+    # Create slitscan (if --slitscan)
+    slitscan_success = True
+    if args.slitscan:
+        print_subsection("🎞️ Generating Slitscan")
+        logger.info("Starting slitscan generation")
+
+        # Generate slitscan filename (similar to keogram naming)
+        slitscan_filename = output_file.stem.replace("_daily_", "_slitscan_") + ".jpg"
+        if "_daily_" not in output_file.stem:
+            slitscan_filename = f"slitscan_{output_file.stem}.jpg"
+        slitscan_file = video_path / slitscan_filename
+
+        slitscan_success = create_slitscan_from_images(
+            images,
+            slitscan_file,
+            quality=95,
+            crop_top_percent=7.0,  # Crop overlay bar (2 lines + padding)
+            logger=logger,
+        )
+
+        if slitscan_success:
+            logger.info(f"Slitscan created: {slitscan_file}")
+        else:
+            logger.warning("Slitscan generation failed")
+
     # Report final status
     if args.keogram_only:
         if keogram_success:
@@ -738,10 +768,21 @@ Examples:
             print_section("✗ FAILED TO CREATE KEOGRAM")
             return 1
     elif video_success:
-        if keogram_success:
-            print_section("✓ TIMELAPSE VIDEO AND KEOGRAM CREATED SUCCESSFULLY!")
+        extras = []
+        if not args.no_keogram and keogram_success:
+            extras.append("keogram")
+        if args.slitscan and slitscan_success:
+            extras.append("slitscan")
+
+        if extras:
+            print_section(
+                f"✓ TIMELAPSE VIDEO AND {', '.join(extras).upper()} CREATED SUCCESSFULLY!"
+            )
         else:
-            print_section("✓ TIMELAPSE VIDEO CREATED (keogram failed)")
+            if not args.no_keogram and not keogram_success:
+                print_section("✓ TIMELAPSE VIDEO CREATED (keogram failed)")
+            else:
+                print_section("✓ TIMELAPSE VIDEO CREATED SUCCESSFULLY!")
         logger.info("Timelapse video generation completed successfully")
         return 0
     else:

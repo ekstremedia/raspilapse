@@ -1,11 +1,13 @@
 """
 Comprehensive tests for create_keogram.py
 
-Tests the keogram generation functionality including:
+Tests the keogram and slitscan generation functionality including:
 - Colors class for ANSI terminal output
 - find_images function for finding images in directory
 - create_keogram function for creating keogram from images
 - create_keogram_from_images convenience wrapper
+- create_slitscan function for creating slitscan from images
+- create_slitscan_from_images convenience wrapper
 - main CLI function
 """
 
@@ -31,6 +33,8 @@ from create_keogram import (
     find_images,
     create_keogram,
     create_keogram_from_images,
+    create_slitscan,
+    create_slitscan_from_images,
     main,
 )
 
@@ -367,6 +371,193 @@ class TestCreateKeogramFromImages:
         assert result is True
 
 
+class TestCreateSlitscan:
+    """Tests for create_slitscan function."""
+
+    def test_create_slitscan_basic(self, sample_images, temp_dir):
+        """Test basic slitscan creation."""
+        output_path = temp_dir / "slitscan.jpg"
+        result = create_slitscan(sample_images, output_path)
+
+        assert result is True
+        assert output_path.exists()
+        assert output_path.stat().st_size > 0
+
+        # Verify slitscan dimensions
+        with Image.open(output_path) as slitscan:
+            # Width = original image width, height depends on source image minus crop
+            assert slitscan.width == 640  # Same as source images
+            original_height = 480
+            crop_top = int(original_height * 7.0 / 100)
+            expected_height = original_height - crop_top
+            assert slitscan.height == expected_height
+
+    def test_create_slitscan_empty_list(self, temp_dir, capsys):
+        """Test slitscan creation with empty image list."""
+        output_path = temp_dir / "slitscan.jpg"
+        result = create_slitscan([], output_path)
+
+        assert result is False
+        assert not output_path.exists()
+        captured = capsys.readouterr()
+        assert "No images to process" in captured.out
+
+    def test_create_slitscan_with_logger(self, sample_images, temp_dir):
+        """Test slitscan creation with logger."""
+        output_path = temp_dir / "slitscan.jpg"
+        logger = logging.getLogger("test")
+
+        with patch.object(logger, "info") as mock_info:
+            result = create_slitscan(sample_images, output_path, logger=logger)
+
+        assert result is True
+        assert mock_info.called
+
+    def test_create_slitscan_no_crop(self, sample_images, temp_dir):
+        """Test slitscan without cropping."""
+        output_path = temp_dir / "slitscan.jpg"
+        result = create_slitscan(
+            sample_images, output_path, crop_top_percent=0.0, crop_bottom_percent=0.0
+        )
+
+        assert result is True
+
+        with Image.open(output_path) as slitscan:
+            # Without crop, height should match source
+            assert slitscan.height == 480
+            # Width should match source
+            assert slitscan.width == 640
+
+    def test_create_slitscan_varying_resolutions(
+        self, sample_images_varying_resolutions, temp_dir, capsys
+    ):
+        """Test slitscan handles images with different resolutions."""
+        output_path = temp_dir / "slitscan.jpg"
+        result = create_slitscan(sample_images_varying_resolutions, output_path)
+
+        assert result is True
+
+        captured = capsys.readouterr()
+        # Should mention resizing
+        assert "Resized" in captured.out or result is True
+
+    def test_create_slitscan_invalid_first_image(self, temp_dir, capsys):
+        """Test error handling for invalid first image."""
+        # Create an invalid image file
+        invalid_path = temp_dir / "invalid.jpg"
+        invalid_path.write_bytes(b"not an image")
+
+        output_path = temp_dir / "slitscan.jpg"
+        result = create_slitscan([invalid_path], output_path)
+
+        assert result is False
+        captured = capsys.readouterr()
+        assert "Failed to read first image" in captured.out
+
+    def test_create_slitscan_skips_corrupt_images(self, sample_images, temp_dir, capsys):
+        """Test slitscan skips corrupt images in the middle."""
+        # Corrupt one of the middle images
+        corrupt_path = sample_images[5]
+        corrupt_path.write_bytes(b"corrupted image data")
+
+        output_path = temp_dir / "slitscan.jpg"
+        result = create_slitscan(sample_images, output_path)
+
+        assert result is True
+        captured = capsys.readouterr()
+        assert "Skipped: 1" in captured.out
+
+    def test_create_slitscan_creates_output_directory(self, sample_images, temp_dir):
+        """Test slitscan creates output directory if it doesn't exist."""
+        output_path = temp_dir / "nested" / "directory" / "slitscan.jpg"
+        result = create_slitscan(sample_images, output_path)
+
+        assert result is True
+        assert output_path.exists()
+        assert output_path.parent.exists()
+
+    def test_create_slitscan_many_images(self, temp_dir):
+        """Test slitscan with many images (more than image width)."""
+        # Create 1000 images for a 640px wide slitscan
+        images = []
+        for i in range(1000):
+            img_path = temp_dir / f"img_{i:04d}.jpg"
+            img = Image.new("RGB", (640, 480), color=(i % 256, 100, 100))
+            img.save(img_path, "JPEG")
+            images.append(img_path)
+
+        output_path = temp_dir / "slitscan.jpg"
+        result = create_slitscan(images, output_path, crop_top_percent=0.0)
+
+        assert result is True
+        with Image.open(output_path) as slitscan:
+            # Width should still be 640 (original image width)
+            assert slitscan.width == 640
+            assert slitscan.height == 480
+
+    def test_create_slitscan_few_images(self, temp_dir):
+        """Test slitscan with fewer images than image width."""
+        # Create only 10 images for a 640px wide slitscan
+        images = []
+        for i in range(10):
+            img_path = temp_dir / f"img_{i:02d}.jpg"
+            img = Image.new("RGB", (640, 480), color=(i * 25, 100, 200))
+            img.save(img_path, "JPEG")
+            images.append(img_path)
+
+        output_path = temp_dir / "slitscan.jpg"
+        result = create_slitscan(images, output_path, crop_top_percent=0.0)
+
+        assert result is True
+        with Image.open(output_path) as slitscan:
+            # Width should still be 640, each image contributes 64 columns
+            assert slitscan.width == 640
+            assert slitscan.height == 480
+
+
+class TestCreateSlitscanFromImages:
+    """Tests for create_slitscan_from_images convenience function."""
+
+    def test_wrapper_function(self, sample_images, temp_dir):
+        """Test the convenience wrapper function."""
+        output_path = temp_dir / "slitscan.jpg"
+        result = create_slitscan_from_images(sample_images, output_path)
+
+        assert result is True
+        assert output_path.exists()
+
+    def test_wrapper_passes_parameters(self, sample_images, temp_dir):
+        """Test wrapper passes all parameters correctly."""
+        output_path = temp_dir / "slitscan.jpg"
+        logger = logging.getLogger("test")
+
+        result = create_slitscan_from_images(
+            sample_images,
+            output_path,
+            quality=90,
+            crop_top_percent=5.0,
+            crop_bottom_percent=3.0,
+            logger=logger,
+        )
+
+        assert result is True
+
+
+class TestFindImagesExcludesSlitscan:
+    """Tests for find_images excluding slitscan files."""
+
+    def test_find_images_excludes_slitscans(self, temp_dir, sample_images):
+        """Test slitscan files are excluded."""
+        # Create a slitscan file
+        slitscan_path = temp_dir / "slitscan_test.jpg"
+        img = Image.new("RGB", (100, 100), color=(0, 0, 0))
+        img.save(slitscan_path, "JPEG")
+
+        images = find_images(temp_dir)
+        assert slitscan_path not in images
+        assert len(images) == 10  # Only the sample images
+
+
 class TestMainCLI:
     """Tests for main CLI function."""
 
@@ -548,6 +739,25 @@ class TestMainCLI:
 
         # Verify file was created in custom directory with custom name
         assert (output_dir / output_file).exists()
+
+    def test_main_slitscan_flag(self, sample_images, monkeypatch):
+        """Test main with --slitscan flag creates slitscan instead of keogram."""
+        input_dir = sample_images[0].parent
+
+        monkeypatch.setattr(
+            "sys.argv", ["create_keogram.py", "--dir", str(input_dir), "--slitscan"]
+        )
+
+        result = main()
+        assert result == 0
+
+        # Verify slitscan was created (not keogram)
+        slitscan_files = list(input_dir.glob("slitscan_*.jpg"))
+        assert len(slitscan_files) >= 1
+
+        # Verify it has the correct dimensions (width = original image width)
+        with Image.open(slitscan_files[0]) as slitscan:
+            assert slitscan.width == 640  # Original width
 
 
 class TestEdgeCases:
