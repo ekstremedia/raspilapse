@@ -31,11 +31,11 @@ class Colors:
     # Primary color aliases (bright versions for better terminal visibility)
     # These match the original create_keogram.py colors
     HEADER = "\033[95m"  # Bright magenta
-    BLUE = "\033[94m"    # Bright blue
-    CYAN = "\033[96m"    # Bright cyan
-    GREEN = "\033[92m"   # Bright green
+    BLUE = "\033[94m"  # Bright blue
+    CYAN = "\033[96m"  # Bright cyan
+    GREEN = "\033[92m"  # Bright green
     YELLOW = "\033[93m"  # Bright yellow
-    RED = "\033[91m"     # Bright red
+    RED = "\033[91m"  # Bright red
 
     # Styles
     BOLD = "\033[1m"

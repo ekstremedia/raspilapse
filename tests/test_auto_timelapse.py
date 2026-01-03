@@ -1449,9 +1449,7 @@ class TestEVSafetyClamp:
 
         # With EV clamp ENABLED - this causes the bug
         timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = True
-        clamped_exp, clamped_gain = timelapse._apply_ev_safety_clamp(
-            target_exposure, target_gain
-        )
+        clamped_exp, clamped_gain = timelapse._apply_ev_safety_clamp(target_exposure, target_gain)
 
         # Clamped exposure will be way too short!
         # 0.00165 / 6.0 = 0.000275s = 275µs ≈ 0.3ms
