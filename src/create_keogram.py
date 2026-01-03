@@ -29,58 +29,10 @@ if project_root not in sys.path:
 
 try:
     from src.logging_config import get_logger
+    from src.colors import Colors, print_section, print_info
 except ModuleNotFoundError:
     from logging_config import get_logger
-
-
-# ANSI color codes for pretty output
-class Colors:
-    """ANSI color codes for terminal output."""
-
-    HEADER = "\033[95m"
-    BLUE = "\033[94m"
-    CYAN = "\033[96m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    BOLD = "\033[1m"
-    END = "\033[0m"
-
-    @staticmethod
-    def header(text: str) -> str:
-        return f"{Colors.BOLD}{Colors.CYAN}{text}{Colors.END}"
-
-    @staticmethod
-    def success(text: str) -> str:
-        return f"{Colors.GREEN}{text}{Colors.END}"
-
-    @staticmethod
-    def error(text: str) -> str:
-        return f"{Colors.RED}{text}{Colors.END}"
-
-    @staticmethod
-    def warning(text: str) -> str:
-        return f"{Colors.YELLOW}{text}{Colors.END}"
-
-    @staticmethod
-    def info(text: str) -> str:
-        return f"{Colors.BLUE}{text}{Colors.END}"
-
-    @staticmethod
-    def bold(text: str) -> str:
-        return f"{Colors.BOLD}{text}{Colors.END}"
-
-
-def print_section(title: str):
-    """Print a section header."""
-    print(f"\n{Colors.header('═' * 70)}")
-    print(f"{Colors.header(f'  {title}')}")
-    print(f"{Colors.header('═' * 70)}")
-
-
-def print_info(label: str, value: str):
-    """Print an info line with label and value."""
-    print(f"  {Colors.BOLD}{label}:{Colors.END} {value}")
+    from colors import Colors, print_section, print_info
 
 
 def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:
@@ -188,6 +140,8 @@ def create_keogram(
 
                 # Handle resolution changes - resize if height differs from original
                 if img_height != original_height:
+                    # Save original dimensions for logging before we overwrite them
+                    source_height = img_height
                     # Resize to match original height while preserving aspect ratio
                     scale = original_height / img_height
                     new_width = int(img_width * scale)
@@ -198,7 +152,7 @@ def create_keogram(
                     if logger and resized == 1:
                         logger.warning(
                             f"Image {img_path.name} has different height "
-                            f"({img_height} vs {original_height}), resizing"
+                            f"({source_height} vs {original_height}), resizing"
                         )
 
                 # Extract center vertical column (1 pixel wide), with crop applied

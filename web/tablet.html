@@ -84,15 +84,23 @@
 </div>
 
 <script>
+    // =========================================================================
+    // CONFIGURATION - Edit these values for your setup
+    // =========================================================================
+
     // Array of image sources to cycle through
+    // Add or remove URLs as needed for your cameras/displays
     const sources = [
-	// "http://ekstremedia.no/storage/camera-current/spjutvika_01_latest.jpg",
-	"http://192.168.1.113/proxy.php",
-        "http://192.168.1.113/status.jpg",
-        "http://192.168.1.109/status.jpg",
+        // Example: Remote camera via proxy
+        // "http://ekstremedia.no/storage/camera-current/spjutvika_01_latest.jpg",
+
+        // Local cameras - update these IPs for your network
+        "http://192.168.1.113/proxy.php",   // Camera 1 via proxy
+        "http://192.168.1.113/status.jpg",  // Camera 1 status image
+        "http://192.168.1.109/status.jpg",  // Camera 2 status image
     ];
 
-    // Configuration
+    // Slideshow configuration
     const config = {
         interval: 120000,           // Time between slides (ms)
         transitionDuration: 2000,   // Duration of transition (ms)

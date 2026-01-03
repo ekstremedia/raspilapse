@@ -5,7 +5,7 @@ Provides system health metrics for display in timelapse overlays.
 
 import os
 import subprocess
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 try:
     from src.logging_config import get_logger
@@ -148,7 +148,7 @@ class SystemMonitor:
             logger.warning(f"Could not read uptime: {e}")
             return None
 
-    def get_all_metrics(self, disk_path: str = "/") -> Dict[str, any]:
+    def get_all_metrics(self, disk_path: str = "/") -> Dict[str, Any]:
         """
         Get all system metrics at once.
 

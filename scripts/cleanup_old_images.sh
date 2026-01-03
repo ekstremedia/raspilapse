@@ -13,7 +13,6 @@ set -e
 
 # Configuration
 IMAGE_DIR="/var/www/html/images"
-METADATA_DIR="/home/pi/raspilapse/metadata"
 KEEP_DAYS=7  # Keep images for 7 days (daily videos are created, so originals not needed)
 LOG_TAG="raspilapse-cleanup"
 
