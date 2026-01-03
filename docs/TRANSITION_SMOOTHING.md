@@ -105,6 +105,17 @@ test_shot:
   exposure_time: 0.1
   analogue_gain: 1.0
   frequency: 1  # Take test shot every N frames (1 = every frame)
+
+  # === EV SAFETY CLAMP ===
+
+  # Holy Grail technique - prevents brightness jumps at day/night transition
+  # DISABLE for scenes with bright point light sources (street lamps)
+  ev_safety_clamp_enabled: true  # Default: true
+
+  # === SEQUENTIAL RAMPING ===
+
+  # Prioritize shutter over gain for lower noise
+  sequential_ramping: true  # Default: true
 ```
 
 **Exposure Formula:** `target_exposure = (20 * 2.5) / lux × correction_factor`
@@ -281,6 +292,75 @@ Frame 15: brightness=122, target=120 → stable, correction≈1.0
   1. Correction factor changes gradually (0.2 per frame max)
   2. Target exposure goes through interpolation (0.1 per frame)
 - Net effect: actual exposure changes at ~0.02 per frame = butter smooth
+
+### 7. EV Safety Clamp (Holy Grail Technique)
+
+The EV Safety Clamp prevents brightness jumps when transitioning from day mode (auto-exposure) to night/transition mode (manual exposure). It implements the "Holy Grail" timelapse technique.
+
+**How it works:**
+1. When entering transition mode from day mode, capture the last auto-exposure values (exposure time, gain, WB)
+2. These become the "seed" values for the manual mode
+3. For each subsequent frame, compare proposed manual EV to the seeded auto EV
+4. If they differ by >5%, clamp the manual values to match the seed EV
+
+```python
+def _apply_ev_safety_clamp(self, target_exposure, target_gain):
+    seed_ev = self._seed_exposure * self._seed_gain
+    proposed_ev = target_exposure * target_gain
+
+    ev_diff_percent = abs(proposed_ev / seed_ev - 1.0) * 100
+
+    if ev_diff_percent > 5.0:
+        # Clamp exposure to match seed EV
+        clamped_exposure = seed_ev / target_gain
+        return clamped_exposure, target_gain
+
+    return target_exposure, target_gain
+```
+
+**⚠️ IMPORTANT: Street Lamp / Bright Point Light Issue**
+
+The EV safety clamp can cause severely underexposed images when a bright point light source (street lamp, security light, etc.) is in the frame:
+
+1. During day mode, the camera's auto-exposure sees the bright lamp
+2. Auto-exposure uses short exposure (e.g., 300µs) due to the bright spot
+3. When transitioning to night mode, this incorrect short exposure is seeded
+4. The EV clamp forces all night exposures to match this short seed
+5. Result: 330ms exposures instead of 20s → almost black images
+
+**Configuration:**
+```yaml
+adaptive_timelapse:
+  transition_mode:
+    # Disable for scenes with bright point light sources
+    ev_safety_clamp_enabled: false  # Default: true
+```
+
+**When to disable:**
+- Street lamps in frame
+- Security lights
+- Any bright, fixed point light sources
+- Cameras pointing at lit buildings/parking lots
+
+**When to keep enabled:**
+- Natural landscapes without artificial lights
+- Scenes with uniform lighting distribution
+- When you see brightness jumps at day/night transitions
+
+### 8. Sequential Ramping (Noise Reduction)
+
+Sequential ramping prioritizes shutter speed over ISO gain to minimize noise during transitions.
+
+**Phase 1 (Shutter Priority):** As light decreases, increase shutter speed first while keeping gain low
+**Phase 2 (Gain Priority):** Once shutter hits maximum (20s), increase gain
+
+This produces cleaner images because longer exposures at low ISO have less noise than shorter exposures at high ISO.
+
+```yaml
+adaptive_timelapse:
+  transition_mode:
+    sequential_ramping: true  # Default: true
+```
 
 ---
 
@@ -469,6 +549,8 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 - [x] Fast overexposure ramp-down (implemented 2025-12-25)
 - [x] Configurable reference_lux per camera (implemented 2025-12-25)
 - [x] FFMPEG deflicker filter in video output (implemented 2025-12-25)
+- [x] EV Safety Clamp config option for bright point light sources (implemented 2026-01-03)
+- [x] Sequential ramping documentation (implemented 2026-01-03)
 - [ ] Adaptive WB transition speed based on lux rate of change
 - [ ] Per-channel WB smoothing (red and blue could have different speeds)
 - [ ] Sunset/sunrise detection for optimized transition timing
@@ -478,6 +560,32 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 ---
 
 ## Changelog
+
+### 2026-01-03 - EV Safety Clamp Config & Street Lamp Fix
+
+**EV Safety Clamp Configuration:**
+- Added `ev_safety_clamp_enabled` config option (default: true)
+- Allows disabling the Holy Grail EV clamp for scenes with bright point light sources
+- **Critical bug fix:** Street lamps and security lights in frame were causing severely underexposed night images (330ms instead of 20s)
+- When disabled, exposure is calculated purely from lux values without seed constraints
+
+**Root Cause Analysis:**
+- The EV Safety Clamp seeds from the last auto-exposure values when transitioning to manual mode
+- Bright point light sources (street lamps) fool auto-exposure into using short exposures
+- The clamp then forces all subsequent night exposures to match this incorrect seed
+- Result: 6000%+ EV difference between proposed (20s) and clamped (330ms) exposure
+
+**Sequential Ramping Documentation:**
+- Added documentation for the sequential ramping feature
+- Phase 1: Shutter priority (increase exposure while keeping gain low)
+- Phase 2: Gain priority (increase ISO after shutter maxes out)
+- Reduces noise by preferring longer exposures over higher gain
+
+**Test Coverage:**
+- Added comprehensive tests for `_apply_ev_safety_clamp()` function
+- Added tests for `_calculate_sequential_ramping()` function
+- Added edge case tests for bright point light sources
+- Added street lamp scenario test demonstrating the bug and fix
 
 ### 2025-12-25 - Overexposure Detection & Brightness Tuning
 

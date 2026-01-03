@@ -784,6 +784,11 @@ class AdaptiveTimelapse:
         Returns:
             Tuple of (clamped_exposure, clamped_gain)
         """
+        # Check if EV safety clamp is disabled in config
+        transition = self.config["adaptive_timelapse"].get("transition_mode", {})
+        if not transition.get("ev_safety_clamp_enabled", True):
+            return target_exposure, target_gain
+
         # Only apply clamp on first manual frame (when we have seed values)
         if not self._transition_seeded or self._seed_exposure is None or self._seed_gain is None:
             return target_exposure, target_gain

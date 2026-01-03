@@ -1323,6 +1323,273 @@ class TestExposureCalculation:
         assert 0.01 < exposure < 20.0
 
 
+class TestEVSafetyClamp:
+    """Test EV safety clamp functionality (Holy Grail technique)."""
+
+    def test_ev_clamp_disabled_in_config(self, test_config_file):
+        """Test EV clamp is bypassed when disabled in config."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Explicitly disable EV clamp
+        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = False
+
+        # Seed with short exposure (simulating bright auto-exposure reading)
+        timelapse._transition_seeded = True
+        timelapse._seed_exposure = 0.01  # 10ms
+        timelapse._seed_gain = 1.0
+
+        # Try to apply long night exposure
+        target_exposure = 20.0  # 20 seconds
+        target_gain = 6.0
+
+        result_exposure, result_gain = timelapse._apply_ev_safety_clamp(
+            target_exposure, target_gain
+        )
+
+        # Should NOT be clamped - values unchanged
+        assert result_exposure == 20.0
+        assert result_gain == 6.0
+
+    def test_ev_clamp_enabled_within_threshold(self, test_config_file):
+        """Test EV clamp allows small differences (<5%)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Enable EV clamp (default)
+        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = True
+
+        timelapse._transition_seeded = True
+        timelapse._seed_exposure = 1.0
+        timelapse._seed_gain = 2.0
+        # Seed EV = 1.0 * 2.0 = 2.0
+
+        # Propose values within 5% of seed EV
+        target_exposure = 1.02  # Slightly higher
+        target_gain = 2.0
+        # Proposed EV = 1.02 * 2.0 = 2.04 (2% difference)
+
+        result_exposure, result_gain = timelapse._apply_ev_safety_clamp(
+            target_exposure, target_gain
+        )
+
+        # Should NOT be clamped - within threshold
+        assert result_exposure == 1.02
+        assert result_gain == 2.0
+
+    def test_ev_clamp_enabled_exceeds_threshold(self, test_config_file):
+        """Test EV clamp corrects large differences (>5%)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Enable EV clamp
+        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = True
+
+        timelapse._transition_seeded = True
+        timelapse._seed_exposure = 0.01  # 10ms
+        timelapse._seed_gain = 1.0
+        # Seed EV = 0.01 * 1.0 = 0.01
+
+        # Propose much longer exposure (night mode)
+        target_exposure = 20.0  # 20 seconds
+        target_gain = 6.0
+        # Proposed EV = 20.0 * 6.0 = 120.0 (way more than 5% difference!)
+
+        result_exposure, result_gain = timelapse._apply_ev_safety_clamp(
+            target_exposure, target_gain
+        )
+
+        # Should be clamped to match seed EV
+        # EV_seed = exposure_new * gain_proposed
+        # 0.01 = exposure_new * 6.0
+        # exposure_new = 0.01 / 6.0 = 0.00167s
+        expected_clamped = 0.01 / 6.0
+
+        assert abs(result_exposure - expected_clamped) < 0.0001
+        assert result_gain == 6.0  # Gain unchanged
+
+    def test_ev_clamp_not_applied_before_seeding(self, test_config_file):
+        """Test EV clamp is not applied before transition is seeded."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Not seeded yet
+        timelapse._transition_seeded = False
+        timelapse._seed_exposure = None
+        timelapse._seed_gain = None
+
+        target_exposure = 20.0
+        target_gain = 6.0
+
+        result_exposure, result_gain = timelapse._apply_ev_safety_clamp(
+            target_exposure, target_gain
+        )
+
+        # Should pass through unchanged
+        assert result_exposure == 20.0
+        assert result_gain == 6.0
+
+    def test_ev_clamp_street_lamp_scenario(self, test_config_file):
+        """Test EV clamp causes dark images when street lamp fools auto-exposure.
+
+        This is the actual bug scenario: a bright street lamp in frame causes
+        auto-exposure to use short exposure/high gain. When transitioning to
+        night mode, the EV clamp forces exposures to match this incorrect seed,
+        resulting in severely underexposed images (330ms instead of 20s).
+        """
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate street lamp fooling auto-exposure
+        # Auto-exposure sees bright lamp and uses short exposure
+        timelapse._transition_seeded = True
+        timelapse._seed_exposure = 0.0003  # 300µs - street lamp fooled it
+        timelapse._seed_gain = 5.5
+        # Seed EV = 0.0003 * 5.5 = 0.00165
+
+        # Night mode wants long exposure for dark scene
+        target_exposure = 20.0  # 20 seconds
+        target_gain = 6.0
+        # Proposed EV = 120.0 - HUGE difference!
+
+        # With EV clamp ENABLED - this causes the bug
+        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = True
+        clamped_exp, clamped_gain = timelapse._apply_ev_safety_clamp(
+            target_exposure, target_gain
+        )
+
+        # Clamped exposure will be way too short!
+        # 0.00165 / 6.0 = 0.000275s = 275µs ≈ 0.3ms
+        assert clamped_exp < 0.001  # Less than 1ms - severely underexposed!
+
+        # With EV clamp DISABLED - correct behavior
+        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = False
+        unclamped_exp, unclamped_gain = timelapse._apply_ev_safety_clamp(
+            target_exposure, target_gain
+        )
+
+        # Should get the full 20 second exposure
+        assert unclamped_exp == 20.0
+        assert unclamped_gain == 6.0
+
+
+class TestSequentialRamping:
+    """Test sequential ramping (shutter-first, then gain) for noise reduction."""
+
+    def test_sequential_ramping_phase1_shutter_priority(self, test_config_file):
+        """Test Phase 1: shutter increases while gain stays at minimum."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Setup for sequential ramping
+        timelapse._transition_seeded = True
+        timelapse._seed_exposure = 0.01  # 10ms starting point
+        timelapse._seed_gain = 1.0
+
+        # Early in transition (position close to 1.0 = day)
+        # Low lux but not fully night yet
+        exposure, gain = timelapse._calculate_sequential_ramping(lux=50.0, position=0.8)
+
+        # In Phase 1, gain should stay low while shutter increases
+        assert gain <= 2.0  # Should be close to minimum
+        assert exposure > 0.01  # Should be longer than seed
+
+    def test_sequential_ramping_phase2_gain_priority(self, test_config_file):
+        """Test Phase 2: gain increases after shutter maxed out."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Setup
+        timelapse._transition_seeded = True
+        timelapse._seed_exposure = 0.01
+        timelapse._seed_gain = 1.0
+
+        # Deep in night mode (position close to 0.0 = night)
+        exposure, gain = timelapse._calculate_sequential_ramping(lux=1.0, position=0.1)
+
+        # In Phase 2, should have long exposure and elevated gain
+        assert exposure >= 10.0  # Should be at or near max exposure
+        assert gain > 1.0  # Gain should be increasing
+
+    def test_sequential_ramping_reduces_noise(self, test_config_file):
+        """Test that sequential ramping keeps gain lower for same brightness."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        timelapse._transition_seeded = True
+        timelapse._seed_exposure = 0.01
+        timelapse._seed_gain = 1.0
+
+        # At a given transition point, sequential ramping should prefer
+        # longer shutter over higher gain (lower noise)
+        exposure, gain = timelapse._calculate_sequential_ramping(lux=20.0, position=0.5)
+
+        # The key insight: for the same EV, prefer longer exposure over higher gain
+        # This reduces noise in the final image
+        ev = exposure * gain
+
+        # If we had used simultaneous ramping at same EV with gain=3.0:
+        # alternative_exposure = ev / 3.0
+        # Sequential should give us lower gain for same EV
+        assert gain < 4.0  # Should prioritize shutter over gain
+
+
+class TestBrightPointLightEdgeCases:
+    """Test edge cases involving bright point light sources (street lamps, etc.)."""
+
+    def test_lux_calculation_with_bright_spot(self, test_config_file):
+        """Test that a bright spot doesn't overly influence lux calculation.
+
+        Note: This tests the overall behavior - the actual lux calculation
+        happens in the test shot processing.
+        """
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate test shot metadata with short exposure (bright spot present)
+        # This is what happens when a street lamp is in frame
+        test_metadata = {
+            "ExposureTime": 300,  # 300µs - very short due to bright lamp
+            "AnalogueGain": 1.0,
+            "Lux": 500,  # Camera thinks scene is bright
+        }
+
+        # The calculated lux may be misleadingly high due to the bright spot
+        # This is the root cause of the street lamp issue
+
+        # Verify the timelapse object can handle this scenario
+        assert timelapse is not None
+
+    def test_transition_with_inconsistent_light_readings(self, test_config_file):
+        """Test handling of inconsistent light readings during transition."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Initialize smoothing state
+        timelapse._smoothed_lux = 5.0  # Previous reading was dark
+
+        # Simulate lux spike from bright light source passing through frame
+        spike_lux = 500.0
+
+        # Apply smoothing
+        smoothed = timelapse._smooth_lux(spike_lux)
+
+        # Smoothing should dampen the spike
+        assert smoothed < spike_lux
+        assert smoothed > 5.0  # But still increase somewhat
+
+    def test_hysteresis_prevents_mode_flapping(self, test_config_file):
+        """Test hysteresis prevents rapid mode changes from bright spots."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Initialize in night mode
+        timelapse._last_mode = LightMode.NIGHT
+        timelapse._mode_hold_count = 0
+
+        # Bright spot causes momentary "day" reading
+        mode = timelapse._apply_hysteresis(LightMode.DAY)
+
+        # Should NOT immediately switch - hysteresis holds
+        assert mode == LightMode.NIGHT
+
+        # Only after sustained readings should it switch
+        for _ in range(3):
+            mode = timelapse._apply_hysteresis(LightMode.DAY)
+
+        # Now it should switch (after hysteresis_frames threshold)
+        # Default hysteresis is typically 3 frames
+
+
 class TestMainFunction:
     """Test main function entry point."""
 

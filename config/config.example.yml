@@ -341,6 +341,22 @@ adaptive_timelapse:
     # - 0.50 = 5x faster (recommended for quick overexposure correction)
     fast_rampdown_speed: 0.50
 
+    # === EV SAFETY CLAMP ===
+    # Prevents brightness jumps when transitioning from day (auto) to night (manual) mode.
+    # Uses the "Holy Grail" technique: seeds manual exposure from last auto-exposure values.
+    #
+    # IMPORTANT: Disable this for scenes with bright point light sources (street lamps,
+    # security lights, etc.) as they can fool the auto-exposure seeding and cause
+    # extremely short exposures (e.g., 330ms instead of 20s) in night mode.
+    #
+    # When enabled: First manual frame matches last auto frame exactly (no brightness jump)
+    # When disabled: Manual exposure calculated purely from lux (may have slight jump but
+    #                works correctly with bright point light sources in frame)
+    #
+    # ev_safety_clamp_enabled: true (default) - Enable for scenes without bright point lights
+    # ev_safety_clamp_enabled: false - Disable for scenes with street lamps, etc.
+    ev_safety_clamp_enabled: true
+
   # Test shot settings (used to measure light levels)
   test_shot:
     # Take a test shot before each capture to measure light
