@@ -5,6 +5,7 @@ Tests the daily timelapse runner including:
 - Configuration loading
 - Video file finding
 - Keogram file finding
+- Slitscan file finding
 - Upload to server functionality
 - Main CLI function
 """
@@ -27,6 +28,7 @@ from daily_timelapse import (
     load_config,
     find_video_file,
     find_keogram_file,
+    find_slitscan_file,
     upload_to_server,
     main,
 )
@@ -268,15 +270,17 @@ class TestUploadToServer:
         """Create sample files for upload testing."""
         video_path = temp_dir / "test_video.mp4"
         keogram_path = temp_dir / "test_keogram.jpg"
+        slitscan_path = temp_dir / "test_slitscan.jpg"
 
         video_path.write_bytes(b"fake video content")
         keogram_path.write_bytes(b"fake keogram content")
+        slitscan_path.write_bytes(b"fake slitscan content")
 
-        return video_path, keogram_path
+        return video_path, keogram_path, slitscan_path
 
     def test_upload_success(self, sample_upload_files, mock_logger):
         """Test successful upload."""
-        video_path, keogram_path = sample_upload_files
+        video_path, keogram_path, slitscan_path = sample_upload_files
         upload_config = {
             "url": "https://example.com/upload",
             "api_key": "test_key",
@@ -291,6 +295,7 @@ class TestUploadToServer:
             result = upload_to_server(
                 video_path,
                 keogram_path,
+                slitscan_path,
                 "2025-12-24",
                 upload_config,
                 "test_camera",
@@ -319,6 +324,7 @@ class TestUploadToServer:
             result = upload_to_server(
                 video_path,
                 None,  # No keogram
+                None,  # No slitscan
                 "2025-12-24",
                 upload_config,
                 "test_camera",
@@ -338,6 +344,7 @@ class TestUploadToServer:
         result = upload_to_server(
             video_path,
             None,
+            None,
             "2025-12-24",
             upload_config,
             "test_camera",
@@ -348,7 +355,7 @@ class TestUploadToServer:
 
     def test_upload_failure_status_code(self, sample_upload_files, mock_logger):
         """Test upload failure with bad status code."""
-        video_path, keogram_path = sample_upload_files
+        video_path, keogram_path, slitscan_path = sample_upload_files
         upload_config = {
             "url": "https://example.com/upload",
             "api_key": "test_key",
@@ -363,6 +370,7 @@ class TestUploadToServer:
             result = upload_to_server(
                 video_path,
                 keogram_path,
+                slitscan_path,
                 "2025-12-24",
                 upload_config,
                 "test_camera",
@@ -373,7 +381,7 @@ class TestUploadToServer:
 
     def test_upload_request_exception(self, sample_upload_files, mock_logger):
         """Test upload handles request exceptions."""
-        video_path, keogram_path = sample_upload_files
+        video_path, keogram_path, slitscan_path = sample_upload_files
         upload_config = {
             "url": "https://example.com/upload",
             "api_key": "test_key",
@@ -387,6 +395,7 @@ class TestUploadToServer:
             result = upload_to_server(
                 video_path,
                 keogram_path,
+                slitscan_path,
                 "2025-12-24",
                 upload_config,
                 "test_camera",
@@ -397,7 +406,7 @@ class TestUploadToServer:
 
     def test_upload_general_exception(self, sample_upload_files, mock_logger):
         """Test upload handles general exceptions."""
-        video_path, keogram_path = sample_upload_files
+        video_path, keogram_path, slitscan_path = sample_upload_files
         upload_config = {
             "url": "https://example.com/upload",
             "api_key": "test_key",
@@ -409,6 +418,7 @@ class TestUploadToServer:
             result = upload_to_server(
                 video_path,
                 keogram_path,
+                slitscan_path,
                 "2025-12-24",
                 upload_config,
                 "test_camera",
@@ -419,7 +429,7 @@ class TestUploadToServer:
 
     def test_upload_authorization_header(self, sample_upload_files, mock_logger):
         """Test upload includes correct authorization header."""
-        video_path, keogram_path = sample_upload_files
+        video_path, keogram_path, slitscan_path = sample_upload_files
         upload_config = {
             "url": "https://example.com/upload",
             "api_key": "secret_api_key",
@@ -433,6 +443,7 @@ class TestUploadToServer:
             upload_to_server(
                 video_path,
                 keogram_path,
+                slitscan_path,
                 "2025-12-24",
                 upload_config,
                 "test_camera",
@@ -446,7 +457,7 @@ class TestUploadToServer:
 
     def test_upload_data_payload(self, sample_upload_files, mock_logger):
         """Test upload includes correct data payload."""
-        video_path, keogram_path = sample_upload_files
+        video_path, keogram_path, slitscan_path = sample_upload_files
         upload_config = {
             "url": "https://example.com/upload",
             "api_key": "test_key",
@@ -460,6 +471,7 @@ class TestUploadToServer:
             upload_to_server(
                 video_path,
                 keogram_path,
+                slitscan_path,
                 "2025-12-24",
                 upload_config,
                 "my_camera",
@@ -470,6 +482,37 @@ class TestUploadToServer:
             assert "data" in call_kwargs
             assert call_kwargs["data"]["date"] == "2025-12-24"
             assert call_kwargs["data"]["camera_id"] == "my_camera"
+
+    def test_upload_with_slitscan(self, sample_upload_files, mock_logger):
+        """Test upload includes slitscan file."""
+        video_path, keogram_path, slitscan_path = sample_upload_files
+        upload_config = {
+            "url": "https://example.com/upload",
+            "api_key": "test_key",
+        }
+
+        with patch("daily_timelapse.requests.post") as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_post.return_value = mock_response
+
+            result = upload_to_server(
+                video_path,
+                keogram_path,
+                slitscan_path,
+                "2025-12-24",
+                upload_config,
+                "test_camera",
+                mock_logger,
+            )
+
+            call_kwargs = mock_post.call_args[1]
+            assert "files" in call_kwargs
+            # Check that slitscan is in the files
+            files_dict = call_kwargs["files"]
+            assert "slitscan" in files_dict
+
+        assert result is True
 
 
 class TestMainCLI:
