@@ -77,6 +77,7 @@ class AdaptiveTimelapse:
 
         # Overexposure detection for fast ramp-down
         self._overexposure_detected: bool = False  # True when image is overexposed
+        self._overexposure_severity: str = None  # "warning" or "critical"
 
         # Holy Grail transition state - seeded from actual camera metadata
         self._transition_seeded: bool = False  # True once we've seeded from metadata
@@ -103,6 +104,12 @@ class AdaptiveTimelapse:
 
         # Fast ramp-down speed for overexposure correction (default 0.30 = 3x normal speed)
         self._fast_rampdown_speed = transition_config.get("fast_rampdown_speed", 0.30)
+        # Critical ramp-down speed for severe overexposure (default 0.70 = very aggressive)
+        self._critical_rampdown_speed = transition_config.get("critical_rampdown_speed", 0.70)
+
+        # Rapid lux change detection
+        self._previous_raw_lux: float = None  # For detecting rapid changes
+        self._lux_change_threshold = transition_config.get("lux_change_threshold", 3.0)  # 3x change = rapid
 
         # Polar awareness - sun position for high latitude locations (68°N)
         self._location = None
@@ -469,17 +476,133 @@ class AdaptiveTimelapse:
 
         return self._brightness_correction_factor
 
+    def _get_rampdown_speed(self) -> float:
+        """
+        Get the appropriate ramp-down speed based on overexposure severity.
+
+        Returns:
+            Speed value for exposure/gain interpolation, or None for normal speed
+        """
+        if not self._overexposure_detected:
+            return None
+
+        if self._overexposure_severity == "critical":
+            return self._critical_rampdown_speed
+        else:
+            return self._fast_rampdown_speed
+
+    def _apply_proactive_exposure_correction(self, test_image_path: str, raw_lux: float) -> None:
+        """
+        Proactively adjust exposure correction based on test shot brightness.
+
+        This is called BEFORE calculating exposure for the actual capture.
+        If the test shot (with fixed short exposure) is bright, it means the
+        scene is getting brighter and we should proactively reduce exposure
+        to prevent overexposure in the actual long-exposure capture.
+
+        Args:
+            test_image_path: Path to the test shot image
+            raw_lux: Raw calculated lux from test shot
+        """
+        try:
+            brightness_metrics = self._analyze_image_brightness(test_image_path)
+            if not brightness_metrics:
+                return
+
+            test_brightness = brightness_metrics.get("mean_brightness", 128)
+
+            # Test shot uses fixed short exposure (0.1s, gain 1.0)
+            # If it's bright, the scene has lots of light
+            # We need to proactively reduce exposure for the actual capture
+
+            # Thresholds for proactive correction
+            bright_threshold = 140  # Test shot brightness indicating bright scene
+            very_bright_threshold = 180  # Very bright scene
+
+            if test_brightness > very_bright_threshold:
+                # Scene is very bright - aggressively reduce correction factor
+                # This helps when transitioning from night to day
+                reduction = 0.7  # 30% reduction
+                self._brightness_correction_factor *= reduction
+                self._brightness_correction_factor = max(0.25, self._brightness_correction_factor)
+                logger.info(
+                    f"[Proactive] Very bright test shot ({test_brightness:.1f}) - "
+                    f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
+                )
+            elif test_brightness > bright_threshold:
+                # Scene is moderately bright - gentle reduction
+                reduction = 0.85  # 15% reduction
+                self._brightness_correction_factor *= reduction
+                self._brightness_correction_factor = max(0.25, self._brightness_correction_factor)
+                logger.debug(
+                    f"[Proactive] Bright test shot ({test_brightness:.1f}) - "
+                    f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
+                )
+
+            # Also detect rapid brightening (lux increasing quickly)
+            if self._previous_raw_lux is not None and raw_lux > 0:
+                lux_ratio = raw_lux / max(0.01, self._previous_raw_lux)
+                if lux_ratio > 2.0:  # Lux more than doubled
+                    # Scene getting much brighter - reduce exposure proactively
+                    reduction = min(0.8, 1.0 / (lux_ratio * 0.5))
+                    self._brightness_correction_factor *= reduction
+                    self._brightness_correction_factor = max(0.25, self._brightness_correction_factor)
+                    logger.info(
+                        f"[Proactive] Rapid brightening ({lux_ratio:.1f}x) - "
+                        f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
+                    )
+
+        except Exception as e:
+            logger.debug(f"Could not apply proactive exposure correction: {e}")
+
+    def _detect_rapid_lux_change(self, raw_lux: float) -> bool:
+        """
+        Detect if lux is changing rapidly (e.g., at dawn/dusk).
+
+        Rapid changes trigger faster transition speeds to keep up.
+
+        Args:
+            raw_lux: Current raw lux value (before smoothing)
+
+        Returns:
+            True if rapid change detected
+        """
+        if self._previous_raw_lux is None:
+            self._previous_raw_lux = raw_lux
+            return False
+
+        # Calculate ratio of change
+        if self._previous_raw_lux > 0 and raw_lux > 0:
+            ratio = max(raw_lux / self._previous_raw_lux, self._previous_raw_lux / raw_lux)
+            is_rapid = ratio > self._lux_change_threshold
+
+            if is_rapid:
+                logger.info(
+                    f"[RapidLux] Rapid light change detected: "
+                    f"{self._previous_raw_lux:.1f} → {raw_lux:.1f} (ratio: {ratio:.1f}x)"
+                )
+
+            self._previous_raw_lux = raw_lux
+            return is_rapid
+
+        self._previous_raw_lux = raw_lux
+        return False
+
     def _check_overexposure(self, brightness_metrics: Dict) -> bool:
         """
         Check if the image is overexposed and update fast ramp-down state.
 
+        Uses two-tier detection:
+        - WARNING level (brightness > 150): Moderate correction
+        - CRITICAL level (brightness > 170): Aggressive correction
+
         Triggers fast ramp-down when:
-        - Mean brightness > 180 (significantly overexposed)
-        - OR overexposed_percent > 10% (many clipped pixels)
+        - Mean brightness > 150 (warning - early detection)
+        - OR overexposed_percent > 5% (many clipped pixels)
 
         Clears fast ramp-down when:
-        - Mean brightness < 150 (back to normal range)
-        - AND overexposed_percent < 5%
+        - Mean brightness < 130 (back to safe range)
+        - AND overexposed_percent < 3%
 
         Args:
             brightness_metrics: Dictionary with brightness analysis results
@@ -493,25 +616,37 @@ class AdaptiveTimelapse:
         mean_brightness = brightness_metrics.get("mean_brightness", 0)
         overexposed_pct = brightness_metrics.get("overexposed_percent", 0)
 
-        # Thresholds for triggering fast ramp-down
-        brightness_high = 180  # Trigger fast ramp-down above this
-        brightness_safe = 150  # Clear fast ramp-down below this
-        overexposed_high = 10  # Trigger if >10% pixels clipped
-        overexposed_safe = 5  # Clear if <5% pixels clipped
+        # Thresholds - lowered for earlier detection
+        brightness_warning = 150  # Early warning threshold
+        brightness_critical = 170  # Critical overexposure
+        brightness_safe = 130  # Clear fast ramp-down below this
+        overexposed_warning = 5  # Trigger if >5% pixels clipped
+        overexposed_safe = 3  # Clear if <3% pixels clipped
 
         was_overexposed = self._overexposure_detected
 
-        if mean_brightness > brightness_high or overexposed_pct > overexposed_high:
-            # Overexposure detected - activate fast ramp-down
+        if mean_brightness > brightness_critical or overexposed_pct > overexposed_warning * 2:
+            # Critical overexposure - activate fast ramp-down
             self._overexposure_detected = True
+            self._overexposure_severity = "critical"
             if not was_overexposed:
                 logger.warning(
-                    f"[FastRamp] OVEREXPOSURE DETECTED: brightness={mean_brightness:.1f}, "
+                    f"[FastRamp] CRITICAL OVEREXPOSURE: brightness={mean_brightness:.1f}, "
+                    f"clipped={overexposed_pct:.1f}% - activating aggressive ramp-down"
+                )
+        elif mean_brightness > brightness_warning or overexposed_pct > overexposed_warning:
+            # Warning level overexposure - activate moderate fast ramp-down
+            self._overexposure_detected = True
+            self._overexposure_severity = "warning"
+            if not was_overexposed:
+                logger.warning(
+                    f"[FastRamp] OVEREXPOSURE WARNING: brightness={mean_brightness:.1f}, "
                     f"clipped={overexposed_pct:.1f}% - activating fast ramp-down"
                 )
         elif mean_brightness < brightness_safe and overexposed_pct < overexposed_safe:
             # Back to safe range - deactivate fast ramp-down
             self._overexposure_detected = False
+            self._overexposure_severity = None
             if was_overexposed:
                 logger.info(
                     f"[FastRamp] Overexposure cleared: brightness={mean_brightness:.1f}, "
@@ -1092,8 +1227,8 @@ class AdaptiveTimelapse:
             target_exposure = night["max_exposure_time"]
 
             # Apply smooth interpolation even in night mode for seamless transitions
-            # Use fast ramp-down if overexposure was detected in previous frame
-            exposure_speed = self._fast_rampdown_speed if self._overexposure_detected else None
+            # Use severity-aware ramp-down if overexposure was detected
+            exposure_speed = self._get_rampdown_speed()
             smooth_gain = self._interpolate_gain(target_gain)
             smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
@@ -1130,8 +1265,8 @@ class AdaptiveTimelapse:
                 target_exposure = self._calculate_target_exposure_from_lux(lux)
 
                 # Apply smooth interpolation to prevent jumps
-                # Use fast ramp-down if overexposure was detected in previous frame
-                exposure_speed = self._fast_rampdown_speed if self._overexposure_detected else None
+                # Use severity-aware ramp-down if overexposure was detected
+                exposure_speed = self._get_rampdown_speed()
                 smooth_gain = self._interpolate_gain(target_gain)
                 smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
@@ -1218,8 +1353,8 @@ class AdaptiveTimelapse:
                 )
 
                 # Apply smooth interpolation to prevent jumps
-                # Use fast ramp-down if overexposure was detected in previous frame
-                exposure_speed = self._fast_rampdown_speed if self._overexposure_detected else None
+                # Use severity-aware ramp-down if overexposure was detected
+                exposure_speed = self._get_rampdown_speed()
                 smooth_gain = self._interpolate_gain(target_gain)
                 smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
@@ -1614,6 +1749,13 @@ class AdaptiveTimelapse:
                         # Calculate lux from test shot image brightness
                         # This is more reliable than camera's metadata lux estimate
                         raw_lux = self.calculate_lux(test_image_path, test_metadata)
+
+                        # Apply proactive exposure correction based on test shot brightness
+                        # This helps prevent overexposure during rapid light changes
+                        self._apply_proactive_exposure_correction(test_image_path, raw_lux)
+
+                        # Detect rapid lux changes for faster transition speeds
+                        self._detect_rapid_lux_change(raw_lux)
 
                         # Apply exponential moving average smoothing
                         lux = self._smooth_lux(raw_lux)

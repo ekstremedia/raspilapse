@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-01-08
+
+### Added
+- **Two-tier overexposure detection**: Early warning and critical levels for faster response
+  - Warning level: brightness > 150 or > 5% clipped pixels
+  - Critical level: brightness > 170 or > 10% clipped pixels
+  - Configurable via `critical_rampdown_speed` (default: 0.70)
+
+- **Proactive exposure correction**: Analyzes test shot before capture
+  - If test shot is very bright (>180): 30% exposure reduction
+  - If test shot is bright (>140): 15% exposure reduction
+  - If lux doubled since last frame: proportional reduction
+  - Prevents overexposure before it happens
+
+- **Rapid lux change detection**: Detects when light changes quickly
+  - New `_detect_rapid_lux_change()` method
+  - Configurable threshold via `lux_change_threshold` (default: 3.0x)
+  - Logs warning when rapid change detected
+
+- **Severity-aware ramp-down**: Different speeds for warning vs critical
+  - New `_get_rampdown_speed()` method
+  - Warning: uses `fast_rampdown_speed` (0.50)
+  - Critical: uses `critical_rampdown_speed` (0.70)
+
+### Changed
+- **Overexposure thresholds lowered** for earlier detection:
+  - Trigger: 180 → 150 (warning), 170 (critical)
+  - Clear: 150 → 130
+  - Clipped pixels: 10% → 5% (warning), 10% (critical)
+  - Clear clipped: 5% → 3%
+
+### Fixed
+- **Re-enabled EV Safety Clamp** on Kringelen camera
+  - Was accidentally disabled (`ev_safety_clamp_enabled: false`)
+  - Now properly enabled to prevent brightness jumps at auto→manual transition
+  - This was the main cause of severe bright bands in transitions
+
+### Documentation
+- Added `workLogs/2026-01-08.md` with detailed session notes
+- Updated `docs/TRANSITION_TUNING_LOG.md` with new adjustment details
+
 ## [1.0.5] - 2025-12-25
 
 ### Added

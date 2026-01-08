@@ -347,7 +347,79 @@ adaptive_timelapse:
 - Scenes with uniform lighting distribution
 - When you see brightness jumps at day/night transitions
 
-### 8. Sequential Ramping (Noise Reduction)
+### 8. Two-Tier Overexposure Detection
+
+Detects overexposure at two severity levels for appropriate response speed.
+
+```python
+def _check_overexposure(self, brightness_metrics: Dict) -> bool:
+    mean_brightness = brightness_metrics.get("mean_brightness", 0)
+    overexposed_pct = brightness_metrics.get("overexposed_percent", 0)
+
+    if mean_brightness > 170 or overexposed_pct > 10:
+        self._overexposure_severity = "critical"  # Use aggressive correction
+    elif mean_brightness > 150 or overexposed_pct > 5:
+        self._overexposure_severity = "warning"   # Use fast correction
+    elif mean_brightness < 130 and overexposed_pct < 3:
+        self._overexposure_severity = None        # Clear, use normal speed
+
+    return self._overexposure_detected
+```
+
+**Threshold Summary:**
+
+| Level | Brightness | Clipped | Ramp Speed |
+|-------|------------|---------|------------|
+| Critical | > 170 | > 10% | 0.70 |
+| Warning | > 150 | > 5% | 0.50 |
+| Normal | < 130 | < 3% | 0.10 |
+
+### 9. Proactive Exposure Correction
+
+Analyzes test shot brightness BEFORE actual capture to prevent overexposure proactively.
+
+```python
+def _apply_proactive_exposure_correction(self, test_image_path, raw_lux):
+    brightness_metrics = self._analyze_image_brightness(test_image_path)
+    test_brightness = brightness_metrics.get("mean_brightness", 128)
+
+    if test_brightness > 180:
+        # Very bright test shot - aggressive 30% reduction
+        self._brightness_correction_factor *= 0.7
+    elif test_brightness > 140:
+        # Bright test shot - gentle 15% reduction
+        self._brightness_correction_factor *= 0.85
+
+    # Also check for rapid brightening
+    if raw_lux / self._previous_raw_lux > 2.0:
+        # Lux more than doubled - proportional reduction
+        self._brightness_correction_factor *= 0.8
+```
+
+**Why this helps:**
+- Acts BEFORE the capture, not after
+- Uses the short-exposure test shot as a preview
+- If test shot is bright, the long-exposure actual capture will be very bright
+- Proactive reduction prevents overexposure from happening
+
+### 10. Rapid Lux Change Detection
+
+Detects when ambient light is changing quickly (dawn/dusk).
+
+```python
+def _detect_rapid_lux_change(self, raw_lux: float) -> bool:
+    ratio = max(raw_lux / self._previous_raw_lux,
+                self._previous_raw_lux / raw_lux)
+
+    if ratio > 3.0:  # Configurable threshold
+        logger.info(f"[RapidLux] Rapid change: {ratio:.1f}x")
+        return True
+    return False
+```
+
+This enables logging and potentially faster response during transition periods.
+
+### 11. Sequential Ramping (Noise Reduction)
 
 Sequential ramping prioritizes shutter speed over ISO gain to minimize noise during transitions.
 
@@ -551,6 +623,9 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 - [x] FFMPEG deflicker filter in video output (implemented 2025-12-25)
 - [x] EV Safety Clamp config option for bright point light sources (implemented 2026-01-03)
 - [x] Sequential ramping documentation (implemented 2026-01-03)
+- [x] Two-tier overexposure detection with severity levels (implemented 2026-01-08)
+- [x] Proactive exposure correction based on test shot brightness (implemented 2026-01-08)
+- [x] Rapid lux change detection (implemented 2026-01-08)
 - [ ] Adaptive WB transition speed based on lux rate of change
 - [ ] Per-channel WB smoothing (red and blue could have different speeds)
 - [ ] Sunset/sunrise detection for optimized transition timing
@@ -560,6 +635,38 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 ---
 
 ## Changelog
+
+### 2026-01-08 - Multi-Layer Overexposure Prevention
+
+**Two-Tier Overexposure Detection:**
+- Changed from single threshold to warning + critical levels
+- Warning: brightness > 150 or > 5% clipped (uses `fast_rampdown_speed`)
+- Critical: brightness > 170 or > 10% clipped (uses `critical_rampdown_speed`)
+- Clear: brightness < 130 and < 3% clipped (lowered from 150/5%)
+- New `_overexposure_severity` state tracking
+
+**Proactive Exposure Correction:**
+- New `_apply_proactive_exposure_correction()` analyzes test shot BEFORE actual capture
+- If test shot brightness > 180: applies 30% exposure reduction
+- If test shot brightness > 140: applies 15% exposure reduction
+- If lux doubled since last frame: proportional reduction
+- Prevents overexposure before it happens, rather than reacting after
+
+**Rapid Lux Change Detection:**
+- New `_detect_rapid_lux_change()` method
+- Detects when lux changes by more than 3x between frames
+- Configurable via `lux_change_threshold` (default: 3.0)
+- Logs `[RapidLux]` warning when detected
+
+**Severity-Aware Ramp-Down:**
+- New `_get_rampdown_speed()` returns speed based on severity
+- Warning: uses `fast_rampdown_speed` (0.50)
+- Critical: uses `critical_rampdown_speed` (0.70)
+- New config option `critical_rampdown_speed` (default: 0.70)
+
+**Config Fix:**
+- Re-enabled EV Safety Clamp on Kringelen camera
+- Was accidentally set to `false`, causing severe bright bands
 
 ### 2026-01-03 - EV Safety Clamp Config & Street Lamp Fix
 

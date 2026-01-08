@@ -4,6 +4,86 @@ This document tracks adjustments made to day/night transition parameters and the
 
 ---
 
+## 2026-01-08 - Adjustment #3: Multi-Layer Overexposure Prevention
+
+### Problem
+Slitscan images showed very bright cyan/turquoise vertical bands during dawn/dusk transitions. Comparing two cameras:
+- **Kringelen**: Severe bright bands (EV safety clamp was disabled)
+- **Spjutvika**: Less severe bands (EV safety clamp enabled by default)
+
+### Root Cause
+1. **EV Safety Clamp disabled** on Kringelen - no protection at auto→manual handover
+2. **Overexposure detection too late** - threshold at 180 was catching it after damage done
+3. **Single-speed ramp-down** - same speed for mild and severe overexposure
+4. **Reactive only** - system only responded AFTER overexposure, not before
+
+### Solution: Multi-Layer Prevention
+
+#### Layer 1: Re-enable EV Safety Clamp
+```yaml
+ev_safety_clamp_enabled: true  # Was accidentally false
+```
+
+#### Layer 2: Two-Tier Overexposure Detection
+Instead of single threshold, now uses warning and critical levels:
+
+| Level | Brightness | Clipped | Speed Used |
+|-------|------------|---------|------------|
+| Warning | > 150 | > 5% | 0.50 (fast) |
+| Critical | > 170 | > 10% | 0.70 (aggressive) |
+| Clear | < 130 | < 3% | Normal |
+
+#### Layer 3: Proactive Exposure Correction
+Analyzes test shot BEFORE actual capture:
+
+| Test Shot Brightness | Action |
+|---------------------|--------|
+| > 180 (very bright) | 30% exposure reduction |
+| > 140 (bright) | 15% exposure reduction |
+| Lux doubled | Proportional reduction |
+
+#### Layer 4: Rapid Lux Change Detection
+Logs warning when lux changes by > 3x between frames, enabling faster response.
+
+### New Configuration Options
+
+```yaml
+transition_mode:
+  # Two-tier ramp-down speeds
+  fast_rampdown_speed: 0.50      # Warning level
+  critical_rampdown_speed: 0.70  # Critical level (NEW)
+
+  # Rapid change detection
+  lux_change_threshold: 3.0      # Ratio for detecting rapid changes (NEW)
+
+  # EV Safety Clamp (ensure this is true!)
+  ev_safety_clamp_enabled: true
+```
+
+### Files Modified
+- `src/auto_timelapse.py`:
+  - Added `_overexposure_severity` state variable
+  - Added `_get_rampdown_speed()` method
+  - Added `_detect_rapid_lux_change()` method
+  - Added `_apply_proactive_exposure_correction()` method
+  - Modified `_check_overexposure()` for two-tier detection
+- `config/config.yml`: New config options, fixed EV clamp
+- `tests/test_auto_timelapse.py`: Updated thresholds in tests
+
+### Expected Results
+- **Immediate**: EV clamp prevents jump at auto→manual handover
+- **Early detection**: Catches overexposure at 150 instead of 180
+- **Faster correction**: Critical uses 0.70 vs 0.50 speed
+- **Prevention**: Proactive reduction BEFORE capture if test shot bright
+
+### Verification
+Monitor next few dawn/dusk transitions. New slitscan images should show:
+- Narrower bright bands (or none)
+- Smoother transitions
+- Less saturated/blown highlights
+
+---
+
 ## 2025-12-24 - Adjustment #2: Brightness Feedback System
 
 ### Goal

@@ -1046,16 +1046,18 @@ class TestOverexposureDetection:
         """Test overexposure cleared when values are safe."""
         timelapse = AdaptiveTimelapse(test_config_file)
         timelapse._overexposure_detected = True  # Previously triggered
+        timelapse._overexposure_severity = "warning"  # Set severity
 
         brightness_metrics = {
-            "mean_brightness": 140,  # Below 150 threshold
-            "overexposed_percent": 3,  # Below 5% threshold
+            "mean_brightness": 120,  # Below 130 safe threshold
+            "overexposed_percent": 2,  # Below 3% safe threshold
         }
 
         result = timelapse._check_overexposure(brightness_metrics)
 
         assert result is False
         assert timelapse._overexposure_detected is False
+        assert timelapse._overexposure_severity is None
 
     def test_check_overexposure_empty_metrics(self, test_config_file):
         """Test overexposure handling with empty metrics."""
