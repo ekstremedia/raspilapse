@@ -109,7 +109,9 @@ class AdaptiveTimelapse:
 
         # Rapid lux change detection
         self._previous_raw_lux: float = None  # For detecting rapid changes
-        self._lux_change_threshold = transition_config.get("lux_change_threshold", 3.0)  # 3x change = rapid
+        self._lux_change_threshold = transition_config.get(
+            "lux_change_threshold", 3.0
+        )  # 3x change = rapid
 
         # Polar awareness - sun position for high latitude locations (68°N)
         self._location = None
@@ -546,7 +548,9 @@ class AdaptiveTimelapse:
                     # Scene getting much brighter - reduce exposure proactively
                     reduction = min(0.8, 1.0 / (lux_ratio * 0.5))
                     self._brightness_correction_factor *= reduction
-                    self._brightness_correction_factor = max(0.25, self._brightness_correction_factor)
+                    self._brightness_correction_factor = max(
+                        0.25, self._brightness_correction_factor
+                    )
                     logger.info(
                         f"[Proactive] Rapid brightening ({lux_ratio:.1f}x) - "
                         f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
