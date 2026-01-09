@@ -80,7 +80,9 @@ class AdaptiveTimelapse:
         self._overexposure_severity: str = None  # "warning" or "critical"
 
         # Underexposure detection for fast recovery (symmetric to overexposure)
-        self._underexposure_detected: bool = False  # True when image is underexposed at min exposure
+        self._underexposure_detected: bool = (
+            False  # True when image is underexposed at min exposure
+        )
         self._underexposure_severity: str = None  # "warning" or "critical"
 
         # Holy Grail transition state - seeded from actual camera metadata
@@ -716,8 +718,7 @@ class AdaptiveTimelapse:
         # Only flag underexposure if we're near minimum exposure
         # (otherwise normal feedback will handle it)
         at_min_exposure = (
-            self._last_exposure_time is not None
-            and self._last_exposure_time <= min_exposure * 1.5
+            self._last_exposure_time is not None and self._last_exposure_time <= min_exposure * 1.5
         )
 
         # Thresholds for underexposure detection
