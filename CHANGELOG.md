@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-01-09
+
+### Fixed
+- **Daily video timer running twice on reboot**: Removed `Requires=raspilapse-daily-video.service` from timer's `[Unit]` section
+  - The `Requires=` directive was causing the service to start immediately when the timer started on boot
+  - Timers automatically trigger their matching `.service` by name convention, so `Requires=` was unnecessary
+  - Combined with `Persistent=false`, this ensures the daily video only runs once at 05:00
+
 ## [1.0.6] - 2026-01-08
 
 ### Added

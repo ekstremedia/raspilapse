@@ -1,6 +1,7 @@
 [Unit]
 Description=Daily Timelapse Video Generation Timer
-Requires=raspilapse-daily-video.service
+# Note: Removed "Requires=" - timers trigger their service automatically by name
+# Having Requires= caused the service to start immediately when the timer started on boot
 
 [Timer]
 # Run daily at 05:00
