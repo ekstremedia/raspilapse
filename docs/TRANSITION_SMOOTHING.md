@@ -63,7 +63,7 @@ light_thresholds:
   day: 80      # Above = day mode (was 100)
 
 day_mode:
-  exposure_time: 0.01          # 10ms for bright conditions
+  exposure_time: 0.02          # 20ms for bright conditions (raised from 10ms in Adj #4)
   analogue_gain: 1.0           # Minimum gain
   fixed_colour_gains: [2.5, 1.6]  # Fixed WB gains (optional, overrides AWB learning)
 
@@ -378,22 +378,27 @@ def _check_overexposure(self, brightness_metrics: Dict) -> bool:
 
 Analyzes test shot brightness BEFORE actual capture to prevent overexposure proactively.
 
+**Note:** Thresholds were softened in Adjustment #4 (2026-01-09) to prevent dark dips.
+
 ```python
 def _apply_proactive_exposure_correction(self, test_image_path, raw_lux):
     brightness_metrics = self._analyze_image_brightness(test_image_path)
     test_brightness = brightness_metrics.get("mean_brightness", 128)
 
-    if test_brightness > 180:
-        # Very bright test shot - aggressive 30% reduction
-        self._brightness_correction_factor *= 0.7
-    elif test_brightness > 140:
-        # Bright test shot - gentle 15% reduction
-        self._brightness_correction_factor *= 0.85
+    if test_brightness > 200:  # Was 180
+        # Very bright test shot - 20% reduction (was 30%)
+        self._brightness_correction_factor *= 0.8
+    elif test_brightness > 160:  # Was 140
+        # Bright test shot - 10% reduction (was 15%)
+        self._brightness_correction_factor *= 0.9
+
+    # Floor at 0.5 to prevent over-darkening (was 0.25)
+    self._brightness_correction_factor = max(0.5, self._brightness_correction_factor)
 
     # Also check for rapid brightening
     if raw_lux / self._previous_raw_lux > 2.0:
         # Lux more than doubled - proportional reduction
-        self._brightness_correction_factor *= 0.8
+        self._brightness_correction_factor *= 0.85  # Was 0.8
 ```
 
 **Why this helps:**
@@ -401,6 +406,8 @@ def _apply_proactive_exposure_correction(self, test_image_path, raw_lux):
 - Uses the short-exposure test shot as a preview
 - If test shot is bright, the long-exposure actual capture will be very bright
 - Proactive reduction prevents overexposure from happening
+- Softened thresholds (160/200 vs 140/180) prevent false positives
+- Higher floor (0.5 vs 0.25) prevents over-darkening
 
 ### 10. Rapid Lux Change Detection
 
@@ -432,6 +439,60 @@ This produces cleaner images because longer exposures at low ISO have less noise
 adaptive_timelapse:
   transition_mode:
     sequential_ramping: true  # Default: true
+```
+
+### 12. Underexposure Detection and Fast Recovery
+
+Added in Adjustment #4 (2026-01-09) to handle dark dips during daytime.
+
+**Problem:** When exposure hits minimum (20ms) and gain is at minimum (1.0), images can be too dark with no way to brighten them through normal exposure adjustment.
+
+**Solution:** Symmetric to overexposure detection - detect underexposure and boost correction factor.
+
+```python
+def _check_underexposure(self, brightness_metrics: Dict) -> bool:
+    mean_brightness = brightness_metrics.get("mean_brightness", 128)
+
+    # Only check if at/near minimum exposure
+    at_min_exposure = self._last_exposure_time <= min_exposure * 1.5
+
+    if at_min_exposure and mean_brightness < 80:
+        self._underexposure_severity = "critical"
+    elif at_min_exposure and mean_brightness < 100:
+        self._underexposure_severity = "warning"
+    elif mean_brightness > 110 or not at_min_exposure:
+        self._underexposure_severity = None
+
+    return self._underexposure_detected
+```
+
+**Fast Recovery in Brightness Feedback:**
+
+When underexposure is detected at minimum exposure, boost correction factor by 1.2x per frame:
+
+```python
+def _apply_brightness_feedback(self, actual_brightness):
+    # Fast recovery when underexposed at min exposure
+    if at_min_exposure and actual_brightness < 90:
+        self._brightness_correction_factor *= 1.2  # 20% boost per frame
+        return self._brightness_correction_factor
+
+    # Normal gradual adjustment otherwise
+    ...
+```
+
+**Threshold Summary:**
+
+| Level | Brightness | Condition | Action |
+|-------|------------|-----------|--------|
+| Critical | < 80 | At min exposure | Aggressive recovery |
+| Warning | < 100 | At min exposure | Fast recovery |
+| Clear | > 110 | Any | Normal adjustment |
+
+**State Variables:**
+```python
+self._underexposure_detected: bool = False
+self._underexposure_severity: str = None  # "warning" or "critical"
 ```
 
 ---

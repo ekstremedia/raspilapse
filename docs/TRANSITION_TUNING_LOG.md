@@ -4,6 +4,84 @@ This document tracks adjustments made to day/night transition parameters and the
 
 ---
 
+## 2026-01-09 - Adjustment #4: Underexposure Prevention for Daytime
+
+### Problem
+Slitscan images showed dark vertical bands during daytime. Both cameras (Kringelen and Camera1) exhibited:
+- **Dark dips during bright daylight** - exposure hitting minimum (10ms) with images still too dark
+- **Overall day images too dark** - insufficient light capture at minimum exposure/gain
+- **Slow recovery** - brightness correction factor being pushed too low (0.25) and recovering slowly
+
+### Root Cause
+1. **Minimum exposure too short** (10ms) - not enough light capture in very bright conditions
+2. **Proactive correction too aggressive** - thresholds (140/180) triggering too easily, pushing correction factor to 0.25 floor
+3. **Asymmetric response** - system quickly reduced exposure for bright scenes but recovered slowly when dark
+4. **No underexposure detection** - unlike overexposure, no fast recovery mechanism when images too dark at min exposure
+
+### Solution: Multi-Part Fix
+
+#### Part 1: Raise Minimum Exposure
+```yaml
+day_mode:
+  exposure_time: 0.02  # 20ms (was 10ms)
+```
+
+#### Part 2: Softer Proactive Correction
+| Setting | Before | After | Impact |
+|---------|--------|-------|--------|
+| `bright_threshold` | 140 | 160 | Less sensitive |
+| `very_bright_threshold` | 180 | 200 | Less sensitive |
+| `reduction (very bright)` | 0.7 | 0.8 | 20% vs 30% reduction |
+| `reduction (bright)` | 0.85 | 0.9 | 10% vs 15% reduction |
+| `correction_factor floor` | 0.25 | 0.5 | Prevents over-darkening |
+
+#### Part 3: Underexposure Fast Recovery
+New logic in `_apply_brightness_feedback()`:
+- Detects when brightness < 90 AND exposure at/near minimum
+- Applies 1.2x boost to correction factor per frame (symmetric to overexposure reduction)
+
+#### Part 4: Underexposure Detection Method
+New `_check_underexposure()` method (symmetric to `_check_overexposure()`):
+
+| Level | Brightness | Action |
+|-------|------------|--------|
+| Warning | < 100 | Activate moderate fast recovery |
+| Critical | < 80 | Activate aggressive fast recovery |
+| Clear | > 110 | Resume normal adjustment |
+
+Note: Only triggers when at or near minimum exposure (within 50% of min).
+
+### New State Variables
+```python
+self._underexposure_detected: bool = False
+self._underexposure_severity: str = None  # "warning" or "critical"
+```
+
+### Files Modified
+- `config/config.yml`: Line 194 - `exposure_time: 0.01` → `0.02`
+- `src/auto_timelapse.py`:
+  - Lines 82-84: Added `_underexposure_detected` and `_underexposure_severity` state variables
+  - Lines 455-477: Added underexposure fast recovery in `_apply_brightness_feedback()`
+  - Lines 520-522: Raised proactive correction thresholds (160/200)
+  - Lines 527, 536: Softened reduction factors (0.8/0.9)
+  - Lines 529, 538, 551: Raised correction factor floor to 0.5
+  - Lines 690-758: New `_check_underexposure()` method
+  - Line 1973: Added call to `_check_underexposure()` after capture
+
+### Expected Results
+- **Immediate**: 20ms minimum exposure provides more light capture
+- **Prevents dark dips**: Softer proactive correction won't over-darken
+- **Fast recovery**: Underexposure detection boosts brightness quickly when needed
+- **Smoother daytime**: Correction factor stays above 0.5 (was 0.25)
+
+### Verification
+Monitor next few sunny days. Slitscan images should show:
+- No dark vertical bands during daytime
+- More consistent daytime brightness
+- Smoother overall exposure curve
+
+---
+
 ## 2026-01-08 - Adjustment #3: Multi-Layer Overexposure Prevention
 
 ### Problem

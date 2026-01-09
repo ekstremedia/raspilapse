@@ -6,8 +6,9 @@ Requires=raspilapse-daily-video.service
 # Run daily at 05:00
 OnCalendar=*-*-* 05:00:00
 
-# Run immediately if the system was powered down when the timer should have fired
-Persistent=true
+# Disabled to prevent duplicate runs after reboot
+# (If Pi reboots after 05:00, Persistent=true would trigger another run)
+Persistent=false
 
 # Randomize the start time by up to 5 minutes to avoid load spikes
 RandomizedDelaySec=300

@@ -79,6 +79,10 @@ class AdaptiveTimelapse:
         self._overexposure_detected: bool = False  # True when image is overexposed
         self._overexposure_severity: str = None  # "warning" or "critical"
 
+        # Underexposure detection for fast recovery (symmetric to overexposure)
+        self._underexposure_detected: bool = False  # True when image is underexposed at min exposure
+        self._underexposure_severity: str = None  # "warning" or "critical"
+
         # Holy Grail transition state - seeded from actual camera metadata
         self._transition_seeded: bool = False  # True once we've seeded from metadata
         self._seed_exposure: float = None  # Actual exposure from last auto frame
@@ -452,6 +456,30 @@ class AdaptiveTimelapse:
             )
             return self._brightness_correction_factor
 
+        # Check for underexposure at minimum exposure (fast recovery needed)
+        # Get minimum exposure from config
+        adaptive_config = self.config.get("adaptive_timelapse", {})
+        min_exposure = adaptive_config.get("day_mode", {}).get("exposure_time", 0.02)
+
+        # If we're at or near minimum exposure AND the image is significantly dark,
+        # apply faster recovery to prevent prolonged dark periods
+        at_min_exposure = (
+            self._last_exposure_time is not None
+            and self._last_exposure_time <= min_exposure * 1.5  # Within 50% of minimum
+        )
+        significantly_dark = actual_brightness < 90  # Well below target of 120
+
+        if at_min_exposure and significantly_dark:
+            # Fast underexposure recovery - boost correction factor
+            boost = 1.2  # 20% increase per frame
+            self._brightness_correction_factor *= boost
+            self._brightness_correction_factor = min(4.0, self._brightness_correction_factor)
+            logger.info(
+                f"[Underexposure] Fast recovery: brightness={actual_brightness:.1f}, "
+                f"at min exposure - boosting correction to {self._brightness_correction_factor:.3f}"
+            )
+            return self._brightness_correction_factor
+
         # Outside tolerance - apply gradual correction
         # Convert error to a correction percentage
         # error of 40 (e.g., brightness 160 vs target 120) = 33% too bright
@@ -467,8 +495,8 @@ class AdaptiveTimelapse:
         # Too dark (negative error) → increase correction factor (more exposure)
         self._brightness_correction_factor *= 1.0 - adjustment
 
-        # Clamp to reasonable range (0.25x to 4x correction)
-        self._brightness_correction_factor = max(0.25, min(4.0, self._brightness_correction_factor))
+        # Clamp to reasonable range (0.5x to 4x correction) - raised floor from 0.25
+        self._brightness_correction_factor = max(0.5, min(4.0, self._brightness_correction_factor))
 
         logger.debug(
             f"Brightness feedback: actual={actual_brightness:.1f}, "
@@ -517,25 +545,25 @@ class AdaptiveTimelapse:
             # If it's bright, the scene has lots of light
             # We need to proactively reduce exposure for the actual capture
 
-            # Thresholds for proactive correction
-            bright_threshold = 140  # Test shot brightness indicating bright scene
-            very_bright_threshold = 180  # Very bright scene
+            # Thresholds for proactive correction (softened to prevent dark dips)
+            bright_threshold = 160  # Test shot brightness indicating bright scene
+            very_bright_threshold = 200  # Very bright scene
 
             if test_brightness > very_bright_threshold:
-                # Scene is very bright - aggressively reduce correction factor
+                # Scene is very bright - reduce correction factor (softened)
                 # This helps when transitioning from night to day
-                reduction = 0.7  # 30% reduction
+                reduction = 0.8  # 20% reduction (was 30%)
                 self._brightness_correction_factor *= reduction
-                self._brightness_correction_factor = max(0.25, self._brightness_correction_factor)
+                self._brightness_correction_factor = max(0.5, self._brightness_correction_factor)
                 logger.info(
                     f"[Proactive] Very bright test shot ({test_brightness:.1f}) - "
                     f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
                 )
             elif test_brightness > bright_threshold:
-                # Scene is moderately bright - gentle reduction
-                reduction = 0.85  # 15% reduction
+                # Scene is moderately bright - gentle reduction (softened)
+                reduction = 0.9  # 10% reduction (was 15%)
                 self._brightness_correction_factor *= reduction
-                self._brightness_correction_factor = max(0.25, self._brightness_correction_factor)
+                self._brightness_correction_factor = max(0.5, self._brightness_correction_factor)
                 logger.debug(
                     f"[Proactive] Bright test shot ({test_brightness:.1f}) - "
                     f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
@@ -546,10 +574,10 @@ class AdaptiveTimelapse:
                 lux_ratio = raw_lux / max(0.01, self._previous_raw_lux)
                 if lux_ratio > 2.0:  # Lux more than doubled
                     # Scene getting much brighter - reduce exposure proactively
-                    reduction = min(0.8, 1.0 / (lux_ratio * 0.5))
+                    reduction = min(0.85, 1.0 / (lux_ratio * 0.5))  # Softened from 0.8
                     self._brightness_correction_factor *= reduction
                     self._brightness_correction_factor = max(
-                        0.25, self._brightness_correction_factor
+                        0.5, self._brightness_correction_factor  # Raised floor from 0.25
                     )
                     logger.info(
                         f"[Proactive] Rapid brightening ({lux_ratio:.1f}x) - "
@@ -658,6 +686,76 @@ class AdaptiveTimelapse:
                 )
 
         return self._overexposure_detected
+
+    def _check_underexposure(self, brightness_metrics: Dict) -> bool:
+        """
+        Check if the image is underexposed (especially at minimum exposure).
+
+        Uses two-tier detection symmetric to overexposure:
+        - WARNING level (brightness < 100): Moderate recovery
+        - CRITICAL level (brightness < 80): Aggressive recovery
+
+        This is especially important when we're at minimum exposure and can't
+        reduce exposure further - we need to boost the correction factor.
+
+        Args:
+            brightness_metrics: Dictionary with brightness analysis results
+
+        Returns:
+            True if underexposure detected (fast recovery active)
+        """
+        if not brightness_metrics:
+            return self._underexposure_detected
+
+        mean_brightness = brightness_metrics.get("mean_brightness", 128)
+
+        # Get minimum exposure from config to check if we're at the limit
+        adaptive_config = self.config.get("adaptive_timelapse", {})
+        min_exposure = adaptive_config.get("day_mode", {}).get("exposure_time", 0.02)
+
+        # Only flag underexposure if we're near minimum exposure
+        # (otherwise normal feedback will handle it)
+        at_min_exposure = (
+            self._last_exposure_time is not None
+            and self._last_exposure_time <= min_exposure * 1.5
+        )
+
+        # Thresholds for underexposure detection
+        brightness_warning = 100  # Early warning (target is 120)
+        brightness_critical = 80  # Critical underexposure
+        brightness_safe = 110  # Clear underexposure above this
+
+        was_underexposed = self._underexposure_detected
+
+        if at_min_exposure and mean_brightness < brightness_critical:
+            # Critical underexposure at min exposure - activate fast recovery
+            self._underexposure_detected = True
+            self._underexposure_severity = "critical"
+            if not was_underexposed:
+                logger.warning(
+                    f"[FastRecovery] CRITICAL UNDEREXPOSURE: brightness={mean_brightness:.1f}, "
+                    f"at min exposure - activating aggressive recovery"
+                )
+        elif at_min_exposure and mean_brightness < brightness_warning:
+            # Warning level underexposure - activate moderate fast recovery
+            self._underexposure_detected = True
+            self._underexposure_severity = "warning"
+            if not was_underexposed:
+                logger.warning(
+                    f"[FastRecovery] UNDEREXPOSURE WARNING: brightness={mean_brightness:.1f}, "
+                    f"at min exposure - activating fast recovery"
+                )
+        elif mean_brightness > brightness_safe or not at_min_exposure:
+            # Back to safe range or no longer at min exposure - deactivate
+            self._underexposure_detected = False
+            self._underexposure_severity = None
+            if was_underexposed:
+                logger.info(
+                    f"[FastRecovery] Underexposure cleared: brightness={mean_brightness:.1f} "
+                    f"- resuming normal adjustment"
+                )
+
+        return self._underexposure_detected
 
     def _calculate_target_gain_from_lux(self, lux: float) -> float:
         """
@@ -1871,6 +1969,8 @@ class AdaptiveTimelapse:
                                 self._apply_brightness_feedback(actual_brightness)
                                 # Check for overexposure and enable fast ramp-down if needed
                                 self._check_overexposure(brightness_metrics)
+                                # Check for underexposure at min exposure and enable fast recovery
+                                self._check_underexposure(brightness_metrics)
                         except Exception as e:
                             logger.debug(f"Could not apply brightness feedback: {e}")
 
