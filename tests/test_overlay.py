@@ -721,6 +721,7 @@ class TestGradientBarDrawing:
         overlay = ImageOverlay(test_overlay_config)
         img = Image.new("RGBA", (1000, 200), color=(255, 255, 255, 0))
         from PIL import ImageDraw
+
         draw = ImageDraw.Draw(img, "RGBA")
 
         # Draw gradient with standard background color
@@ -736,6 +737,7 @@ class TestGradientBarDrawing:
         overlay = ImageOverlay(test_overlay_config)
         img = Image.new("RGBA", (100, 1), color=(255, 255, 255, 0))
         from PIL import ImageDraw
+
         draw = ImageDraw.Draw(img, "RGBA")
 
         # Should not crash with zero or very small height
@@ -746,6 +748,7 @@ class TestGradientBarDrawing:
         overlay = ImageOverlay(test_overlay_config)
         img = Image.new("RGBA", (500, 100), color=(255, 255, 255, 0))
         from PIL import ImageDraw
+
         draw = ImageDraw.Draw(img, "RGBA")
 
         # Custom red background
@@ -823,7 +826,9 @@ class TestTopBarModeContent:
         assert os.path.exists(result)
         os.unlink(output_path)
 
-    def test_topbar_with_invalid_template_variable(self, test_overlay_config, test_image, test_metadata):
+    def test_topbar_with_invalid_template_variable(
+        self, test_overlay_config, test_image, test_metadata
+    ):
         """Test top-bar mode handles invalid template variables gracefully."""
         test_overlay_config["overlay"]["position"] = "top-bar"
         test_overlay_config["overlay"]["content"] = {

@@ -622,13 +622,15 @@ class TestWeatherDataParsingEdgeCases:
         """Test parsing response with empty modules list."""
         mock_response = MagicMock()
         mock_response.status = 200
-        mock_response.read.return_value = json.dumps({
-            "data": {
-                "id": "test-station",
-                "name": "Test Station",
-                "modules": [],
+        mock_response.read.return_value = json.dumps(
+            {
+                "data": {
+                    "id": "test-station",
+                    "name": "Test Station",
+                    "modules": [],
+                }
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_response.__enter__.return_value = mock_response
         mock_urlopen.return_value = mock_response
 
@@ -644,22 +646,24 @@ class TestWeatherDataParsingEdgeCases:
         """Test parsing response with unknown module type."""
         mock_response = MagicMock()
         mock_response.status = 200
-        mock_response.read.return_value = json.dumps({
-            "data": {
-                "id": "test-station",
-                "name": "Test Station",
-                "modules": [
-                    {
-                        "id": "unknown-module",
-                        "name": "Unknown",
-                        "type": "Unknown Type",
-                        "measurements": {
-                            "SomeValue": 123,
+        mock_response.read.return_value = json.dumps(
+            {
+                "data": {
+                    "id": "test-station",
+                    "name": "Test Station",
+                    "modules": [
+                        {
+                            "id": "unknown-module",
+                            "name": "Unknown",
+                            "type": "Unknown Type",
+                            "measurements": {
+                                "SomeValue": 123,
+                            },
                         },
-                    },
-                ],
+                    ],
+                }
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_response.__enter__.return_value = mock_response
         mock_urlopen.return_value = mock_response
 
@@ -674,20 +678,22 @@ class TestWeatherDataParsingEdgeCases:
         """Test parsing response with missing measurements dict."""
         mock_response = MagicMock()
         mock_response.status = 200
-        mock_response.read.return_value = json.dumps({
-            "data": {
-                "id": "test-station",
-                "name": "Test Station",
-                "modules": [
-                    {
-                        "id": "outdoor-module",
-                        "name": "Outdoor",
-                        "type": "Outdoor Module",
-                        # Missing "measurements" key
-                    },
-                ],
+        mock_response.read.return_value = json.dumps(
+            {
+                "data": {
+                    "id": "test-station",
+                    "name": "Test Station",
+                    "modules": [
+                        {
+                            "id": "outdoor-module",
+                            "name": "Outdoor",
+                            "type": "Outdoor Module",
+                            # Missing "measurements" key
+                        },
+                    ],
+                }
             }
-        }).encode("utf-8")
+        ).encode("utf-8")
         mock_response.__enter__.return_value = mock_response
         mock_urlopen.return_value = mock_response
 
@@ -768,7 +774,9 @@ class TestWeatherTemplateFormatting:
         assert "m/s" in result
 
     @patch("urllib.request.urlopen")
-    def test_format_weather_line_unknown_placeholder(self, mock_urlopen, weather_config, sample_netatmo_response):
+    def test_format_weather_line_unknown_placeholder(
+        self, mock_urlopen, weather_config, sample_netatmo_response
+    ):
         """Test formatting with unknown placeholder."""
         mock_response = MagicMock()
         mock_response.status = 200
