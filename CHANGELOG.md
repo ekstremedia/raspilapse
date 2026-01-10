@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.8] - 2026-01-10
 
+### Fixed
+- **EV Safety Clamp applying every frame instead of once**: Critical bug causing severely underexposed images during transition mode
+  - The clamp was designed to only apply on the first manual frame after seeding, but was applying on EVERY frame
+  - This prevented exposure from ever ramping up properly (e.g., stuck at 376ms instead of 20s)
+  - Added `_ev_clamp_applied` flag to ensure clamp only runs once per transition cycle
+  - Flag resets when returning to day mode
+  - New tests: `test_ev_clamp_applies_only_once`, `test_ev_clamp_flag_resets_on_day_mode`
+
 ### Added
 - **ML-Based Adaptive Exposure System**: Lightweight machine learning that continuously learns and improves exposure settings
   - Solar Pattern Memory: Learns expected lux for each time of day, indexed by day-of-year/hour/minute

@@ -98,6 +98,7 @@ class AdaptiveTimelapse:
         self._seed_wb_gains: tuple = None  # Actual WB gains from last auto frame
         self._previous_mode: str = None  # Track mode changes for seeding detection
         self._last_day_capture_metadata: Dict = None  # Metadata from last day mode capture
+        self._ev_clamp_applied: bool = False  # True after EV clamp applied on first frame
 
         # Load transition smoothing config with defaults
         transition_config = self.config.get("adaptive_timelapse", {}).get("transition_mode", {})
@@ -1091,7 +1092,12 @@ class AdaptiveTimelapse:
             return target_exposure, target_gain
 
         # Only apply clamp on first manual frame (when we have seed values)
+        # Bug fix: only apply ONCE, not every frame
         if not self._transition_seeded or self._seed_exposure is None or self._seed_gain is None:
+            return target_exposure, target_gain
+
+        # Skip if clamp was already applied (only apply on first frame)
+        if self._ev_clamp_applied:
             return target_exposure, target_gain
 
         # Calculate EVs (EV = exposure * gain, proportional to light captured)
@@ -1123,6 +1129,8 @@ class AdaptiveTimelapse:
                 f"Adjusted exposure {target_exposure:.4f}s → {clamped_exposure:.4f}s "
                 f"to match auto EV={seed_ev:.4f}"
             )
+            # Mark clamp as applied so it only runs once
+            self._ev_clamp_applied = True
             return clamped_exposure, target_gain
 
         return target_exposure, target_gain
@@ -1971,6 +1979,7 @@ class AdaptiveTimelapse:
                         # Reset seed state when returning to day mode
                         if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
                             self._transition_seeded = False
+                            self._ev_clamp_applied = False
                             logger.info("[Holy Grail] Returned to Day mode - seed state reset")
 
                         # Log transition progress
