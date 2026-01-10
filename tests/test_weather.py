@@ -515,3 +515,340 @@ class TestWeatherDataFormatting:
 
         assert weather._format_pressure(1012) == "1012 hPa"  # Fixed-width: 4.0f + hPa
         assert weather._format_pressure(None) == "  N/A"  # Fixed-width
+
+
+class TestWindFormattingEdgeCases:
+    """Test wind formatting edge cases."""
+
+    def test_format_wind_no_gust(self, weather_config):
+        """Test wind formatting without gust data."""
+        weather = WeatherData(weather_config)
+        # Speed only, no gust
+        result = weather._format_wind(36, None)  # 36 km/h = 10.0 m/s
+        assert "10.0 m/s" in result
+        assert "gust" not in result
+
+    def test_format_wind_gust_equals_speed(self, weather_config):
+        """Test wind formatting when gust equals speed (no gust shown)."""
+        weather = WeatherData(weather_config)
+        # When gust equals speed, gust should not be shown
+        result = weather._format_wind(18, 18)
+        assert "5.0 m/s" in result
+        assert "gust" not in result
+
+    def test_format_wind_gust_less_than_speed(self, weather_config):
+        """Test wind formatting when gust is less than speed (anomaly)."""
+        weather = WeatherData(weather_config)
+        # When gust < speed (shouldn't happen but handle gracefully)
+        result = weather._format_wind(36, 18)
+        assert "10.0 m/s" in result
+        assert "gust" not in result  # Gust not shown if less than speed
+
+    def test_format_wind_zero_speed(self, weather_config):
+        """Test wind formatting with zero speed."""
+        weather = WeatherData(weather_config)
+        result = weather._format_wind(0, 0)
+        assert "0.0 m/s" in result
+
+
+class TestWindDirectionEdgeCases:
+    """Test wind direction edge cases."""
+
+    def test_format_wind_direction_boundary_angles(self, weather_config):
+        """Test wind direction at boundary angles."""
+        weather = WeatherData(weather_config)
+
+        # Test all cardinal and intercardinal directions
+        directions_map = {
+            0: "N",
+            45: "NE",
+            90: "E",
+            135: "SE",
+            180: "S",
+            225: "SW",
+            270: "W",
+            315: "NW",
+            360: "N",  # Full circle back to N
+        }
+
+        for angle, expected in directions_map.items():
+            result = weather._format_wind_direction(angle)
+            assert expected in result, f"Angle {angle} should be {expected}, got {result}"
+
+    def test_format_wind_direction_rounding(self, weather_config):
+        """Test wind direction rounding at boundaries."""
+        weather = WeatherData(weather_config)
+
+        # 22.5 is exactly between N and NE - should round to NE (index 1)
+        result = weather._format_wind_direction(22)
+        assert "N" in result
+
+        # 23 should also round to NE
+        result = weather._format_wind_direction(23)
+        assert "NE" in result
+
+        # Test at 337.5 (between NW and N)
+        result = weather._format_wind_direction(338)
+        assert "N" in result
+
+
+class TestTemperatureFormattingEdgeCases:
+    """Test temperature formatting edge cases."""
+
+    def test_format_temperature_extreme_cold(self, weather_config):
+        """Test temperature formatting with extreme cold values."""
+        weather = WeatherData(weather_config)
+        result = weather._format_temperature(-40.0)
+        assert "-40.0°C" in result
+
+    def test_format_temperature_extreme_hot(self, weather_config):
+        """Test temperature formatting with extreme hot values."""
+        weather = WeatherData(weather_config)
+        result = weather._format_temperature(50.0)
+        assert "50.0°C" in result
+
+    def test_format_temperature_zero(self, weather_config):
+        """Test temperature formatting at exactly zero."""
+        weather = WeatherData(weather_config)
+        result = weather._format_temperature(0.0)
+        assert "0.0°C" in result
+
+
+class TestWeatherDataParsingEdgeCases:
+    """Test weather data parsing edge cases."""
+
+    @patch("urllib.request.urlopen")
+    def test_parse_empty_modules(self, mock_urlopen, weather_config):
+        """Test parsing response with empty modules list."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps({
+            "data": {
+                "id": "test-station",
+                "name": "Test Station",
+                "modules": [],
+            }
+        }).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        data = weather.get_weather_data()
+
+        # Should not crash, return None values
+        assert data is not None
+        assert data.get("temperature") is None
+
+    @patch("urllib.request.urlopen")
+    def test_parse_unknown_module_type(self, mock_urlopen, weather_config):
+        """Test parsing response with unknown module type."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps({
+            "data": {
+                "id": "test-station",
+                "name": "Test Station",
+                "modules": [
+                    {
+                        "id": "unknown-module",
+                        "name": "Unknown",
+                        "type": "Unknown Type",
+                        "measurements": {
+                            "SomeValue": 123,
+                        },
+                    },
+                ],
+            }
+        }).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        data = weather.get_weather_data()
+
+        # Should not crash with unknown module type
+        assert data is not None
+
+    @patch("urllib.request.urlopen")
+    def test_parse_missing_measurements(self, mock_urlopen, weather_config):
+        """Test parsing response with missing measurements dict."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps({
+            "data": {
+                "id": "test-station",
+                "name": "Test Station",
+                "modules": [
+                    {
+                        "id": "outdoor-module",
+                        "name": "Outdoor",
+                        "type": "Outdoor Module",
+                        # Missing "measurements" key
+                    },
+                ],
+            }
+        }).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        data = weather.get_weather_data()
+
+        # Should not crash with missing measurements
+        assert data is not None
+
+
+class TestHTTPErrorHandling:
+    """Test HTTP error handling."""
+
+    @patch("urllib.request.urlopen")
+    def test_http_500_error(self, mock_urlopen, weather_config):
+        """Test handling of HTTP 500 server error."""
+        mock_response = MagicMock()
+        mock_response.status = 500
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        data = weather.get_weather_data()
+
+        assert data is None
+
+    @patch("urllib.request.urlopen")
+    def test_http_502_bad_gateway(self, mock_urlopen, weather_config):
+        """Test handling of HTTP 502 bad gateway error."""
+        mock_response = MagicMock()
+        mock_response.status = 502
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        data = weather.get_weather_data()
+
+        assert data is None
+
+    @patch("urllib.request.urlopen")
+    def test_json_decode_error(self, mock_urlopen, weather_config):
+        """Test handling of invalid JSON response."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = b"not valid json {{"
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        data = weather.get_weather_data()
+
+        # Should return None on JSON decode error
+        assert data is None
+
+
+class TestWeatherTemplateFormatting:
+    """Test weather template formatting."""
+
+    @patch("urllib.request.urlopen")
+    def test_format_weather_line_with_all_values(
+        self, mock_urlopen, weather_config, sample_netatmo_response
+    ):
+        """Test formatting weather line with all values present."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        weather.get_weather_data()
+
+        template = "{temperature} | {humidity} | {wind}"
+        result = weather.format_weather_line(template)
+
+        assert "°C" in result
+        assert "%" in result
+        assert "m/s" in result
+
+    @patch("urllib.request.urlopen")
+    def test_format_weather_line_unknown_placeholder(self, mock_urlopen, weather_config, sample_netatmo_response):
+        """Test formatting with unknown placeholder."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        weather = WeatherData(weather_config)
+        weather.get_weather_data()
+
+        template = "{unknown_variable}"
+        result = weather.format_weather_line(template)
+
+        # Should return template as-is when variable unknown
+        assert "{unknown_variable}" in result
+
+    @patch("urllib.request.urlopen")
+    def test_format_weather_line_no_data(self, mock_urlopen, weather_config):
+        """Test formatting when no weather data available."""
+        mock_urlopen.side_effect = urllib.error.URLError("Network error")
+
+        weather = WeatherData(weather_config)
+        weather.get_weather_data()  # This will fail
+
+        template = "{temperature} | {humidity}"
+        result = weather.format_weather_line(template)
+
+        # Should return empty string when no data
+        assert result == ""
+
+
+class TestRainFormatting:
+    """Test rain formatting edge cases."""
+
+    def test_format_rain_zero(self, weather_config):
+        """Test rain formatting with zero rainfall."""
+        weather = WeatherData(weather_config)
+        result = weather._format_rain(0.0)
+        assert "0.0 mm" in result
+
+    def test_format_rain_small_value(self, weather_config):
+        """Test rain formatting with small value."""
+        weather = WeatherData(weather_config)
+        result = weather._format_rain(0.1)
+        assert "0.1 mm" in result
+
+    def test_format_rain_large_value(self, weather_config):
+        """Test rain formatting with large value."""
+        weather = WeatherData(weather_config)
+        result = weather._format_rain(99.9)
+        assert "99.9 mm" in result
+
+
+class TestHumidityFormatting:
+    """Test humidity formatting edge cases."""
+
+    def test_format_humidity_zero(self, weather_config):
+        """Test humidity formatting at 0%."""
+        weather = WeatherData(weather_config)
+        result = weather._format_humidity(0)
+        assert "0%" in result
+
+    def test_format_humidity_100(self, weather_config):
+        """Test humidity formatting at 100%."""
+        weather = WeatherData(weather_config)
+        result = weather._format_humidity(100)
+        assert "100%" in result
+
+
+class TestPressureFormatting:
+    """Test pressure formatting edge cases."""
+
+    def test_format_pressure_low(self, weather_config):
+        """Test pressure formatting with low pressure."""
+        weather = WeatherData(weather_config)
+        result = weather._format_pressure(950)
+        assert "950 hPa" in result
+
+    def test_format_pressure_high(self, weather_config):
+        """Test pressure formatting with high pressure."""
+        weather = WeatherData(weather_config)
+        result = weather._format_pressure(1050)
+        assert "1050 hPa" in result

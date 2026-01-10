@@ -686,3 +686,366 @@ class TestBackgroundPadding:
 
         # Verify padding is respected
         assert overlay.overlay_config["background"]["padding"] == 0.5
+
+
+class TestFontLoadingFallback:
+    """Test font loading with fallback chain."""
+
+    def test_load_font_default(self, test_overlay_config):
+        """Test loading default PIL font."""
+        test_overlay_config["overlay"]["font"]["family"] = "default"
+        overlay = ImageOverlay(test_overlay_config)
+        assert overlay.font is None
+
+    def test_load_font_invalid_path(self, test_overlay_config):
+        """Test loading font with invalid path falls back to None."""
+        test_overlay_config["overlay"]["font"]["family"] = "/nonexistent/font.ttf"
+        overlay = ImageOverlay(test_overlay_config)
+        # Should fall back to None (default font) when font not found
+        assert overlay.font is None
+
+    def test_load_font_bold_fallback(self, test_overlay_config):
+        """Test bold font fallback to regular."""
+        # Request a bold font that doesn't exist, should try fallback
+        test_overlay_config["overlay"]["font"]["family"] = "NonExistentFont-Bold.ttf"
+        overlay = ImageOverlay(test_overlay_config)
+        # Should fall back to None when neither bold nor regular is found
+        assert overlay.font is None
+
+
+class TestGradientBarDrawing:
+    """Test gradient bar drawing in detail."""
+
+    def test_draw_gradient_bar_full_height(self, test_overlay_config):
+        """Test gradient bar with full height."""
+        overlay = ImageOverlay(test_overlay_config)
+        img = Image.new("RGBA", (1000, 200), color=(255, 255, 255, 0))
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        # Draw gradient with standard background color
+        overlay._draw_gradient_bar(draw, 1000, 200, [0, 0, 0, 255])
+
+        # Verify gradient was drawn
+        pixels = img.load()
+        # Top should have higher alpha than bottom
+        assert pixels[500, 0][3] > pixels[500, 199][3]
+
+    def test_draw_gradient_bar_zero_height(self, test_overlay_config):
+        """Test gradient bar with zero height (edge case)."""
+        overlay = ImageOverlay(test_overlay_config)
+        img = Image.new("RGBA", (100, 1), color=(255, 255, 255, 0))
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        # Should not crash with zero or very small height
+        overlay._draw_gradient_bar(draw, 100, 0, [0, 0, 0, 200])
+
+    def test_draw_gradient_bar_custom_colors(self, test_overlay_config):
+        """Test gradient bar with custom RGBA colors."""
+        overlay = ImageOverlay(test_overlay_config)
+        img = Image.new("RGBA", (500, 100), color=(255, 255, 255, 0))
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        # Custom red background
+        overlay._draw_gradient_bar(draw, 500, 100, [255, 0, 0, 200])
+
+        pixels = img.load()
+        # Should have red component
+        assert pixels[250, 50][0] > 0  # Red channel
+
+
+class TestCustomPositionEdgeCases:
+    """Test custom position with edge cases."""
+
+    def test_custom_position_percentage_zero(self, test_overlay_config):
+        """Test custom position at 0%."""
+        test_overlay_config["overlay"]["position"] = "custom"
+        test_overlay_config["overlay"]["custom_position"] = {"x": 0, "y": 0}
+        overlay = ImageOverlay(test_overlay_config)
+
+        x, y = overlay._get_position(1920, 1080, (0, 0, 200, 50))
+        assert x == 0
+        assert y == 0
+
+    def test_custom_position_percentage_100(self, test_overlay_config):
+        """Test custom position at 100%."""
+        test_overlay_config["overlay"]["position"] = "custom"
+        test_overlay_config["overlay"]["custom_position"] = {"x": 100, "y": 100}
+        overlay = ImageOverlay(test_overlay_config)
+
+        x, y = overlay._get_position(1920, 1080, (0, 0, 200, 50))
+        assert x == 1920
+        assert y == 1080
+
+    def test_custom_position_default_values(self, test_overlay_config):
+        """Test custom position uses defaults if not specified."""
+        test_overlay_config["overlay"]["position"] = "custom"
+        # Don't set custom_position - should use defaults
+        overlay = ImageOverlay(test_overlay_config)
+
+        x, y = overlay._get_position(1000, 1000, (0, 0, 100, 50))
+        # Default is x=5, y=95
+        assert x == 50  # 5% of 1000
+        assert y == 950  # 95% of 1000
+
+    def test_unknown_position_preset_fallback(self, test_overlay_config):
+        """Test unknown position preset falls back to bottom-left."""
+        test_overlay_config["overlay"]["position"] = "invalid-position"
+        overlay = ImageOverlay(test_overlay_config)
+
+        # Should fall back to bottom-left positioning
+        x, y = overlay._get_position(800, 600, (0, 0, 200, 50))
+        assert isinstance(x, int)
+        assert isinstance(y, int)
+
+
+class TestTopBarModeContent:
+    """Test top-bar mode content rendering."""
+
+    def test_topbar_with_all_content_lines(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar mode with all four content lines populated."""
+        test_overlay_config["overlay"]["position"] = "top-bar"
+        test_overlay_config["overlay"]["content"] = {
+            "line_1_left": "{camera_name}",
+            "line_1_right": "Exposure: {exposure} | ISO: {iso}",
+            "line_2_left": "{date} {time}",
+            "line_2_right": "Gain: {gain} | Temp: {temperature}°C",
+        }
+        overlay = ImageOverlay(test_overlay_config)
+
+        output_path = test_image.replace(".jpg", "_topbar_full.jpg")
+        result = overlay.apply_overlay(
+            test_image, test_metadata, mode="day", output_path=output_path
+        )
+
+        assert os.path.exists(result)
+        os.unlink(output_path)
+
+    def test_topbar_with_invalid_template_variable(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar mode handles invalid template variables gracefully."""
+        test_overlay_config["overlay"]["position"] = "top-bar"
+        test_overlay_config["overlay"]["content"] = {
+            "line_1_left": "{nonexistent_variable}",
+            "line_1_right": "",
+            "line_2_left": "{date} {time}",
+            "line_2_right": "",
+        }
+        overlay = ImageOverlay(test_overlay_config)
+
+        output_path = test_image.replace(".jpg", "_topbar_invalid.jpg")
+        # Should not crash, just use template as-is
+        result = overlay.apply_overlay(
+            test_image, test_metadata, mode="day", output_path=output_path
+        )
+
+        assert os.path.exists(result)
+        os.unlink(output_path)
+
+    def test_topbar_background_disabled(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar mode with background disabled."""
+        test_overlay_config["overlay"]["position"] = "top-bar"
+        test_overlay_config["overlay"]["background"]["enabled"] = False
+        overlay = ImageOverlay(test_overlay_config)
+
+        output_path = test_image.replace(".jpg", "_topbar_nobg.jpg")
+        result = overlay.apply_overlay(
+            test_image, test_metadata, mode="day", output_path=output_path
+        )
+
+        assert os.path.exists(result)
+        os.unlink(output_path)
+
+
+class TestOverlayDataPreparation:
+    """Test overlay data preparation edge cases."""
+
+    def test_prepare_data_missing_all_optional_fields(self, test_overlay_config):
+        """Test data preparation with minimal metadata."""
+        overlay = ImageOverlay(test_overlay_config)
+        # Minimal metadata
+        metadata = {}
+        data = overlay._prepare_overlay_data(metadata, mode="day")
+
+        # Should have defaults or N/A for all fields
+        assert "camera_name" in data
+        assert "mode" in data
+        assert "date" in data
+        assert "time" in data
+
+    def test_prepare_data_with_zero_values(self, test_overlay_config):
+        """Test data preparation with zero values."""
+        overlay = ImageOverlay(test_overlay_config)
+        metadata = {
+            "ExposureTime": 0,
+            "AnalogueGain": 0.0,
+            "Lux": 0.0,
+            "ColourGains": [0.0, 0.0],
+            "SensorTemperature": 0.0,
+        }
+        data = overlay._prepare_overlay_data(metadata, mode="night")
+
+        # Should handle zero values without crashing
+        assert data["iso"] == "ISO    0"
+        assert data["lux"] == "   0.0"
+
+    def test_prepare_data_with_negative_temperature(self, test_overlay_config):
+        """Test data preparation with negative temperature."""
+        overlay = ImageOverlay(test_overlay_config)
+        metadata = {
+            "ExposureTime": 10000,
+            "AnalogueGain": 1.0,
+            "SensorTemperature": -10.5,
+        }
+        data = overlay._prepare_overlay_data(metadata, mode="day")
+
+        assert "-10.5" in data["temperature"]
+
+
+class TestColorGainsFormatting:
+    """Test color gains formatting edge cases."""
+
+    def test_format_color_gains_single_value(self, test_overlay_config):
+        """Test color gains with only one value."""
+        overlay = ImageOverlay(test_overlay_config)
+        result = overlay._format_color_gains([1.5])
+        assert "N/A" in result
+
+    def test_format_color_gains_many_values(self, test_overlay_config):
+        """Test color gains with more than 2 values."""
+        overlay = ImageOverlay(test_overlay_config)
+        result = overlay._format_color_gains([1.5, 1.3, 1.1, 0.9])
+        # Should still format first two
+        assert "1.50" in result
+        assert "1.30" in result
+
+    def test_format_color_gains_large_values(self, test_overlay_config):
+        """Test color gains with large values."""
+        overlay = ImageOverlay(test_overlay_config)
+        result = overlay._format_color_gains([99.99, 88.88])
+        assert "99.99" in result
+        assert "88.88" in result
+
+
+class TestExposureTimeFormatting:
+    """Test exposure time formatting edge cases."""
+
+    def test_format_exposure_boundary_values(self, test_overlay_config):
+        """Test exposure time at format boundaries."""
+        overlay = ImageOverlay(test_overlay_config)
+
+        # Exactly 1000 us (boundary between µs and ms)
+        assert "ms" in overlay._format_exposure_time(1000)
+
+        # Exactly 1 second
+        result = overlay._format_exposure_time(1_000_000)
+        assert "s" in result
+
+    def test_format_exposure_very_small(self, test_overlay_config):
+        """Test very small exposure times."""
+        overlay = ImageOverlay(test_overlay_config)
+
+        result = overlay._format_exposure_time(1)
+        assert "µs" in result
+        assert "1" in result
+
+    def test_format_exposure_very_large(self, test_overlay_config):
+        """Test very large exposure times (20+ seconds)."""
+        overlay = ImageOverlay(test_overlay_config)
+
+        # 30 second exposure
+        result = overlay._format_exposure_time(30_000_000)
+        assert "30.0s" in result
+
+
+class TestApplyOverlayFunctionErrors:
+    """Test apply_overlay_to_image function error handling."""
+
+    def test_apply_overlay_missing_config(self, test_image):
+        """Test handling of missing config file."""
+        # Should raise FileNotFoundError for missing config
+        with pytest.raises(FileNotFoundError):
+            apply_overlay_to_image(
+                test_image,
+                metadata={},
+                config_path="/nonexistent/config.yml",
+                mode="day",
+            )
+
+    def test_apply_overlay_invalid_yaml_config(self, test_image):
+        """Test handling of invalid YAML config file."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write("invalid: yaml: content: [[[")
+            config_path = f.name
+
+        try:
+            # Should raise YAML parsing error
+            with pytest.raises(Exception):  # yaml.scanner.ScannerError
+                apply_overlay_to_image(
+                    test_image,
+                    metadata={},
+                    config_path=config_path,
+                    mode="day",
+                )
+        finally:
+            os.unlink(config_path)
+
+    def test_apply_overlay_missing_metadata_file(self, test_image):
+        """Test handling of missing metadata file uses empty metadata."""
+        config_data = {
+            "overlay": {
+                "enabled": True,
+                "position": "bottom-left",
+                "camera_name": "Test",
+                "font": {"family": "default"},
+                "content": {
+                    "line_1_left": "{camera_name}",
+                    "line_1_right": "",
+                    "line_2_left": "{date} {time}",
+                    "line_2_right": "",
+                },
+            }
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            output_path = test_image.replace(".jpg", "_nometa.jpg")
+            # Function uses empty metadata if file not found
+            result = apply_overlay_to_image(
+                test_image,
+                metadata_path="/nonexistent/metadata.json",
+                config_path=config_path,
+                mode="day",
+                output_path=output_path,
+            )
+            # Should succeed with empty metadata
+            assert os.path.exists(result)
+            os.unlink(output_path)
+        finally:
+            os.unlink(config_path)
+
+
+class TestLocaleDatetimeEdgeCases:
+    """Test localized datetime formatting edge cases."""
+
+    def test_locale_setting_failure(self, test_overlay_config):
+        """Test handling of locale setting failure."""
+        from datetime import datetime
+
+        test_overlay_config["overlay"]["datetime"] = {
+            "localized": True,
+            "locale": "invalid_LOCALE.UTF-8",
+            "show_seconds": False,
+        }
+
+        overlay = ImageOverlay(test_overlay_config)
+        dt = datetime(2025, 6, 15, 12, 30, 45)
+
+        # Should not crash, fall back to non-localized format
+        result = overlay._format_localized_datetime(dt)
+        assert isinstance(result, str)
+        assert len(result) > 0

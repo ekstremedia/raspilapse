@@ -936,5 +936,274 @@ class TestKeogramFilenameExtension:
         assert custom_output.name == "keogram.jpg"
 
 
+class TestFFmpegErrorHandling:
+    """Test FFmpeg error handling in video creation."""
+
+    @pytest.fixture
+    def temp_images(self):
+        """Create temporary test images."""
+        temp_dir = tempfile.mkdtemp()
+        images = []
+        for i in range(3):
+            img_path = Path(temp_dir) / f"test_{i:04d}.jpg"
+            img_path.touch()
+            images.append(img_path)
+        yield images
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @pytest.fixture
+    def temp_output(self):
+        """Create temporary output path."""
+        temp_dir = tempfile.mkdtemp()
+        output = Path(temp_dir) / "test_output.mp4"
+        yield output
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @patch("subprocess.run")
+    def test_ffmpeg_non_zero_returncode(self, mock_run, temp_images, temp_output):
+        """Test handling when FFmpeg returns non-zero exit code."""
+        mock_run.return_value = Mock(returncode=1, stderr="FFmpeg error")
+
+        result = create_video(temp_images, temp_output)
+
+        # Should return False on FFmpeg failure
+        assert result is False
+
+    @patch("subprocess.run")
+    def test_ffmpeg_subprocess_exception(self, mock_run, temp_images, temp_output):
+        """Test handling when subprocess raises an exception."""
+        mock_run.side_effect = Exception("Subprocess failed")
+
+        # The function lets exceptions propagate
+        with pytest.raises(Exception):
+            create_video(temp_images, temp_output)
+
+    @patch("subprocess.run")
+    def test_ffmpeg_file_not_found(self, mock_run, temp_images, temp_output):
+        """Test handling when FFmpeg is not installed."""
+        mock_run.side_effect = FileNotFoundError("ffmpeg not found")
+
+        # The function lets exceptions propagate
+        with pytest.raises(FileNotFoundError):
+            create_video(temp_images, temp_output)
+
+
+class TestParseTimeEdgeCases:
+    """Test time parsing edge cases."""
+
+    def test_parse_time_single_digit_hour(self):
+        """Test parsing single-digit hour."""
+        result = parse_time("4:00")
+        assert result == (4, 0)
+
+    def test_parse_time_midnight(self):
+        """Test parsing midnight."""
+        result = parse_time("00:00")
+        assert result == (0, 0)
+
+    def test_parse_time_end_of_day(self):
+        """Test parsing 23:59."""
+        result = parse_time("23:59")
+        assert result == (23, 59)
+
+    def test_parse_time_invalid_format(self):
+        """Test parsing invalid time format."""
+        with pytest.raises(ValueError):
+            parse_time("invalid")
+
+    def test_parse_time_out_of_range_hour(self):
+        """Test parsing hour out of range."""
+        with pytest.raises(ValueError):
+            parse_time("25:00")
+
+    def test_parse_time_out_of_range_minute(self):
+        """Test parsing minute out of range."""
+        with pytest.raises(ValueError):
+            parse_time("12:60")
+
+
+class TestFindImagesEdgeCases:
+    """Test image finding edge cases."""
+
+    def test_find_images_empty_directory(self, tmp_path):
+        """Test finding images in empty directory."""
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+
+        now = datetime.now()
+        result = find_images_in_range(
+            str(empty_dir),
+            "test",
+            now,
+            now,
+        )
+
+        assert result == []
+
+    def test_find_images_no_matching_pattern(self, tmp_path):
+        """Test finding images with no matching pattern."""
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+
+        # Create image with wrong pattern
+        (img_dir / "wrong_pattern_001.jpg").touch()
+
+        now = datetime.now()
+        result = find_images_in_range(
+            str(img_dir),
+            "test",
+            now,
+            now,
+        )
+
+        assert result == []
+
+    def test_find_images_malformed_filename(self, tmp_path):
+        """Test finding images handles malformed filenames gracefully."""
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+
+        # Create files with malformed names that might trip up the parser
+        (img_dir / "test_malformed.jpg").touch()
+        (img_dir / "test_.jpg").touch()
+        (img_dir / ".jpg").touch()
+
+        now = datetime.now()
+        # Should not crash
+        result = find_images_in_range(
+            str(img_dir),
+            "test",
+            now,
+            now,
+        )
+
+        # Result should be empty or contain only valid matches
+        assert isinstance(result, list)
+
+
+class TestVideoEncoderSelection:
+    """Test video encoder selection."""
+
+    @pytest.fixture
+    def temp_images(self):
+        """Create temporary test images."""
+        temp_dir = tempfile.mkdtemp()
+        images = []
+        for i in range(3):
+            img_path = Path(temp_dir) / f"test_{i:04d}.jpg"
+            img_path.touch()
+            images.append(img_path)
+        yield images
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @pytest.fixture
+    def temp_output(self):
+        """Create temporary output path."""
+        temp_dir = tempfile.mkdtemp()
+        output = Path(temp_dir) / "test_output.mp4"
+        yield output
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @patch("subprocess.run")
+    def test_default_encoder_h264(self, mock_run, temp_images, temp_output):
+        """Test that default encoder is h264."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(temp_images, temp_output)
+
+        cmd = mock_run.call_args[0][0]
+        # Should use libx264 by default
+        assert "libx264" in cmd or "h264" in " ".join(cmd).lower()
+
+    @patch("subprocess.run")
+    def test_encoder_with_crf_setting(self, mock_run, temp_images, temp_output):
+        """Test that CRF setting is passed to FFmpeg."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(temp_images, temp_output, crf=18)
+
+        cmd = mock_run.call_args[0][0]
+        assert "-crf" in cmd
+        crf_index = cmd.index("-crf")
+        assert cmd[crf_index + 1] == "18"
+
+
+class TestResolutionScaling:
+    """Test resolution scaling options."""
+
+    @pytest.fixture
+    def temp_images(self):
+        """Create temporary test images."""
+        temp_dir = tempfile.mkdtemp()
+        images = []
+        for i in range(3):
+            img_path = Path(temp_dir) / f"test_{i:04d}.jpg"
+            img_path.touch()
+            images.append(img_path)
+        yield images
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @pytest.fixture
+    def temp_output(self):
+        """Create temporary output path."""
+        temp_dir = tempfile.mkdtemp()
+        output = Path(temp_dir) / "test_output.mp4"
+        yield output
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @patch("subprocess.run")
+    def test_resolution_scaling_applied(self, mock_run, temp_images, temp_output):
+        """Test that resolution scaling is applied when specified."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        # Resolution is a tuple (width, height)
+        create_video(temp_images, temp_output, resolution=(1920, 1080))
+
+        cmd = mock_run.call_args[0][0]
+        cmd_str = " ".join(str(c) for c in cmd)
+        # Should contain scale filter or resolution in command
+        assert "scale" in cmd_str or "1920" in cmd_str
+
+
+class TestDeflickerFilter:
+    """Test deflicker filter options."""
+
+    @pytest.fixture
+    def temp_images(self):
+        """Create temporary test images."""
+        temp_dir = tempfile.mkdtemp()
+        images = []
+        for i in range(3):
+            img_path = Path(temp_dir) / f"test_{i:04d}.jpg"
+            img_path.touch()
+            images.append(img_path)
+        yield images
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @pytest.fixture
+    def temp_output(self):
+        """Create temporary output path."""
+        temp_dir = tempfile.mkdtemp()
+        output = Path(temp_dir) / "test_output.mp4"
+        yield output
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @patch("subprocess.run")
+    def test_deflicker_disabled(self, mock_run, temp_images, temp_output):
+        """Test video creation without deflicker."""
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(temp_images, temp_output, deflicker=False)
+
+        cmd = mock_run.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        # Should not contain deflicker filter
+        assert "deflicker" not in cmd_str
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
