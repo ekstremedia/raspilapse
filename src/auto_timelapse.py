@@ -113,6 +113,10 @@ class AdaptiveTimelapse:
         # Critical ramp-down speed for severe overexposure (default 0.70 = very aggressive)
         self._critical_rampdown_speed = transition_config.get("critical_rampdown_speed", 0.70)
 
+        # Fast ramp-up speeds for underexposure correction (symmetric to ramp-down)
+        self._fast_rampup_speed = transition_config.get("fast_rampup_speed", 0.50)
+        self._critical_rampup_speed = transition_config.get("critical_rampup_speed", 0.70)
+
         # Rapid lux change detection
         self._previous_raw_lux: float = None  # For detecting rapid changes
         self._lux_change_threshold = transition_config.get(
@@ -497,8 +501,8 @@ class AdaptiveTimelapse:
         # Too dark (negative error) → increase correction factor (more exposure)
         self._brightness_correction_factor *= 1.0 - adjustment
 
-        # Clamp to reasonable range (0.5x to 4x correction) - raised floor from 0.25
-        self._brightness_correction_factor = max(0.5, min(4.0, self._brightness_correction_factor))
+        # Clamp to reasonable range (0.3x to 4x correction) - lowered floor for faster transition recovery
+        self._brightness_correction_factor = max(0.3, min(4.0, self._brightness_correction_factor))
 
         logger.debug(
             f"Brightness feedback: actual={actual_brightness:.1f}, "
@@ -522,6 +526,21 @@ class AdaptiveTimelapse:
             return self._critical_rampdown_speed
         else:
             return self._fast_rampdown_speed
+
+    def _get_rampup_speed(self) -> float:
+        """
+        Get the appropriate ramp-up speed based on underexposure severity.
+
+        Returns:
+            Speed value for exposure/gain interpolation, or None for normal speed
+        """
+        if not self._underexposure_detected:
+            return None
+
+        if self._underexposure_severity == "critical":
+            return self._critical_rampup_speed
+        else:
+            return self._fast_rampup_speed
 
     def _apply_proactive_exposure_correction(self, test_image_path: str, raw_lux: float) -> None:
         """
@@ -556,7 +575,7 @@ class AdaptiveTimelapse:
                 # This helps when transitioning from night to day
                 reduction = 0.8  # 20% reduction (was 30%)
                 self._brightness_correction_factor *= reduction
-                self._brightness_correction_factor = max(0.5, self._brightness_correction_factor)
+                self._brightness_correction_factor = max(0.3, self._brightness_correction_factor)
                 logger.info(
                     f"[Proactive] Very bright test shot ({test_brightness:.1f}) - "
                     f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
@@ -565,7 +584,7 @@ class AdaptiveTimelapse:
                 # Scene is moderately bright - gentle reduction (softened)
                 reduction = 0.9  # 10% reduction (was 15%)
                 self._brightness_correction_factor *= reduction
-                self._brightness_correction_factor = max(0.5, self._brightness_correction_factor)
+                self._brightness_correction_factor = max(0.3, self._brightness_correction_factor)
                 logger.debug(
                     f"[Proactive] Bright test shot ({test_brightness:.1f}) - "
                     f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
@@ -579,7 +598,7 @@ class AdaptiveTimelapse:
                     reduction = min(0.85, 1.0 / (lux_ratio * 0.5))  # Softened from 0.8
                     self._brightness_correction_factor *= reduction
                     self._brightness_correction_factor = max(
-                        0.5, self._brightness_correction_factor  # Raised floor from 0.25
+                        0.3, self._brightness_correction_factor  # Lowered floor for faster recovery
                     )
                     logger.info(
                         f"[Proactive] Rapid brightening ({lux_ratio:.1f}x) - "
@@ -691,14 +710,15 @@ class AdaptiveTimelapse:
 
     def _check_underexposure(self, brightness_metrics: Dict) -> bool:
         """
-        Check if the image is underexposed (especially at minimum exposure).
+        Check if the image is underexposed and trigger fast ramp-up.
 
         Uses two-tier detection symmetric to overexposure:
-        - WARNING level (brightness < 100): Moderate recovery
-        - CRITICAL level (brightness < 80): Aggressive recovery
+        - WARNING level (brightness < 90): Moderate recovery
+        - CRITICAL level (brightness < 70): Aggressive recovery
 
-        This is especially important when we're at minimum exposure and can't
-        reduce exposure further - we need to boost the correction factor.
+        Unlike the previous version, this works in ANY mode - not just at
+        minimum exposure. This is critical for smooth day-to-night transitions
+        where the exposure is ramping UP but lagging behind the light drop.
 
         Args:
             brightness_metrics: Dictionary with brightness analysis results
@@ -711,49 +731,39 @@ class AdaptiveTimelapse:
 
         mean_brightness = brightness_metrics.get("mean_brightness", 128)
 
-        # Get minimum exposure from config to check if we're at the limit
-        adaptive_config = self.config.get("adaptive_timelapse", {})
-        min_exposure = adaptive_config.get("day_mode", {}).get("exposure_time", 0.02)
-
-        # Only flag underexposure if we're near minimum exposure
-        # (otherwise normal feedback will handle it)
-        at_min_exposure = (
-            self._last_exposure_time is not None and self._last_exposure_time <= min_exposure * 1.5
-        )
-
-        # Thresholds for underexposure detection
-        brightness_warning = 100  # Early warning (target is 120)
-        brightness_critical = 80  # Critical underexposure
-        brightness_safe = 110  # Clear underexposure above this
+        # Thresholds for underexposure detection (lowered for faster response)
+        brightness_warning = 90  # Early warning (target is 120)
+        brightness_critical = 70  # Critical underexposure
+        brightness_safe = 105  # Clear underexposure above this
 
         was_underexposed = self._underexposure_detected
 
-        if at_min_exposure and mean_brightness < brightness_critical:
-            # Critical underexposure at min exposure - activate fast recovery
+        if mean_brightness < brightness_critical:
+            # Critical underexposure - activate aggressive fast recovery
             self._underexposure_detected = True
             self._underexposure_severity = "critical"
             if not was_underexposed:
                 logger.warning(
-                    f"[FastRecovery] CRITICAL UNDEREXPOSURE: brightness={mean_brightness:.1f}, "
-                    f"at min exposure - activating aggressive recovery"
+                    f"[FastRecovery] CRITICAL UNDEREXPOSURE: brightness={mean_brightness:.1f} "
+                    f"- activating aggressive ramp-up"
                 )
-        elif at_min_exposure and mean_brightness < brightness_warning:
+        elif mean_brightness < brightness_warning:
             # Warning level underexposure - activate moderate fast recovery
             self._underexposure_detected = True
             self._underexposure_severity = "warning"
             if not was_underexposed:
                 logger.warning(
-                    f"[FastRecovery] UNDEREXPOSURE WARNING: brightness={mean_brightness:.1f}, "
-                    f"at min exposure - activating fast recovery"
+                    f"[FastRecovery] UNDEREXPOSURE WARNING: brightness={mean_brightness:.1f} "
+                    f"- activating fast ramp-up"
                 )
-        elif mean_brightness > brightness_safe or not at_min_exposure:
-            # Back to safe range or no longer at min exposure - deactivate
+        elif mean_brightness > brightness_safe:
+            # Back to safe range - deactivate fast recovery
             self._underexposure_detected = False
             self._underexposure_severity = None
             if was_underexposed:
                 logger.info(
                     f"[FastRecovery] Underexposure cleared: brightness={mean_brightness:.1f} "
-                    f"- resuming normal adjustment"
+                    f"- resuming normal interpolation"
                 )
 
         return self._underexposure_detected
@@ -1330,8 +1340,13 @@ class AdaptiveTimelapse:
             target_exposure = night["max_exposure_time"]
 
             # Apply smooth interpolation even in night mode for seamless transitions
-            # Use severity-aware ramp-down if overexposure was detected
-            exposure_speed = self._get_rampdown_speed()
+            # Use fast ramp-up for underexposure or fast ramp-down for overexposure
+            if self._underexposure_detected:
+                exposure_speed = self._get_rampup_speed()
+            elif self._overexposure_detected:
+                exposure_speed = self._get_rampdown_speed()
+            else:
+                exposure_speed = None
             smooth_gain = self._interpolate_gain(target_gain)
             smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
@@ -1368,8 +1383,13 @@ class AdaptiveTimelapse:
                 target_exposure = self._calculate_target_exposure_from_lux(lux)
 
                 # Apply smooth interpolation to prevent jumps
-                # Use severity-aware ramp-down if overexposure was detected
-                exposure_speed = self._get_rampdown_speed()
+                # Use fast ramp-up for underexposure or fast ramp-down for overexposure
+                if self._underexposure_detected:
+                    exposure_speed = self._get_rampup_speed()
+                elif self._overexposure_detected:
+                    exposure_speed = self._get_rampdown_speed()
+                else:
+                    exposure_speed = None
                 smooth_gain = self._interpolate_gain(target_gain)
                 smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
@@ -1456,8 +1476,13 @@ class AdaptiveTimelapse:
                 )
 
                 # Apply smooth interpolation to prevent jumps
-                # Use severity-aware ramp-down if overexposure was detected
-                exposure_speed = self._get_rampdown_speed()
+                # Use fast ramp-up for underexposure or fast ramp-down for overexposure
+                if self._underexposure_detected:
+                    exposure_speed = self._get_rampup_speed()
+                elif self._overexposure_detected:
+                    exposure_speed = self._get_rampdown_speed()
+                else:
+                    exposure_speed = None
                 smooth_gain = self._interpolate_gain(target_gain)
                 smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 

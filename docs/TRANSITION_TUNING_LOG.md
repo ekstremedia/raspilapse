@@ -4,6 +4,91 @@ This document tracks adjustments made to day/night transition parameters and the
 
 ---
 
+## 2026-01-10 - Adjustment #5: Fast Ramp-Up for Day-to-Night Transition
+
+### Problem
+Slitscan showed a prominent **dark vertical band** during day-to-night transition (~16:00-18:00). Exposure graphs confirmed the issue:
+- Lux drops rapidly from 80 to 3 (day threshold to night)
+- Target exposure jumps instantly from 20ms to 20s in calculation
+- But actual exposure lags behind due to slow interpolation (0.10 per frame)
+- Result: 10+ minutes of underexposed frames = dark band
+
+### Root Cause Analysis
+
+1. **Asymmetric response** - Fast ramp-DOWN exists for overexposure, but NO fast ramp-UP for underexposure
+2. **Underexposure detection too narrow** - Only triggered at minimum exposure (`at_min_exposure`), but the problem occurs during transition when exposure is ramping UP
+3. **Slow interpolation** - 0.10 speed means 10% change per frame, taking 20+ frames to reach target
+4. **Raised correction floor** - Previous fix raised floor from 0.25 to 0.5, limiting recovery range
+
+### Solution: Symmetric Fast Ramp-Up
+
+#### Part 1: New `_get_rampup_speed()` Method
+Mirrors existing `_get_rampdown_speed()` for overexposure:
+```python
+def _get_rampup_speed(self) -> float:
+    if not self._underexposure_detected:
+        return None
+    if self._underexposure_severity == "critical":
+        return self._critical_rampup_speed  # 0.70
+    return self._fast_rampup_speed  # 0.50
+```
+
+#### Part 2: Fixed Underexposure Detection
+Removed `at_min_exposure` restriction - now triggers in ANY mode:
+
+| Level | Brightness | Ramp Speed | Action |
+|-------|------------|------------|--------|
+| Critical | < 70 | 0.70 (7x faster) | Aggressive ramp-up |
+| Warning | < 90 | 0.50 (5x faster) | Fast ramp-up |
+| Normal | > 105 | 0.10 | Normal interpolation |
+
+#### Part 3: Updated Camera Settings
+All 3 modes now check both under AND overexposure:
+```python
+if self._underexposure_detected:
+    exposure_speed = self._get_rampup_speed()
+elif self._overexposure_detected:
+    exposure_speed = self._get_rampdown_speed()
+else:
+    exposure_speed = None
+```
+
+#### Part 4: Lowered Correction Floor
+Changed from 0.5 to 0.3 in all 4 locations for faster recovery.
+
+### New Configuration Options
+
+```yaml
+transition_mode:
+  # Fast ramp-up speeds for underexposure (symmetric to ramp-down)
+  fast_rampup_speed: 0.50      # Warning level (5x faster than 0.10)
+  critical_rampup_speed: 0.70  # Critical level (7x faster than 0.10)
+```
+
+### Files Modified
+
+- `src/auto_timelapse.py`:
+  - Lines 116-118: Added `_fast_rampup_speed` and `_critical_rampup_speed` config loading
+  - Lines 530-543: New `_get_rampup_speed()` method
+  - Lines 711-769: Rewrote `_check_underexposure()` to work in any mode
+  - Lines 1344-1349, 1387-1392, 1480-1485: Updated exposure speed selection in all 3 modes
+  - Lines 505, 578, 587, 601: Changed correction floor from 0.5 to 0.3
+- `config/config.yml`: Added `fast_rampup_speed` and `critical_rampup_speed` options
+- `tests/test_auto_timelapse.py`: Added 13 new tests (TestUnderexposureDetection, TestRampUpSpeed, TestExposureSpeedSelection)
+
+### Expected Results
+- **Day-to-night**: When brightness drops below 90, fast ramp-up kicks in (5-7x faster)
+- **Smoother slitscan**: Dark band should be much narrower or eliminated
+- **Symmetric behavior**: Now matches fast ramp-down for overexposure
+
+### Verification
+Monitor next evening transition (around 16:00-18:00). Look for:
+- `[FastRecovery]` log messages during transition
+- Smoother exposure curve in graphs
+- Reduced/eliminated dark band in tomorrow's slitscan
+
+---
+
 ## 2026-01-09 - Adjustment #4: Underexposure Prevention for Daytime
 
 ### Problem

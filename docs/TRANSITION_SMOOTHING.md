@@ -441,58 +441,71 @@ adaptive_timelapse:
     sequential_ramping: true  # Default: true
 ```
 
-### 12. Underexposure Detection and Fast Recovery
+### 12. Underexposure Detection and Fast Ramp-Up
 
-Added in Adjustment #4 (2026-01-09) to handle dark dips during daytime.
+Added in Adjustment #4 (2026-01-09), significantly improved in Adjustment #5 (2026-01-10).
 
-**Problem:** When exposure hits minimum (20ms) and gain is at minimum (1.0), images can be too dark with no way to brighten them through normal exposure adjustment.
+**Problem:** During day-to-night transitions, exposure needs to ramp from ~20ms to ~20s. With slow interpolation (0.10 per frame), the exposure lags behind the rapidly dropping light, causing dark frames - visible as a dark band in slitscans.
 
-**Solution:** Symmetric to overexposure detection - detect underexposure and boost correction factor.
+**Solution:** Symmetric to overexposure detection - detect underexposure and use fast ramp-UP speed.
 
 ```python
 def _check_underexposure(self, brightness_metrics: Dict) -> bool:
     mean_brightness = brightness_metrics.get("mean_brightness", 128)
 
-    # Only check if at/near minimum exposure
-    at_min_exposure = self._last_exposure_time <= min_exposure * 1.5
+    # Thresholds (lowered for faster response)
+    brightness_warning = 90   # Early warning (target is 120)
+    brightness_critical = 70  # Critical underexposure
+    brightness_safe = 105     # Clear above this
 
-    if at_min_exposure and mean_brightness < 80:
+    if mean_brightness < brightness_critical:
         self._underexposure_severity = "critical"
-    elif at_min_exposure and mean_brightness < 100:
+    elif mean_brightness < brightness_warning:
         self._underexposure_severity = "warning"
-    elif mean_brightness > 110 or not at_min_exposure:
+    elif mean_brightness > brightness_safe:
         self._underexposure_severity = None
 
     return self._underexposure_detected
 ```
 
-**Fast Recovery in Brightness Feedback:**
+**Key Change (2026-01-10):** Now works in ANY mode, not just at minimum exposure. This is critical for smooth day-to-night transitions where exposure is ramping UP but lagging behind the light drop.
 
-When underexposure is detected at minimum exposure, boost correction factor by 1.2x per frame:
+**Fast Ramp-Up Speed (New!):**
+
+When underexposure is detected, exposure interpolation speed increases from 0.10 to 0.50-0.70:
 
 ```python
-def _apply_brightness_feedback(self, actual_brightness):
-    # Fast recovery when underexposed at min exposure
-    if at_min_exposure and actual_brightness < 90:
-        self._brightness_correction_factor *= 1.2  # 20% boost per frame
-        return self._brightness_correction_factor
-
-    # Normal gradual adjustment otherwise
-    ...
+def _get_rampup_speed(self) -> float:
+    """Get appropriate ramp-up speed based on underexposure severity."""
+    if not self._underexposure_detected:
+        return None
+    if self._underexposure_severity == "critical":
+        return self._critical_rampup_speed  # 0.70
+    return self._fast_rampup_speed  # 0.50
 ```
 
 **Threshold Summary:**
 
-| Level | Brightness | Condition | Action |
-|-------|------------|-----------|--------|
-| Critical | < 80 | At min exposure | Aggressive recovery |
-| Warning | < 100 | At min exposure | Fast recovery |
-| Clear | > 110 | Any | Normal adjustment |
+| Level | Brightness | Ramp Speed | Action |
+|-------|------------|------------|--------|
+| Critical | < 70 | 0.70 (7x faster) | Aggressive ramp-up |
+| Warning | < 90 | 0.50 (5x faster) | Fast ramp-up |
+| Normal | > 105 | 0.10 | Normal interpolation |
+
+**Configuration:**
+```yaml
+transition_mode:
+  # Fast ramp-up speeds for underexposure correction
+  fast_rampup_speed: 0.50      # Warning level
+  critical_rampup_speed: 0.70  # Critical level
+```
 
 **State Variables:**
 ```python
 self._underexposure_detected: bool = False
 self._underexposure_severity: str = None  # "warning" or "critical"
+self._fast_rampup_speed: float = 0.50
+self._critical_rampup_speed: float = 0.70
 ```
 
 ---
@@ -687,6 +700,7 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 - [x] Two-tier overexposure detection with severity levels (implemented 2026-01-08)
 - [x] Proactive exposure correction based on test shot brightness (implemented 2026-01-08)
 - [x] Rapid lux change detection (implemented 2026-01-08)
+- [x] Fast ramp-up for underexposure (symmetric to ramp-down) (implemented 2026-01-10)
 - [ ] Adaptive WB transition speed based on lux rate of change
 - [ ] Per-channel WB smoothing (red and blue could have different speeds)
 - [ ] Sunset/sunrise detection for optimized transition timing
@@ -696,6 +710,40 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 ---
 
 ## Changelog
+
+### 2026-01-10 - Fast Ramp-Up for Underexposure (Dark Band Fix)
+
+**Problem Identified:**
+- Slitscan showed prominent dark band during day-to-night transition
+- Exposure graphs showed exposure lagging behind rapidly dropping light
+- Root cause: exposure ramp-up too slow (0.10 per frame) to track fast light changes
+
+**Fast Ramp-Up for Underexposure (NEW!):**
+- Added `_get_rampup_speed()` method - symmetric to existing `_get_rampdown_speed()`
+- Warning level (brightness < 90): uses `fast_rampup_speed` (0.50 = 5x faster)
+- Critical level (brightness < 70): uses `critical_rampup_speed` (0.70 = 7x faster)
+- New config options: `fast_rampup_speed`, `critical_rampup_speed`
+
+**Fixed Underexposure Detection:**
+- Now triggers in ANY mode, not just at minimum exposure
+- Previous version only detected underexposure when `at_min_exposure` was true
+- This missed the critical case: day-to-night transition where exposure is ramping UP
+- Lowered thresholds: warning=90 (was 100), critical=70 (was 80), safe=105 (was 110)
+
+**Updated Camera Settings Logic:**
+- All 3 modes (night, day, transition) now check both underexposure AND overexposure
+- Underexposure takes priority (ramp-up used if both flags somehow set)
+- Applies fast ramp-up speed to exposure interpolation
+
+**Lowered Brightness Correction Floor:**
+- Changed from 0.5 to 0.3 in all 4 locations
+- Allows faster recovery during bright→dark transitions
+
+**Test Coverage:**
+- Added 13 new tests for underexposure detection and ramp-up speed
+- TestUnderexposureDetection: 6 tests
+- TestRampUpSpeed: 4 tests
+- TestExposureSpeedSelection: 3 tests
 
 ### 2026-01-08 - Multi-Layer Overexposure Prevention
 

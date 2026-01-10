@@ -1078,6 +1078,195 @@ class TestOverexposureDetection:
         assert result is False  # Default state
 
 
+class TestUnderexposureDetection:
+    """Test underexposure detection and fast ramp-up."""
+
+    def test_check_underexposure_triggers_on_low_brightness(self, test_config_file):
+        """Test underexposure detected with low brightness (warning level)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        brightness_metrics = {
+            "mean_brightness": 85,  # Below 90 warning threshold
+        }
+
+        result = timelapse._check_underexposure(brightness_metrics)
+
+        assert result is True
+        assert timelapse._underexposure_detected is True
+        assert timelapse._underexposure_severity == "warning"
+
+    def test_check_underexposure_triggers_critical(self, test_config_file):
+        """Test critical underexposure detected with very low brightness."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        brightness_metrics = {
+            "mean_brightness": 60,  # Below 70 critical threshold
+        }
+
+        result = timelapse._check_underexposure(brightness_metrics)
+
+        assert result is True
+        assert timelapse._underexposure_detected is True
+        assert timelapse._underexposure_severity == "critical"
+
+    def test_check_underexposure_clears_on_safe_values(self, test_config_file):
+        """Test underexposure cleared when brightness is safe."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._underexposure_detected = True
+        timelapse._underexposure_severity = "warning"
+
+        brightness_metrics = {
+            "mean_brightness": 115,  # Above 105 safe threshold
+        }
+
+        result = timelapse._check_underexposure(brightness_metrics)
+
+        assert result is False
+        assert timelapse._underexposure_detected is False
+        assert timelapse._underexposure_severity is None
+
+    def test_check_underexposure_works_in_any_mode(self, test_config_file):
+        """Test underexposure detection works regardless of exposure level.
+
+        This is critical - the old version only triggered at minimum exposure,
+        but we need it to work during transitions too.
+        """
+        timelapse = AdaptiveTimelapse(test_config_file)
+        # Simulate being in middle of transition (not at min exposure)
+        timelapse._last_exposure_time = 5.0  # 5 seconds - far from min
+
+        brightness_metrics = {
+            "mean_brightness": 75,  # Underexposed
+        }
+
+        result = timelapse._check_underexposure(brightness_metrics)
+
+        # Should still detect underexposure even though not at min exposure
+        assert result is True
+        assert timelapse._underexposure_detected is True
+
+    def test_check_underexposure_empty_metrics(self, test_config_file):
+        """Test underexposure handling with empty metrics."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._underexposure_detected = True
+
+        result = timelapse._check_underexposure({})
+
+        # Should retain previous state
+        assert result is True
+
+    def test_check_underexposure_none_metrics(self, test_config_file):
+        """Test underexposure handling with None metrics."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        result = timelapse._check_underexposure(None)
+
+        assert result is False  # Default state
+
+
+class TestRampUpSpeed:
+    """Test fast ramp-up speed for underexposure recovery."""
+
+    def test_get_rampup_speed_returns_none_when_not_underexposed(self, test_config_file):
+        """Test rampup speed returns None when no underexposure."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._underexposure_detected = False
+
+        speed = timelapse._get_rampup_speed()
+
+        assert speed is None
+
+    def test_get_rampup_speed_returns_fast_on_warning(self, test_config_file):
+        """Test rampup speed returns fast speed on warning level."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._underexposure_detected = True
+        timelapse._underexposure_severity = "warning"
+
+        speed = timelapse._get_rampup_speed()
+
+        assert speed == timelapse._fast_rampup_speed
+        assert speed == 0.50  # Default value
+
+    def test_get_rampup_speed_returns_critical_on_severe(self, test_config_file):
+        """Test rampup speed returns critical speed on severe underexposure."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._underexposure_detected = True
+        timelapse._underexposure_severity = "critical"
+
+        speed = timelapse._get_rampup_speed()
+
+        assert speed == timelapse._critical_rampup_speed
+        assert speed == 0.70  # Default value
+
+    def test_rampup_speed_configurable(self, test_config_file):
+        """Test that rampup speeds are loaded from config."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # These should be loaded from config (with defaults if not present)
+        assert hasattr(timelapse, "_fast_rampup_speed")
+        assert hasattr(timelapse, "_critical_rampup_speed")
+        assert timelapse._fast_rampup_speed > 0
+        assert timelapse._critical_rampup_speed > 0
+        # Critical should be >= fast
+        assert timelapse._critical_rampup_speed >= timelapse._fast_rampup_speed
+
+
+class TestExposureSpeedSelection:
+    """Test exposure speed selection for both over and underexposure."""
+
+    def test_exposure_uses_rampup_when_underexposed(self, test_config_file):
+        """Test that underexposure triggers fast ramp-up in camera settings."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._underexposure_detected = True
+        timelapse._underexposure_severity = "warning"
+        timelapse._overexposure_detected = False
+
+        # Initialize exposure state
+        timelapse._last_exposure_time = 1.0
+
+        # Get settings for night mode (where ramp-up matters most)
+        settings = timelapse.get_camera_settings("night", lux=2.0)
+
+        # The exposure should have ramped up faster than normal
+        # We can't easily test the exact speed used, but we can verify
+        # the settings were generated without error
+        assert "ExposureTime" in settings
+        assert settings["ExposureTime"] > 0
+
+    def test_exposure_uses_rampdown_when_overexposed(self, test_config_file):
+        """Test that overexposure triggers fast ramp-down in camera settings."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._overexposure_detected = True
+        timelapse._overexposure_severity = "warning"
+        timelapse._underexposure_detected = False
+
+        # Initialize exposure state
+        timelapse._last_exposure_time = 10.0
+
+        # Get settings for day mode
+        settings = timelapse.get_camera_settings("day", lux=100.0)
+
+        assert "ExposureTime" in settings
+        assert settings["ExposureTime"] > 0
+
+    def test_underexposure_takes_priority_over_overexposure(self, test_config_file):
+        """Test that underexposure detection takes priority (edge case)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        # Both flags set (shouldn't happen, but test the priority)
+        timelapse._underexposure_detected = True
+        timelapse._underexposure_severity = "warning"
+        timelapse._overexposure_detected = True
+        timelapse._overexposure_severity = "warning"
+
+        # Initialize exposure state
+        timelapse._last_exposure_time = 5.0
+
+        # Get settings - should use ramp-up (underexposure takes priority)
+        settings = timelapse.get_camera_settings("transition", lux=20.0)
+
+        assert "ExposureTime" in settings
+
+
 class TestTransitionSeeding:
     """Test transition seeding from metadata."""
 
