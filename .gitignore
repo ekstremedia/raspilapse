@@ -24,6 +24,7 @@ metadata/
 graphs/
 videos/
 logs/
+data/
 
 # Output files
 *.jpg
@@ -32,6 +33,7 @@ logs/
 *.mp4
 *.h264
 *.log
+*.db
 *_metadata.json
 
 # IDE

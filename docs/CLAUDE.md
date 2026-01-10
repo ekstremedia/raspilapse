@@ -789,6 +789,79 @@ Solar patterns indexed by day-of-year automatically adapt to seasonal changes.
 
 ---
 
+## SQLite Database Storage
+
+Historical capture data storage for analysis, graphs, and exposure planning.
+
+### Features
+- **Denormalized storage**: Single table for efficient queries
+- **Complete capture data**: Metadata, brightness metrics, weather
+- **Time-based queries**: By range, by lux, hourly averages
+- **Graceful error handling**: Never crashes timelapse
+- **Auto-initialization**: Creates schema and directories
+
+### Files
+| File | Purpose |
+|------|---------|
+| `src/database.py` | CaptureDatabase class |
+| `tests/test_database.py` | 34 comprehensive tests |
+| `data/timelapse.db` | SQLite database file |
+
+### Configuration
+```yaml
+# config/config.yml
+database:
+  enabled: true                # Enable database storage
+  path: "data/timelapse.db"    # Database location
+  create_directories: true     # Auto-create data dir
+```
+
+### Schema
+```sql
+-- Key fields (36 total columns)
+timestamp, unix_timestamp, camera_id, image_path,
+exposure_time_us, analogue_gain, colour_gains_r/b, colour_temperature,
+lux, mode, sun_elevation,
+brightness_mean/median/std, brightness_p5/p25/p75/p95,
+underexposed_pct, overexposed_pct,
+weather_temperature/humidity/wind_speed/wind_gust/rain/pressure,
+system_cpu_temp, system_load_1min/5min/15min
+```
+
+### Usage Examples
+```python
+from src.database import CaptureDatabase
+
+# Initialize
+db = CaptureDatabase(config)
+
+# Store capture
+db.store_capture(image_path, metadata, mode, lux, brightness, weather, sun_elev)
+
+# Query captures
+captures = db.get_captures_in_range(start_time, end_time)
+captures = db.get_captures_by_lux_range(0, 10)  # Night captures
+hourly = db.get_hourly_averages(start_time, end_time)
+
+# Statistics
+stats = db.get_statistics()  # total_captures, earliest, latest, db_size_mb
+```
+
+### Commands
+```bash
+# Check database status
+python3 -c "
+from src.database import CaptureDatabase
+import yaml
+with open('config/config.yml') as f:
+    config = yaml.safe_load(f)
+db = CaptureDatabase(config)
+print(db.get_statistics())
+"
+```
+
+---
+
 ## Development Guidelines
 
 - Use Picamera2's native methods rather than shell commands

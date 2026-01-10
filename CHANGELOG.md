@@ -39,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Uses faster interpolation to recover from dark frames
   - Configurable via `fast_rampup_speed` and `critical_rampup_speed`
 
+- **SQLite Database Storage**: Historical capture data for analysis and graphs
+  - Stores every capture with full metadata, brightness analysis, weather data, and system metrics
+  - System metrics: CPU temperature and load averages (1min/5min/15min)
+  - Single denormalized table (36 columns) for efficient querying
+  - Query methods: by time range, by lux range, hourly averages
+  - Never crashes timelapse - all DB operations gracefully handle errors
+  - Configurable via `database.enabled` and `database.path` in config
+  - New files: `src/database.py`, `tests/test_database.py` (35 tests)
+  - Database stored at `data/timelapse.db`
+
 ### Changed
 - Bootstrapped ML system from 7 days of historical data (20,940 frames)
 - ML system enabled and active in config (shadow_mode: false)

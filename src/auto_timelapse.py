@@ -28,6 +28,8 @@ try:
     from src.logging_config import get_logger
     from src.capture_image import CameraConfig, ImageCapture
     from src.ml_exposure import MLExposurePredictor
+    from src.database import CaptureDatabase
+    from src.system_monitor import SystemMonitor
 except ImportError:
     from logging_config import get_logger
     from capture_image import CameraConfig, ImageCapture
@@ -36,6 +38,16 @@ except ImportError:
         from ml_exposure import MLExposurePredictor
     except ImportError:
         MLExposurePredictor = None  # ML module not available
+
+    try:
+        from database import CaptureDatabase
+    except ImportError:
+        CaptureDatabase = None  # Database module not available
+
+    try:
+        from system_monitor import SystemMonitor
+    except ImportError:
+        SystemMonitor = None  # System monitor not available
 
 # Initialize logger
 logger = get_logger("auto_timelapse")
@@ -141,6 +153,18 @@ class AdaptiveTimelapse:
         self._ml_enabled = False
         self._init_ml_predictor()
 
+        # Database storage for capture history
+        self._database = None
+        self._init_database()
+
+        # System monitor for CPU temp and load (for database storage)
+        self._system_monitor = None
+        if SystemMonitor is not None:
+            try:
+                self._system_monitor = SystemMonitor()
+            except Exception as e:
+                logger.debug(f"[System] Failed to initialize monitor: {e}")
+
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -206,6 +230,29 @@ class AdaptiveTimelapse:
             logger.warning(f"[ML] Failed to initialize predictor: {e}")
             self._ml_predictor = None
             self._ml_enabled = False
+
+    def _init_database(self):
+        """Initialize database storage for capture history."""
+        if CaptureDatabase is None:
+            logger.debug("[DB] CaptureDatabase not available")
+            return
+
+        db_config = self.config.get("database", {})
+        if not db_config.get("enabled", False):
+            logger.debug("[DB] Database storage disabled in config")
+            return
+
+        try:
+            self._database = CaptureDatabase(self.config)
+            stats = self._database.get_statistics()
+            if stats.get("enabled"):
+                logger.info(
+                    f"[DB] Initialized: {stats.get('db_path', 'unknown')}, "
+                    f"captures={stats.get('total_captures', 0)}"
+                )
+        except Exception as e:
+            logger.warning(f"[DB] Failed to initialize database: {e}")
+            self._database = None
 
     def _get_sun_elevation(self) -> Optional[float]:
         """
@@ -2087,6 +2134,41 @@ class AdaptiveTimelapse:
                             self._last_day_capture_metadata = capture_metadata
                         except Exception as e:
                             logger.debug(f"Could not read capture metadata for WB reference: {e}")
+
+                    # Store capture in database for historical analysis
+                    if self._database is not None:
+                        try:
+                            # Load metadata if not already loaded
+                            import json
+
+                            if metadata_path:
+                                with open(metadata_path, "r") as f:
+                                    db_metadata = json.load(f)
+                            else:
+                                db_metadata = {}
+
+                            # Get weather data from overlay (if available)
+                            weather_data = None
+                            if capture and capture.overlay and capture.overlay.weather:
+                                weather_data = capture.overlay.weather.get_weather_data()
+
+                            # Get system metrics (CPU temp, load)
+                            system_metrics = None
+                            if self._system_monitor:
+                                system_metrics = self._system_monitor.get_all_metrics()
+
+                            self._database.store_capture(
+                                image_path=image_path,
+                                metadata=db_metadata,
+                                mode=mode,
+                                lux=lux,
+                                brightness_metrics=brightness_metrics,
+                                weather_data=weather_data,
+                                sun_elevation=self._sun_elevation,
+                                system_metrics=system_metrics,
+                            )
+                        except Exception as e:
+                            logger.debug(f"[DB] Failed to store capture: {e}")
 
                 except Exception as e:
                     logger.error(f"Frame capture failed: {e}", exc_info=True)
