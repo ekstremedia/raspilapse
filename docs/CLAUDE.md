@@ -630,7 +630,7 @@ Powerful analysis tool that generates beautiful graphs and Excel reports from ti
 **Features:**
 - ✅ **Fast**: Only reads JSON metadata files (no image processing)
 - ✅ **Beautiful dark-themed lux graph** with day/night zones
-- ✅ **6 detailed graphs**: Lux, Exposure, Gain, Temperature, White Balance, Overview
+- ✅ **5 detailed graphs**: Lux, Exposure, Gain, White Balance, Overview
 - ✅ **Excel export** with 3 sheets: Raw Data, Statistics, Hourly Averages
 - ✅ **Real-world lux references** (sunlight, twilight, full moon, etc.)
 - ✅ **Chronologically sorted** data from earliest to latest
@@ -663,12 +663,14 @@ python3 src/analyze_timelapse.py -c config/custom.yml
 
 3. **`analogue_gain.png`** - ISO/Gain levels
 
-4. **`temperature.png`** - Sensor temperature tracking
-
-5. **`white_balance.png`** - Color temperature + RGB gains
+4. **`white_balance.png`** - Color temperature + RGB gains
    - Two-panel graph
 
-6. **`overview.png`** - 4-panel summary of all key metrics
+5. **`overview.png`** - 4-panel summary of all key metrics
+
+6. **`ml_solar_patterns.png`** - ML learned light patterns
+   - Lux by time of day for each learned day
+   - Daily midday light levels with trend
 
 7. **`timelapse_analysis_24h.xlsx`** - Excel file with:
    - **Raw Data**: Every image with timestamp, lux, exposure, gain, temp, etc.
@@ -698,6 +700,81 @@ The script intelligently matches JPG files with their corresponding `_metadata.j
 - **10 lux**: Twilight (your night threshold)
 - **1 lux**: Deep twilight
 - **0.1 lux**: Full moon
+
+---
+
+## ML-Based Adaptive Exposure System
+
+### Overview
+A lightweight machine learning system that continuously learns and improves timelapse exposure settings. Designed for Raspberry Pi with minimal compute requirements.
+
+### How It Works
+The system runs automatically as part of `auto_timelapse.py`:
+
+1. **Every frame**: Learns from capture metadata (lux, exposure, brightness)
+2. **Before capture**: Predicts optimal exposure based on learned patterns
+3. **Blending**: ML predictions blended with formula based on trust level
+
+### Components
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ML Exposure Predictor                     │
+├─────────────────────────────────────────────────────────────┤
+│  1. Solar Pattern Memory    - Expected lux by time/day      │
+│  2. Lux-Exposure Mapper     - Optimal exposure per lux      │
+│  3. Trend Predictor         - Anticipate light changes      │
+│  4. Correction Memory       - What brightness fixes worked  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Trust System
+- **Initial trust**: 0% (formula only)
+- **Increment**: +0.1% per good prediction (brightness 100-140)
+- **Maximum**: 80% (formula always has 20% influence)
+
+Formula: `final = trust × ML + (1-trust) × formula`
+
+### Files
+| File | Purpose |
+|------|---------|
+| `src/ml_exposure.py` | Main ML predictor class |
+| `src/bootstrap_ml.py` | Bootstrap from historical data |
+| `src/graph_ml_patterns.py` | Generate solar pattern visualization |
+| `ml_state/ml_state.json` | Persisted learned state |
+| `docs/ML_EXPOSURE_SYSTEM.md` | Full documentation |
+
+### Configuration
+```yaml
+# config/config.yml
+adaptive_timelapse:
+  ml_exposure:
+    enabled: true           # ML active
+    shadow_mode: false      # Use predictions (not just log)
+    initial_trust: 0.0      # Start with formula only
+    max_trust: 0.8          # Cap ML influence at 80%
+```
+
+### Commands
+```bash
+# Bootstrap from historical data
+python src/bootstrap_ml.py --days 7
+
+# View learned patterns
+python src/bootstrap_ml.py --show-table
+
+# Generate visualization
+python src/graph_ml_patterns.py
+```
+
+### Polar Location Adaptation
+At 68.7°N latitude, the system handles:
+- **January**: Polar twilight, very short days
+- **March**: Days lengthening ~7 min/day
+- **May-July**: 24-hour sun (midnight sun)
+- **September**: Days shortening rapidly
+
+Solar patterns indexed by day-of-year automatically adapt to seasonal changes.
 
 ---
 

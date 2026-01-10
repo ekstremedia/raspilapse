@@ -27,9 +27,15 @@ except ImportError:
 try:
     from src.logging_config import get_logger
     from src.capture_image import CameraConfig, ImageCapture
+    from src.ml_exposure import MLExposurePredictor
 except ImportError:
     from logging_config import get_logger
     from capture_image import CameraConfig, ImageCapture
+
+    try:
+        from ml_exposure import MLExposurePredictor
+    except ImportError:
+        MLExposurePredictor = None  # ML module not available
 
 # Initialize logger
 logger = get_logger("auto_timelapse")
@@ -129,6 +135,11 @@ class AdaptiveTimelapse:
         self._civil_twilight_threshold = -6.0  # Default: Civil twilight
         self._init_location()
 
+        # ML-based exposure prediction
+        self._ml_predictor = None
+        self._ml_enabled = False
+        self._init_ml_predictor()
+
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -169,6 +180,31 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.warning(f"Could not initialize location: {e}")
             self._location = None
+
+    def _init_ml_predictor(self):
+        """Initialize ML-based exposure predictor if enabled."""
+        if MLExposurePredictor is None:
+            logger.debug("[ML] MLExposurePredictor not available")
+            return
+
+        ml_config = self.config.get("adaptive_timelapse", {}).get("ml_exposure", {})
+        self._ml_enabled = ml_config.get("enabled", False)
+
+        if not self._ml_enabled:
+            logger.debug("[ML] ML exposure prediction disabled in config")
+            return
+
+        try:
+            self._ml_predictor = MLExposurePredictor(ml_config, state_dir="ml_state")
+            stats = self._ml_predictor.get_statistics()
+            logger.info(
+                f"[ML] Initialized: trust={self._ml_predictor.get_trust_level():.2f}, "
+                f"confidence={stats['confidence']}, shadow_mode={stats['shadow_mode']}"
+            )
+        except Exception as e:
+            logger.warning(f"[ML] Failed to initialize predictor: {e}")
+            self._ml_predictor = None
+            self._ml_enabled = False
 
     def _get_sun_elevation(self) -> Optional[float]:
         """
@@ -977,7 +1013,24 @@ class AdaptiveTimelapse:
         # Apply brightness feedback correction
         # This gradually adjusts exposure based on actual image brightness
         # to maintain consistent brightness even when lux formula is imperfect
-        target_exposure = base_exposure * self._brightness_correction_factor
+        formula_exposure = base_exposure * self._brightness_correction_factor
+
+        # === ML EXPOSURE PREDICTION ===
+        # If ML is enabled, blend ML prediction with formula-based exposure
+        target_exposure = formula_exposure
+        if self._ml_enabled and self._ml_predictor is not None:
+            ml_exposure, ml_confidence = self._ml_predictor.predict_optimal_exposure(
+                lux, time.time()
+            )
+            if ml_exposure is not None:
+                target_exposure = self._ml_predictor.blend_with_formula(
+                    ml_exposure, formula_exposure
+                )
+                logger.debug(
+                    f"[ML] Blending: formula={formula_exposure:.4f}s, "
+                    f"ML={ml_exposure:.4f}s (conf={ml_confidence:.2f}) "
+                    f"→ blended={target_exposure:.4f}s"
+                )
 
         # Clamp to valid range
         target_exposure = max(min_exposure, min(night_exposure, target_exposure))
@@ -1999,6 +2052,17 @@ class AdaptiveTimelapse:
                                 self._check_underexposure(brightness_metrics)
                         except Exception as e:
                             logger.debug(f"Could not apply brightness feedback: {e}")
+
+                    # ML Learning: Learn from this frame's metadata
+                    if self._ml_enabled and self._ml_predictor is not None and metadata_path:
+                        try:
+                            import json
+
+                            with open(metadata_path, "r") as f:
+                                frame_metadata = json.load(f)
+                            self._ml_predictor.learn_from_frame(frame_metadata)
+                        except Exception as e:
+                            logger.debug(f"Could not learn from frame: {e}")
 
                     # Update day WB reference from actual capture metadata
                     # This allows us to learn good daylight WB values for smooth transitions

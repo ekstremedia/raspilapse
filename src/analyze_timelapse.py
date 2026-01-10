@@ -514,34 +514,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
     plt.close()
     print(f"    ✅ Saved: {output_path}")
 
-    # 4. Sensor Temperature
-    print("  Creating temperature graph...")
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-
-    ax.plot(
-        data["timestamps"],
-        data["sensor_temp"],
-        color="tab:red",
-        linewidth=2,
-        marker="o",
-        markersize=3,
-    )
-    ax.set_xlabel("Time", fontsize=12)
-    ax.set_ylabel("Temperature (°C)", fontsize=12)
-    ax.set_title("Camera Sensor Temperature", fontsize=16, fontweight="bold")
-    ax.grid(True, alpha=0.3)
-
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-    ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
-    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
-
-    fig.tight_layout()
-    output_path = output_dir / "temperature.png"
-    plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
-    plt.close()
-    print(f"    ✅ Saved: {output_path}")
-
-    # 5. White Balance (Color Temperature and Gains)
+    # 4. White Balance (Color Temperature and Gains)
     print("  Creating white balance graph...")
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(fig_width, fig_height * 1.2))
 
@@ -597,7 +570,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
     plt.close()
     print(f"    ✅ Saved: {output_path}")
 
-    # 6. Overview Panel (4 key metrics)
+    # 5. Overview Panel (4 key metrics)
     print("  Creating overview panel...")
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(fig_width * 1.2, fig_height * 1.2))
 
@@ -674,7 +647,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
                 diag_smoothed_lux.append(data["smoothed_lux"][i] or data["lux"][i])
 
         if diag_timestamps:
-            # 7. Target vs Actual Exposure
+            # 6. Target vs Actual Exposure
             print("  Creating target vs actual exposure graph...")
             fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
@@ -717,7 +690,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
             plt.close()
             print(f"    ✅ Saved: {output_path}")
 
-            # 8. Target vs Actual Gain
+            # 7. Target vs Actual Gain
             print("  Creating target vs actual gain graph...")
             fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
@@ -759,7 +732,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
             plt.close()
             print(f"    ✅ Saved: {output_path}")
 
-            # 9. Raw vs Smoothed Lux
+            # 8. Raw vs Smoothed Lux
             print("  Creating raw vs smoothed lux graph...")
             fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
@@ -825,7 +798,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
                 over_pct.append(data["overexposed_percent"][i] or 0)
 
         if bright_timestamps:
-            # 10. Image Brightness Over Time
+            # 9. Image Brightness Over Time
             print("  Creating image brightness graph...")
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(fig_width, fig_height * 1.2))
 
@@ -907,7 +880,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
             plt.close()
             print(f"    ✅ Saved: {output_path}")
 
-            # 11. Diagnostic Overview Panel
+            # 10. Diagnostic Overview Panel
             print("  Creating diagnostic overview panel...")
             fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(
                 2, 2, figsize=(fig_width * 1.2, fig_height * 1.2)
@@ -1014,7 +987,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
             color, alpha = mode_colors.get(mode, ("#888888", 0.1))
             ax.axvspan(start, end, alpha=alpha, color=color, zorder=0)
 
-    # 12. HOLY GRAIL: Multi-Variable Comparison Plot (Lux vs Exposure vs Gain)
+    # 11. HOLY GRAIL: Multi-Variable Comparison Plot (Lux vs Exposure vs Gain)
     print("  Creating Holy Grail multi-variable comparison plot...")
     fig, ax1 = plt.subplots(figsize=(fig_width, fig_height))
 
@@ -1135,7 +1108,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
     plt.close()
     print(f"    ✅ Saved: {output_path}")
 
-    # 13. HOLY GRAIL: AWB Gain Stability Plot
+    # 12. HOLY GRAIL: AWB Gain Stability Plot
     print("  Creating Holy Grail AWB stability plot...")
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(fig_width, fig_height * 1.2))
 
@@ -1300,7 +1273,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
     plt.close()
     print(f"    ✅ Saved: {output_path}")
 
-    # 14. HOLY GRAIL: Transition Position / Factor Plot
+    # 13. HOLY GRAIL: Transition Position / Factor Plot
     # Shows the transition_position (0.0 = night threshold, 1.0 = day threshold)
     transition_positions = [
         (data["timestamps"][i], data["transition_position"][i])
@@ -1387,7 +1360,7 @@ def create_graphs(data: Dict, output_dir: Path, config: dict):
     else:
         print("  ℹ️  No transition position data available (diagnostics may be disabled)")
 
-    # 15. POLAR: Sun Elevation + Lux Comparison
+    # 14. POLAR: Sun Elevation + Lux Comparison
     # Shows sun position alongside lux for polar region analysis
     sun_data = [
         (data["timestamps"][i], data["sun_elevation"][i])

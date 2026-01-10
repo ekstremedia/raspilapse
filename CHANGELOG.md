@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-01-10
+
+### Added
+- **ML-Based Adaptive Exposure System**: Lightweight machine learning that continuously learns and improves exposure settings
+  - Solar Pattern Memory: Learns expected lux for each time of day, indexed by day-of-year/hour/minute
+  - Lux-Exposure Mapper: Learns optimal exposure settings for each light level
+  - Trend Predictor: Anticipates light changes using linear extrapolation
+  - Correction Memory: Remembers which brightness corrections worked
+  - Trust-based blending: Starts at 0% ML, gradually increases to 80% as predictions prove accurate
+  - Shadow mode for testing: Log predictions without applying them
+  - New files: `src/ml_exposure.py`, `src/bootstrap_ml.py`, `src/graph_ml_patterns.py`
+  - New documentation: `docs/ML_EXPOSURE_SYSTEM.md`
+  - 41 new tests in `tests/test_ml_exposure.py`
+
+- **ML Solar Patterns Graph**: Visualization of learned light patterns
+  - Shows lux by time of day for each learned day
+  - Displays daily midday light levels with trend line
+  - Tracks polar winter recovery (+100 lux/day trend visible)
+  - Generated at `graphs/ml_solar_patterns.png`
+
+- **Fast Underexposure Ramp-Up**: Symmetric to existing overexposure ramp-down
+  - Triggers when brightness < 70 (warning) or < 50 (critical)
+  - Uses faster interpolation to recover from dark frames
+  - Configurable via `fast_rampup_speed` and `critical_rampup_speed`
+
+### Changed
+- Bootstrapped ML system from 7 days of historical data (20,940 frames)
+- ML system enabled and active in config (shadow_mode: false)
+
+### Removed
+- Temperature graph (`graphs/temperature.png`) - not useful for analysis
+
 ## [1.0.7] - 2026-01-09
 
 ### Fixed
