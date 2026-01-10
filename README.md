@@ -83,6 +83,8 @@ overlay:
 
 **Adaptive Exposure** - Automatically switches between day/night modes based on ambient light, with smooth transitions to prevent flickering. Fast overexposure detection prevents "light flash" at dawn.
 
+**ML-Based Learning** - Lightweight machine learning that continuously improves exposure predictions. Learns optimal settings for each time of day, with Aurora-safe logic for night photography. Trust builds gradually from 0% to 80% as predictions prove accurate.
+
 **Per-Camera Brightness Tuning** - Configurable `reference_lux` allows tuning brightness for each camera based on scene and sensor sensitivity.
 
 **Long Exposure Optimization** - 20-second exposures complete in ~20 seconds (not 100+) through proper libcamera configuration.

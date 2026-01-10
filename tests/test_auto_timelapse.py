@@ -1656,6 +1656,64 @@ class TestEVSafetyClamp:
         assert unclamped_exp == 20.0
         assert unclamped_gain == 6.0
 
+    def test_ev_clamp_applies_only_once(self, test_config_file):
+        """Test EV clamp only applies on first frame, not every frame.
+
+        This was a critical bug: the clamp was applying on EVERY frame,
+        preventing exposure from ever ramping up properly. The fix adds
+        an _ev_clamp_applied flag that ensures the clamp only runs once
+        per transition cycle.
+        """
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Enable EV clamp
+        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = True
+
+        # Seed with short exposure (day mode values)
+        timelapse._transition_seeded = True
+        timelapse._seed_exposure = 0.01  # 10ms
+        timelapse._seed_gain = 1.0
+        timelapse._ev_clamp_applied = False  # Not yet applied
+
+        # First call - clamp SHOULD apply
+        target_exposure = 20.0
+        target_gain = 6.0
+        first_exp, first_gain = timelapse._apply_ev_safety_clamp(target_exposure, target_gain)
+
+        # Clamp should have been applied (exposure reduced to match seed EV)
+        assert first_exp < target_exposure
+        assert timelapse._ev_clamp_applied is True  # Flag should be set
+
+        # Second call - clamp should NOT apply (already applied)
+        second_exp, second_gain = timelapse._apply_ev_safety_clamp(target_exposure, target_gain)
+
+        # Should pass through unchanged now
+        assert second_exp == target_exposure
+        assert second_gain == target_gain
+
+    def test_ev_clamp_flag_resets_on_day_mode(self, test_config_file):
+        """Test _ev_clamp_applied flag resets when returning to day mode.
+
+        When the camera returns to day mode, the seed state should reset
+        so the clamp can apply again on the next transition.
+        """
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate clamp was applied during previous transition
+        timelapse._transition_seeded = True
+        timelapse._ev_clamp_applied = True
+
+        # Verify initial state
+        assert timelapse._ev_clamp_applied is True
+
+        # Simulate returning to day mode (this happens in the capture loop)
+        timelapse._transition_seeded = False
+        timelapse._ev_clamp_applied = False
+
+        # Verify reset
+        assert timelapse._ev_clamp_applied is False
+        assert timelapse._transition_seeded is False
+
 
 class TestSequentialRamping:
     """Test sequential ramping (shutter-first, then gain) for noise reduction."""

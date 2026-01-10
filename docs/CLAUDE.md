@@ -630,7 +630,7 @@ Powerful analysis tool that generates beautiful graphs and Excel reports from ti
 **Features:**
 - ✅ **Fast**: Only reads JSON metadata files (no image processing)
 - ✅ **Beautiful dark-themed lux graph** with day/night zones
-- ✅ **6 detailed graphs**: Lux, Exposure, Gain, Temperature, White Balance, Overview
+- ✅ **5 detailed graphs**: Lux, Exposure, Gain, White Balance, Overview
 - ✅ **Excel export** with 3 sheets: Raw Data, Statistics, Hourly Averages
 - ✅ **Real-world lux references** (sunlight, twilight, full moon, etc.)
 - ✅ **Chronologically sorted** data from earliest to latest
@@ -663,12 +663,14 @@ python3 src/analyze_timelapse.py -c config/custom.yml
 
 3. **`analogue_gain.png`** - ISO/Gain levels
 
-4. **`temperature.png`** - Sensor temperature tracking
-
-5. **`white_balance.png`** - Color temperature + RGB gains
+4. **`white_balance.png`** - Color temperature + RGB gains
    - Two-panel graph
 
-6. **`overview.png`** - 4-panel summary of all key metrics
+5. **`overview.png`** - 4-panel summary of all key metrics
+
+6. **`ml_solar_patterns.png`** - ML learned light patterns
+   - Lux by time of day for each learned day
+   - Daily midday light levels with trend
 
 7. **`timelapse_analysis_24h.xlsx`** - Excel file with:
    - **Raw Data**: Every image with timestamp, lux, exposure, gain, temp, etc.
@@ -698,6 +700,165 @@ The script intelligently matches JPG files with their corresponding `_metadata.j
 - **10 lux**: Twilight (your night threshold)
 - **1 lux**: Deep twilight
 - **0.1 lux**: Full moon
+
+---
+
+## ML-Based Adaptive Exposure System
+
+### Overview
+A lightweight machine learning system that continuously learns and improves timelapse exposure settings. Designed for Raspberry Pi with minimal compute requirements.
+
+### How It Works
+The system runs automatically as part of `auto_timelapse.py`:
+
+1. **Every frame**: Learns from capture metadata (lux, exposure, brightness)
+2. **Before capture**: Predicts optimal exposure based on learned patterns
+3. **Blending**: ML predictions blended with formula based on trust level
+
+### Components
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ML Exposure Predictor                     │
+├─────────────────────────────────────────────────────────────┤
+│  1. Solar Pattern Memory    - Expected lux by time/day      │
+│  2. Lux-Exposure Mapper     - Optimal exposure per lux      │
+│  3. Trend Predictor         - Anticipate light changes      │
+│  4. Correction Memory       - What brightness fixes worked  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Trust System
+- **Initial trust**: 0% (formula only)
+- **Increment**: +0.1% per good prediction (brightness 100-140)
+- **Maximum**: 80% (formula always has 20% influence)
+
+Formula: `final = trust × ML + (1-trust) × formula`
+
+### Aurora-Safe Learning
+The ML system accepts two types of "good" frames for learning:
+
+1. **Standard Day/Twilight**: Mean brightness 105-135 (near target 120)
+2. **High-Contrast Night** (Aurora/Stars):
+   - Lux < 10 (night conditions)
+   - Mean brightness 30-105 (dark sky)
+   - Percentile 95 > 150 (bright highlights from Aurora/stars)
+
+This prevents the system from rejecting valid night photography where the overall image is dark but contains bright Aurora or stars.
+
+### Files
+| File | Purpose |
+|------|---------|
+| `src/ml_exposure.py` | Main ML predictor class |
+| `src/bootstrap_ml.py` | Bootstrap from historical data |
+| `src/graph_ml_patterns.py` | Generate solar pattern visualization |
+| `ml_state/ml_state.json` | Persisted learned state |
+| `docs/ML_EXPOSURE_SYSTEM.md` | Full documentation |
+
+### Configuration
+```yaml
+# config/config.yml
+adaptive_timelapse:
+  ml_exposure:
+    enabled: true           # ML active
+    shadow_mode: false      # Use predictions (not just log)
+    initial_trust: 0.0      # Start with formula only
+    max_trust: 0.8          # Cap ML influence at 80%
+```
+
+### Commands
+```bash
+# Bootstrap from historical data
+python src/bootstrap_ml.py --days 7
+
+# View learned patterns
+python src/bootstrap_ml.py --show-table
+
+# Generate visualization
+python src/graph_ml_patterns.py
+```
+
+### Polar Location Adaptation
+At 68.7°N latitude, the system handles:
+- **January**: Polar twilight, very short days
+- **March**: Days lengthening ~7 min/day
+- **May-July**: 24-hour sun (midnight sun)
+- **September**: Days shortening rapidly
+
+Solar patterns indexed by day-of-year automatically adapt to seasonal changes.
+
+---
+
+## SQLite Database Storage
+
+Historical capture data storage for analysis, graphs, and exposure planning.
+
+### Features
+- **Denormalized storage**: Single table for efficient queries
+- **Complete capture data**: Metadata, brightness metrics, weather
+- **Time-based queries**: By range, by lux, hourly averages
+- **Graceful error handling**: Never crashes timelapse
+- **Auto-initialization**: Creates schema and directories
+
+### Files
+| File | Purpose |
+|------|---------|
+| `src/database.py` | CaptureDatabase class |
+| `tests/test_database.py` | 34 comprehensive tests |
+| `data/timelapse.db` | SQLite database file |
+
+### Configuration
+```yaml
+# config/config.yml
+database:
+  enabled: true                # Enable database storage
+  path: "data/timelapse.db"    # Database location
+  create_directories: true     # Auto-create data dir
+```
+
+### Schema
+```sql
+-- Key fields (36 total columns)
+timestamp, unix_timestamp, camera_id, image_path,
+exposure_time_us, analogue_gain, colour_gains_r/b, colour_temperature,
+lux, mode, sun_elevation,
+brightness_mean/median/std, brightness_p5/p25/p75/p95,
+underexposed_pct, overexposed_pct,
+weather_temperature/humidity/wind_speed/wind_gust/rain/pressure,
+system_cpu_temp, system_load_1min/5min/15min
+```
+
+### Usage Examples
+```python
+from src.database import CaptureDatabase
+
+# Initialize
+db = CaptureDatabase(config)
+
+# Store capture
+db.store_capture(image_path, metadata, mode, lux, brightness, weather, sun_elev)
+
+# Query captures
+captures = db.get_captures_in_range(start_time, end_time)
+captures = db.get_captures_by_lux_range(0, 10)  # Night captures
+hourly = db.get_hourly_averages(start_time, end_time)
+
+# Statistics
+stats = db.get_statistics()  # total_captures, earliest, latest, db_size_mb
+```
+
+### Commands
+```bash
+# Check database status
+python3 -c "
+from src.database import CaptureDatabase
+import yaml
+with open('config/config.yml') as f:
+    config = yaml.safe_load(f)
+db = CaptureDatabase(config)
+print(db.get_statistics())
+"
+```
 
 ---
 

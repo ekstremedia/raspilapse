@@ -27,9 +27,27 @@ except ImportError:
 try:
     from src.logging_config import get_logger
     from src.capture_image import CameraConfig, ImageCapture
+    from src.ml_exposure import MLExposurePredictor
+    from src.database import CaptureDatabase
+    from src.system_monitor import SystemMonitor
 except ImportError:
     from logging_config import get_logger
     from capture_image import CameraConfig, ImageCapture
+
+    try:
+        from ml_exposure import MLExposurePredictor
+    except ImportError:
+        MLExposurePredictor = None  # ML module not available
+
+    try:
+        from database import CaptureDatabase
+    except ImportError:
+        CaptureDatabase = None  # Database module not available
+
+    try:
+        from system_monitor import SystemMonitor
+    except ImportError:
+        SystemMonitor = None  # System monitor not available
 
 # Initialize logger
 logger = get_logger("auto_timelapse")
@@ -92,6 +110,7 @@ class AdaptiveTimelapse:
         self._seed_wb_gains: tuple = None  # Actual WB gains from last auto frame
         self._previous_mode: str = None  # Track mode changes for seeding detection
         self._last_day_capture_metadata: Dict = None  # Metadata from last day mode capture
+        self._ev_clamp_applied: bool = False  # True after EV clamp applied on first frame
 
         # Load transition smoothing config with defaults
         transition_config = self.config.get("adaptive_timelapse", {}).get("transition_mode", {})
@@ -128,6 +147,23 @@ class AdaptiveTimelapse:
         self._sun_elevation: float = None  # Current sun elevation in degrees
         self._civil_twilight_threshold = -6.0  # Default: Civil twilight
         self._init_location()
+
+        # ML-based exposure prediction
+        self._ml_predictor = None
+        self._ml_enabled = False
+        self._init_ml_predictor()
+
+        # Database storage for capture history
+        self._database = None
+        self._init_database()
+
+        # System monitor for CPU temp and load (for database storage)
+        self._system_monitor = None
+        if SystemMonitor is not None:
+            try:
+                self._system_monitor = SystemMonitor()
+            except Exception as e:
+                logger.debug(f"[System] Failed to initialize monitor: {e}")
 
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -169,6 +205,54 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.warning(f"Could not initialize location: {e}")
             self._location = None
+
+    def _init_ml_predictor(self):
+        """Initialize ML-based exposure predictor if enabled."""
+        if MLExposurePredictor is None:
+            logger.debug("[ML] MLExposurePredictor not available")
+            return
+
+        ml_config = self.config.get("adaptive_timelapse", {}).get("ml_exposure", {})
+        self._ml_enabled = ml_config.get("enabled", False)
+
+        if not self._ml_enabled:
+            logger.debug("[ML] ML exposure prediction disabled in config")
+            return
+
+        try:
+            self._ml_predictor = MLExposurePredictor(ml_config, state_dir="ml_state")
+            stats = self._ml_predictor.get_statistics()
+            logger.info(
+                f"[ML] Initialized: trust={self._ml_predictor.get_trust_level():.2f}, "
+                f"confidence={stats['confidence']}, shadow_mode={stats['shadow_mode']}"
+            )
+        except Exception as e:
+            logger.warning(f"[ML] Failed to initialize predictor: {e}")
+            self._ml_predictor = None
+            self._ml_enabled = False
+
+    def _init_database(self):
+        """Initialize database storage for capture history."""
+        if CaptureDatabase is None:
+            logger.debug("[DB] CaptureDatabase not available")
+            return
+
+        db_config = self.config.get("database", {})
+        if not db_config.get("enabled", False):
+            logger.debug("[DB] Database storage disabled in config")
+            return
+
+        try:
+            self._database = CaptureDatabase(self.config)
+            stats = self._database.get_statistics()
+            if stats.get("enabled"):
+                logger.info(
+                    f"[DB] Initialized: {stats.get('db_path', 'unknown')}, "
+                    f"captures={stats.get('total_captures', 0)}"
+                )
+        except Exception as e:
+            logger.warning(f"[DB] Failed to initialize database: {e}")
+            self._database = None
 
     def _get_sun_elevation(self) -> Optional[float]:
         """
@@ -977,7 +1061,24 @@ class AdaptiveTimelapse:
         # Apply brightness feedback correction
         # This gradually adjusts exposure based on actual image brightness
         # to maintain consistent brightness even when lux formula is imperfect
-        target_exposure = base_exposure * self._brightness_correction_factor
+        formula_exposure = base_exposure * self._brightness_correction_factor
+
+        # === ML EXPOSURE PREDICTION ===
+        # If ML is enabled, blend ML prediction with formula-based exposure
+        target_exposure = formula_exposure
+        if self._ml_enabled and self._ml_predictor is not None:
+            ml_exposure, ml_confidence = self._ml_predictor.predict_optimal_exposure(
+                lux, time.time()
+            )
+            if ml_exposure is not None:
+                target_exposure = self._ml_predictor.blend_with_formula(
+                    ml_exposure, formula_exposure
+                )
+                logger.debug(
+                    f"[ML] Blending: formula={formula_exposure:.4f}s, "
+                    f"ML={ml_exposure:.4f}s (conf={ml_confidence:.2f}) "
+                    f"→ blended={target_exposure:.4f}s"
+                )
 
         # Clamp to valid range
         target_exposure = max(min_exposure, min(night_exposure, target_exposure))
@@ -1038,7 +1139,12 @@ class AdaptiveTimelapse:
             return target_exposure, target_gain
 
         # Only apply clamp on first manual frame (when we have seed values)
+        # Bug fix: only apply ONCE, not every frame
         if not self._transition_seeded or self._seed_exposure is None or self._seed_gain is None:
+            return target_exposure, target_gain
+
+        # Skip if clamp was already applied (only apply on first frame)
+        if self._ev_clamp_applied:
             return target_exposure, target_gain
 
         # Calculate EVs (EV = exposure * gain, proportional to light captured)
@@ -1070,6 +1176,8 @@ class AdaptiveTimelapse:
                 f"Adjusted exposure {target_exposure:.4f}s → {clamped_exposure:.4f}s "
                 f"to match auto EV={seed_ev:.4f}"
             )
+            # Mark clamp as applied so it only runs once
+            self._ev_clamp_applied = True
             return clamped_exposure, target_gain
 
         return target_exposure, target_gain
@@ -1918,6 +2026,7 @@ class AdaptiveTimelapse:
                         # Reset seed state when returning to day mode
                         if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
                             self._transition_seeded = False
+                            self._ev_clamp_applied = False
                             logger.info("[Holy Grail] Returned to Day mode - seed state reset")
 
                         # Log transition progress
@@ -2000,6 +2109,17 @@ class AdaptiveTimelapse:
                         except Exception as e:
                             logger.debug(f"Could not apply brightness feedback: {e}")
 
+                    # ML Learning: Learn from this frame's metadata
+                    if self._ml_enabled and self._ml_predictor is not None and metadata_path:
+                        try:
+                            import json
+
+                            with open(metadata_path, "r") as f:
+                                frame_metadata = json.load(f)
+                            self._ml_predictor.learn_from_frame(frame_metadata)
+                        except Exception as e:
+                            logger.debug(f"Could not learn from frame: {e}")
+
                     # Update day WB reference from actual capture metadata
                     # This allows us to learn good daylight WB values for smooth transitions
                     # Also store for Holy Grail seeding when entering transition
@@ -2014,6 +2134,41 @@ class AdaptiveTimelapse:
                             self._last_day_capture_metadata = capture_metadata
                         except Exception as e:
                             logger.debug(f"Could not read capture metadata for WB reference: {e}")
+
+                    # Store capture in database for historical analysis
+                    if self._database is not None:
+                        try:
+                            # Load metadata if not already loaded
+                            import json
+
+                            if metadata_path:
+                                with open(metadata_path, "r") as f:
+                                    db_metadata = json.load(f)
+                            else:
+                                db_metadata = {}
+
+                            # Get weather data from overlay (if available)
+                            weather_data = None
+                            if capture and capture.overlay and capture.overlay.weather:
+                                weather_data = capture.overlay.weather.get_weather_data()
+
+                            # Get system metrics (CPU temp, load)
+                            system_metrics = None
+                            if self._system_monitor:
+                                system_metrics = self._system_monitor.get_all_metrics()
+
+                            self._database.store_capture(
+                                image_path=image_path,
+                                metadata=db_metadata,
+                                mode=mode,
+                                lux=lux,
+                                brightness_metrics=brightness_metrics,
+                                weather_data=weather_data,
+                                sun_elevation=self._sun_elevation,
+                                system_metrics=system_metrics,
+                            )
+                        except Exception as e:
+                            logger.debug(f"[DB] Failed to store capture: {e}")
 
                 except Exception as e:
                     logger.error(f"Frame capture failed: {e}", exc_info=True)

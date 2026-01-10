@@ -61,10 +61,16 @@ class WeatherData:
         # Try to fetch fresh data
         fresh_data = self._fetch_weather_data()
 
-        # If fetch failed and we have stale cached data, return None (will show "-")
+        # If fetch failed but we have stale cached data, use it (prevents blinking)
         if fresh_data is None and self._cached_data is not None:
-            logger.warning("Weather data is stale and refresh failed, showing '-' values")
-            return None
+            stale_age = datetime.now() - self._cache_time if self._cache_time else None
+            logger.warning(
+                f"Weather fetch failed, using stale cached data "
+                f"(age: {stale_age.total_seconds():.0f}s)"
+                if stale_age
+                else "Weather fetch failed, using stale cached data"
+            )
+            return self._cached_data
 
         return fresh_data
 

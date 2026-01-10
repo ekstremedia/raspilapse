@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-01-10
+
+### Fixed
+- **EV Safety Clamp applying every frame instead of once**: Critical bug causing severely underexposed images during transition mode
+  - The clamp was designed to only apply on the first manual frame after seeding, but was applying on EVERY frame
+  - This prevented exposure from ever ramping up properly (e.g., stuck at 376ms instead of 20s)
+  - Added `_ev_clamp_applied` flag to ensure clamp only runs once per transition cycle
+  - Flag resets when returning to day mode
+  - New tests: `test_ev_clamp_applies_only_once`, `test_ev_clamp_flag_resets_on_day_mode`
+
+### Added
+- **ML-Based Adaptive Exposure System**: Lightweight machine learning that continuously learns and improves exposure settings
+  - Solar Pattern Memory: Learns expected lux for each time of day, indexed by day-of-year/hour/minute
+  - Lux-Exposure Mapper: Learns optimal exposure settings for each light level
+  - Trend Predictor: Anticipates light changes using linear extrapolation
+  - Correction Memory: Remembers which brightness corrections worked
+  - Trust-based blending: Starts at 0% ML, gradually increases to 80% as predictions prove accurate
+  - Shadow mode for testing: Log predictions without applying them
+  - Aurora-safe learning: Accepts high-contrast night frames (low mean brightness + high highlights)
+  - New files: `src/ml_exposure.py`, `src/bootstrap_ml.py`, `src/graph_ml_patterns.py`
+  - New documentation: `docs/ML_EXPOSURE_SYSTEM.md`
+  - 43 tests in `tests/test_ml_exposure.py`
+
+- **ML Solar Patterns Graph**: Visualization of learned light patterns
+  - Shows lux by time of day for each learned day
+  - Displays daily midday light levels with trend line
+  - Tracks polar winter recovery (+100 lux/day trend visible)
+  - Generated at `graphs/ml_solar_patterns.png`
+
+- **Fast Underexposure Ramp-Up**: Symmetric to existing overexposure ramp-down
+  - Triggers when brightness < 70 (warning) or < 50 (critical)
+  - Uses faster interpolation to recover from dark frames
+  - Configurable via `fast_rampup_speed` and `critical_rampup_speed`
+
+- **SQLite Database Storage**: Historical capture data for analysis and graphs
+  - Stores every capture with full metadata, brightness analysis, weather data, and system metrics
+  - System metrics: CPU temperature and load averages (1min/5min/15min)
+  - Single denormalized table (36 columns) for efficient querying
+  - Query methods: by time range, by lux range, hourly averages
+  - Never crashes timelapse - all DB operations gracefully handle errors
+  - Configurable via `database.enabled` and `database.path` in config
+  - New files: `src/database.py`, `tests/test_database.py` (35 tests)
+  - Database stored at `data/timelapse.db`
+
+### Changed
+- Bootstrapped ML system from 7 days of historical data (20,940 frames)
+- ML system enabled and active in config (shadow_mode: false)
+
+### Fixed
+- **Weather overlay blinking**: Now returns stale cached data when fetch fails instead of returning None
+  - Prevents weather text from disappearing/blinking during network issues
+  - Logs warning with stale data age when using cached fallback
+
+### Removed
+- Temperature graph (`graphs/temperature.png`) - not useful for analysis
+
 ## [1.0.7] - 2026-01-09
 
 ### Fixed

@@ -300,11 +300,16 @@ The EV Safety Clamp prevents brightness jumps when transitioning from day mode (
 **How it works:**
 1. When entering transition mode from day mode, capture the last auto-exposure values (exposure time, gain, WB)
 2. These become the "seed" values for the manual mode
-3. For each subsequent frame, compare proposed manual EV to the seeded auto EV
+3. **On the first manual frame only**, compare proposed manual EV to the seeded auto EV
 4. If they differ by >5%, clamp the manual values to match the seed EV
+5. Subsequent frames use normal interpolation (clamp not applied again)
 
 ```python
 def _apply_ev_safety_clamp(self, target_exposure, target_gain):
+    # Skip if clamp was already applied (only apply on first frame)
+    if self._ev_clamp_applied:
+        return target_exposure, target_gain
+
     seed_ev = self._seed_exposure * self._seed_gain
     proposed_ev = target_exposure * target_gain
 
@@ -313,10 +318,13 @@ def _apply_ev_safety_clamp(self, target_exposure, target_gain):
     if ev_diff_percent > 5.0:
         # Clamp exposure to match seed EV
         clamped_exposure = seed_ev / target_gain
+        self._ev_clamp_applied = True  # Mark as applied
         return clamped_exposure, target_gain
 
     return target_exposure, target_gain
 ```
+
+**Important**: The `_ev_clamp_applied` flag ensures the clamp only runs once per transition cycle. When the camera returns to day mode, this flag is reset along with `_transition_seeded`.
 
 **⚠️ IMPORTANT: Street Lamp / Bright Point Light Issue**
 
@@ -710,6 +718,44 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 ---
 
 ## Changelog
+
+### 2026-01-10 - EV Safety Clamp Single-Apply Fix
+
+**Problem Identified:**
+- Camera 1 stuck at ~376ms exposure while camera 2 properly used 10.8s for same lux (~7)
+- Logs showed: `[Safety] EV clamp applied: proposed EV differs by 5251.9%. Adjusted exposure 20.0000s → 0.3737s`
+- Root cause: EV safety clamp was applying on EVERY frame, not just the first frame after seeding
+
+**The Bug:**
+- The clamp was supposed to only apply on the "first manual frame" to prevent brightness flash
+- But the code only checked if we HAD seed values, not if we'd ALREADY applied the clamp
+- Result: clamp kept forcing exposure down to match stale seed EV indefinitely
+
+**The Fix:**
+- Added `_ev_clamp_applied` flag to track if clamp has been applied this transition cycle
+- Clamp only applies when: seeded AND NOT already applied
+- After applying, sets `_ev_clamp_applied = True`
+- Flag resets to False when returning to day mode
+
+**Code Changes:**
+```python
+# New flag in __init__
+self._ev_clamp_applied: bool = False
+
+# In _apply_ev_safety_clamp()
+if self._ev_clamp_applied:
+    return target_exposure, target_gain  # Skip if already applied
+
+# After applying clamp
+self._ev_clamp_applied = True
+
+# In day mode reset
+self._ev_clamp_applied = False
+```
+
+**Test Coverage:**
+- `test_ev_clamp_applies_only_once`: Verifies clamp applies first time, skips second time
+- `test_ev_clamp_flag_resets_on_day_mode`: Verifies flag resets properly
 
 ### 2026-01-10 - Fast Ramp-Up for Underexposure (Dark Band Fix)
 
