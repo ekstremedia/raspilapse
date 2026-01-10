@@ -15,9 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Correction Memory: Remembers which brightness corrections worked
   - Trust-based blending: Starts at 0% ML, gradually increases to 80% as predictions prove accurate
   - Shadow mode for testing: Log predictions without applying them
+  - Aurora-safe learning: Accepts high-contrast night frames (low mean brightness + high highlights)
   - New files: `src/ml_exposure.py`, `src/bootstrap_ml.py`, `src/graph_ml_patterns.py`
   - New documentation: `docs/ML_EXPOSURE_SYSTEM.md`
-  - 41 new tests in `tests/test_ml_exposure.py`
+  - 43 tests in `tests/test_ml_exposure.py`
 
 - **ML Solar Patterns Graph**: Visualization of learned light patterns
   - Shows lux by time of day for each learned day
@@ -33,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Bootstrapped ML system from 7 days of historical data (20,940 frames)
 - ML system enabled and active in config (shadow_mode: false)
+
+### Fixed
+- **Weather overlay blinking**: Now returns stale cached data when fetch fails instead of returning None
+  - Prevents weather text from disappearing/blinking during network issues
+  - Logs warning with stale data age when using cached fallback
 
 ### Removed
 - Temperature graph (`graphs/temperature.png`) - not useful for analysis

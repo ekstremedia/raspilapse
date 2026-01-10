@@ -735,6 +735,17 @@ The system runs automatically as part of `auto_timelapse.py`:
 
 Formula: `final = trust × ML + (1-trust) × formula`
 
+### Aurora-Safe Learning
+The ML system accepts two types of "good" frames for learning:
+
+1. **Standard Day/Twilight**: Mean brightness 105-135 (near target 120)
+2. **High-Contrast Night** (Aurora/Stars):
+   - Lux < 10 (night conditions)
+   - Mean brightness 30-105 (dark sky)
+   - Percentile 95 > 150 (bright highlights from Aurora/stars)
+
+This prevents the system from rejecting valid night photography where the overall image is dark but contains bright Aurora or stars.
+
 ### Files
 | File | Purpose |
 |------|---------|
