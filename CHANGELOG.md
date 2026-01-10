@@ -49,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New files: `src/database.py`, `tests/test_database.py` (35 tests)
   - Database stored at `data/timelapse.db`
 
+- **Database Statistics Viewer**: CLI tool to view capture statistics
+  - Shows summary, averages, and recent captures in table format
+  - Time range options: `5m`, `1h`, `24h`, `7d`, `--all`
+  - Limit option: `-n 10` for last N captures
+  - Mode distribution breakdown
+  - New files: `scripts/db_stats.py`, `tests/test_db_stats.py` (21 tests)
+
 ### Changed
 - Bootstrapped ML system from 7 days of historical data (20,940 frames)
 - ML system enabled and active in config (shadow_mode: false)

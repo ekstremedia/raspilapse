@@ -849,7 +849,15 @@ stats = db.get_statistics()  # total_captures, earliest, latest, db_size_mb
 
 ### Commands
 ```bash
-# Check database status
+# View database statistics (recommended)
+python scripts/db_stats.py           # Last 1 hour (default)
+python scripts/db_stats.py 5m        # Last 5 minutes
+python scripts/db_stats.py 24h       # Last 24 hours
+python scripts/db_stats.py 7d        # Last 7 days
+python scripts/db_stats.py --all     # All captures
+python scripts/db_stats.py -n 10     # Last 10 captures
+
+# Check database status (programmatic)
 python3 -c "
 from src.database import CaptureDatabase
 import yaml
