@@ -389,8 +389,10 @@ class TestWeatherDataStaleCache:
     """Test stale cache behavior."""
 
     @patch("urllib.request.urlopen")
-    def test_stale_cache_returns_none(self, mock_urlopen, weather_config, sample_netatmo_response):
-        """Test that stale cache + failed refresh returns None."""
+    def test_stale_cache_returns_stale_data(
+        self, mock_urlopen, weather_config, sample_netatmo_response
+    ):
+        """Test that stale cache + failed refresh returns stale data (prevents blinking)."""
         mock_response = MagicMock()
         mock_response.status = 200
         mock_response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
@@ -402,6 +404,7 @@ class TestWeatherDataStaleCache:
         # First call succeeds
         data1 = weather.get_weather_data()
         assert data1 is not None
+        assert data1["temperature"] == -0.2  # From sample_netatmo_response fixture
         assert mock_urlopen.call_count == 1
 
         # Expire the cache
@@ -411,8 +414,9 @@ class TestWeatherDataStaleCache:
         mock_urlopen.side_effect = urllib.error.URLError("Network error")
         data2 = weather.get_weather_data()
 
-        # Should return None (showing "-" values) instead of stale data
-        assert data2 is None
+        # Should return stale cached data (prevents blinking in overlay)
+        assert data2 is not None
+        assert data2["temperature"] == -0.2  # Same as original data
 
 
 class TestWeatherDataFormatting:

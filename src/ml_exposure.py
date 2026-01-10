@@ -316,8 +316,8 @@ class MLExposurePredictor:
 
         # The following require brightness data
         if brightness is not None:
-            # Update lux-exposure map if brightness was good
-            self._update_lux_exposure_map(lux, exposure, brightness)
+            # Update lux-exposure map if brightness was good (now Aurora-aware)
+            self._update_lux_exposure_map(lux, exposure, diagnostics)
 
             # Update correction memory
             if self.last_lux is not None and self.last_correction is not None:
@@ -366,11 +366,39 @@ class MLExposurePredictor:
 
         self.state["solar_patterns"][day_key][hour_key][minute_key] = new_value
 
-    def _update_lux_exposure_map(self, lux: float, exposure: float, brightness: float) -> None:
-        """Update lux-to-exposure mapping if brightness was good."""
-        # Only learn from frames with good brightness (near target)
-        if not (105 <= brightness <= 135):
+    def _update_lux_exposure_map(self, lux: float, exposure: float, diagnostics: Dict) -> None:
+        """
+        Update lux-to-exposure mapping if brightness was good.
+
+        Accepts frames in two scenarios:
+        1. Standard day/twilight: mean brightness 105-135 (near target)
+        2. High-contrast night (Aurora/stars): low mean brightness but high highlights
+
+        Args:
+            lux: Current light level
+            exposure: Exposure time in seconds
+            diagnostics: Full diagnostics dict containing brightness info
+        """
+        brightness_info = diagnostics.get("brightness", {})
+        mean_brightness = brightness_info.get("mean_brightness", 0)
+        percentile_95 = brightness_info.get("percentile_95", 0)
+
+        # 1. Standard Day/Twilight Target - mean brightness near 120
+        is_standard_good = 105 <= mean_brightness <= 135
+
+        # 2. High Contrast Night Target (Aurora/Stars)
+        # Low mean brightness but high highlights indicates intentional night shot
+        is_night_good = lux < 10 and 30 <= mean_brightness < 105 and percentile_95 > 150
+
+        if not (is_standard_good or is_night_good):
             return
+
+        # Log which path was taken for debugging
+        if is_night_good and not is_standard_good:
+            logger.debug(
+                f"[ML] Learning from night/Aurora frame: mean={mean_brightness:.0f}, "
+                f"p95={percentile_95:.0f}, lux={lux:.2f}"
+            )
 
         bucket_idx = self._get_lux_bucket_index(lux)
         bucket_key = str(bucket_idx)

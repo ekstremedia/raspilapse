@@ -284,6 +284,64 @@ class TestLearnFromFrame:
             # Good brightness (120) should increment confidence
             assert predictor.state["confidence"] == initial_confidence + 1
 
+    def test_learn_from_frame_accepts_aurora_frames(self):
+        """Test that learning accepts Aurora/night frames with high contrast."""
+        from src.ml_exposure import MLExposurePredictor
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            predictor = MLExposurePredictor({}, state_dir=tmpdir)
+
+            # Aurora frame: low lux, low mean brightness, but high highlights
+            metadata = {
+                "ExposureTime": 20_000_000,  # 20 seconds
+                "capture_timestamp": "2026-01-10T23:30:00",
+                "diagnostics": {
+                    "smoothed_lux": 0.5,  # Low lux (night)
+                    "brightness": {
+                        "mean_brightness": 45,  # Low mean (dark sky)
+                        "percentile_95": 180,  # High highlights (Aurora)
+                    },
+                },
+            }
+
+            predictor.learn_from_frame(metadata)
+
+            # Should have learned this exposure (Aurora-safe logic)
+            bucket_idx = predictor._get_lux_bucket_index(0.5)
+            bucket_key = str(bucket_idx)
+            assert bucket_key in predictor.state["lux_exposure_map"]
+            # Verify the learned exposure
+            learned_exp, count = predictor.state["lux_exposure_map"][bucket_key]
+            assert learned_exp == 20.0  # 20 seconds
+            assert count == 1
+
+    def test_learn_from_frame_skips_dark_without_highlights(self):
+        """Test that learning skips dark frames without high highlights."""
+        from src.ml_exposure import MLExposurePredictor
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            predictor = MLExposurePredictor({}, state_dir=tmpdir)
+
+            # Dark frame but no highlights - should be rejected
+            metadata = {
+                "ExposureTime": 20_000_000,
+                "capture_timestamp": "2026-01-10T23:30:00",
+                "diagnostics": {
+                    "smoothed_lux": 0.5,  # Low lux
+                    "brightness": {
+                        "mean_brightness": 45,  # Low mean
+                        "percentile_95": 80,  # Low highlights (no Aurora)
+                    },
+                },
+            }
+
+            predictor.learn_from_frame(metadata)
+
+            # Should NOT have learned this exposure
+            bucket_idx = predictor._get_lux_bucket_index(0.5)
+            bucket_key = str(bucket_idx)
+            assert bucket_key not in predictor.state["lux_exposure_map"]
+
 
 class TestTrustLevel:
     """Tests for trust level calculation."""
