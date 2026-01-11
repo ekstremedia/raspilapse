@@ -613,3 +613,14 @@ weather:
 
   # Request timeout in seconds
   timeout: 5
+
+# Database Settings (for capture history storage)
+database:
+  # Enable/disable SQLite database storage for capture metadata
+  enabled: true
+
+  # Path to database file (relative to project root or absolute)
+  path: "data/timelapse.db"
+
+  # Automatically create directories if they don't exist
+  create_directories: true
