@@ -102,3 +102,18 @@ disable = [
     "C0114",  # Missing module docstring
     "R0913",  # Too many arguments
 ]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/test_*.py",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "def main\\(",
+    "raise NotImplementedError",
+]
