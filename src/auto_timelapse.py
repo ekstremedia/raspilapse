@@ -61,6 +61,24 @@ class LightMode:
     TRANSITION = "transition"
 
 
+# Emergency brightness zones for fast correction
+# When brightness is severely off-target, apply immediate corrections
+class BrightnessZones:
+    """Brightness thresholds for emergency exposure correction."""
+
+    EMERGENCY_HIGH = 180  # Severe overexposure - immediate 30% reduction
+    WARNING_HIGH = 160  # Moderate overexposure - 15% reduction
+    TARGET = 120  # Ideal brightness
+    WARNING_LOW = 80  # Moderate underexposure - 20% increase
+    EMERGENCY_LOW = 60  # Severe underexposure - 40% increase
+
+    # Emergency correction multipliers (applied directly to exposure)
+    EMERGENCY_HIGH_FACTOR = 0.7  # Reduce exposure by 30%
+    WARNING_HIGH_FACTOR = 0.85  # Reduce by 15%
+    WARNING_LOW_FACTOR = 1.2  # Increase by 20%
+    EMERGENCY_LOW_FACTOR = 1.4  # Increase by 40%
+
+
 class AdaptiveTimelapse:
     """Handles adaptive timelapse capture with automatic exposure adjustment."""
 
@@ -570,29 +588,59 @@ class AdaptiveTimelapse:
             )
             return self._brightness_correction_factor
 
-        # Outside tolerance - apply gradual correction
+        # Outside tolerance - apply correction with urgency scaling
         # Convert error to a correction percentage
         # error of 40 (e.g., brightness 160 vs target 120) = 33% too bright
         error_percent = error / self._target_brightness
+        abs_error = abs(error)
 
-        # Apply feedback strength to make changes very gradual
-        # With feedback_strength=0.3 and 33% error, we adjust by ~10% per frame
-        # But this goes through interpolation too, so actual change is even smaller
-        adjustment = error_percent * self._brightness_feedback_strength
+        # === URGENCY MULTIPLIER ===
+        # Scale feedback strength based on how far off-target we are
+        # Small errors: normal slow correction
+        # Large errors: faster correction to catch up
+        base_strength = self._brightness_feedback_strength
+
+        if abs_error > 60:
+            # Severe deviation (e.g., brightness 60 or 180) - 3x speed
+            urgency_multiplier = 3.0
+            urgency_level = "URGENT"
+        elif abs_error > 40:
+            # Moderate deviation (e.g., brightness 80 or 160) - 2x speed
+            urgency_multiplier = 2.0
+            urgency_level = "elevated"
+        elif abs_error > 25:
+            # Mild deviation - 1.5x speed
+            urgency_multiplier = 1.5
+            urgency_level = "mild"
+        else:
+            # Normal
+            urgency_multiplier = 1.0
+            urgency_level = "normal"
+
+        effective_strength = min(0.7, base_strength * urgency_multiplier)
+        adjustment = error_percent * effective_strength
 
         # Update correction factor (reducing it if too bright, increasing if too dark)
         # Too bright (positive error) → reduce correction factor (less exposure)
         # Too dark (negative error) → increase correction factor (more exposure)
         self._brightness_correction_factor *= 1.0 - adjustment
 
-        # Clamp to reasonable range (0.3x to 4x correction) - lowered floor for faster transition recovery
+        # Clamp to reasonable range (0.3x to 4x correction)
         self._brightness_correction_factor = max(0.3, min(4.0, self._brightness_correction_factor))
 
-        logger.debug(
-            f"Brightness feedback: actual={actual_brightness:.1f}, "
-            f"target={self._target_brightness}, error={error:.1f}, "
-            f"correction={self._brightness_correction_factor:.3f}"
-        )
+        # Log with urgency level if not normal
+        if urgency_multiplier > 1.0:
+            logger.info(
+                f"[Feedback] {urgency_level.upper()}: brightness={actual_brightness:.1f}, "
+                f"error={error:.0f}, urgency={urgency_multiplier}x, "
+                f"correction={self._brightness_correction_factor:.3f}"
+            )
+        else:
+            logger.debug(
+                f"Brightness feedback: actual={actual_brightness:.1f}, "
+                f"target={self._target_brightness}, error={error:.1f}, "
+                f"correction={self._brightness_correction_factor:.3f}"
+            )
 
         return self._brightness_correction_factor
 
@@ -852,6 +900,55 @@ class AdaptiveTimelapse:
 
         return self._underexposure_detected
 
+    def _get_emergency_brightness_factor(self, brightness: float) -> float:
+        """
+        Get emergency correction factor based on brightness zones.
+
+        This provides immediate, aggressive correction when brightness is
+        severely off-target, bypassing the slow gradual correction system.
+        This is critical for catching up during rapid transitions.
+
+        Args:
+            brightness: Current mean brightness (0-255)
+
+        Returns:
+            Correction factor (1.0 = no change, <1.0 = reduce exposure, >1.0 = increase)
+        """
+        if brightness is None:
+            return 1.0
+
+        if brightness > BrightnessZones.EMERGENCY_HIGH:
+            factor = BrightnessZones.EMERGENCY_HIGH_FACTOR
+            logger.info(
+                f"[Emergency] SEVERE OVEREXPOSURE: brightness={brightness:.1f} > {BrightnessZones.EMERGENCY_HIGH} "
+                f"→ applying {(1-factor)*100:.0f}% reduction"
+            )
+            return factor
+        elif brightness > BrightnessZones.WARNING_HIGH:
+            factor = BrightnessZones.WARNING_HIGH_FACTOR
+            logger.info(
+                f"[Emergency] Overexposure warning: brightness={brightness:.1f} > {BrightnessZones.WARNING_HIGH} "
+                f"→ applying {(1-factor)*100:.0f}% reduction"
+            )
+            return factor
+        elif brightness < BrightnessZones.EMERGENCY_LOW:
+            factor = BrightnessZones.EMERGENCY_LOW_FACTOR
+            logger.info(
+                f"[Emergency] SEVERE UNDEREXPOSURE: brightness={brightness:.1f} < {BrightnessZones.EMERGENCY_LOW} "
+                f"→ applying {(factor-1)*100:.0f}% increase"
+            )
+            return factor
+        elif brightness < BrightnessZones.WARNING_LOW:
+            factor = BrightnessZones.WARNING_LOW_FACTOR
+            logger.info(
+                f"[Emergency] Underexposure warning: brightness={brightness:.1f} < {BrightnessZones.WARNING_LOW} "
+                f"→ applying {(factor-1)*100:.0f}% increase"
+            )
+            return factor
+
+        # Within acceptable range
+        return 1.0
+
     def _calculate_target_gain_from_lux(self, lux: float) -> float:
         """
         Calculate target analogue gain based on current lux level.
@@ -1080,13 +1177,24 @@ class AdaptiveTimelapse:
                     f"→ blended={target_exposure:.4f}s"
                 )
 
+        # === EMERGENCY BRIGHTNESS CORRECTION ===
+        # Apply immediate correction when brightness is severely off-target
+        # This bypasses the slow gradual correction to catch up during rapid transitions
+        emergency_factor = self._get_emergency_brightness_factor(self._last_brightness)
+        if emergency_factor != 1.0:
+            target_exposure *= emergency_factor
+            logger.debug(
+                f"[Emergency] Applied factor {emergency_factor:.2f} → "
+                f"exposure now {target_exposure:.4f}s"
+            )
+
         # Clamp to valid range
         target_exposure = max(min_exposure, min(night_exposure, target_exposure))
 
         logger.debug(
             f"Lux-based exposure: lux={lux:.2f} → base={base_exposure:.4f}s "
             f"× correction={self._brightness_correction_factor:.3f} "
-            f"→ target={target_exposure:.4f}s"
+            f"× emergency={emergency_factor:.2f} → target={target_exposure:.4f}s"
         )
 
         return target_exposure
@@ -1409,18 +1517,53 @@ class AdaptiveTimelapse:
 
         # Standard lux-based mode determination
         if lux < night_threshold:
-            mode = LightMode.NIGHT
+            lux_mode = LightMode.NIGHT
         elif lux > day_threshold:
-            mode = LightMode.DAY
+            lux_mode = LightMode.DAY
         else:
-            mode = LightMode.TRANSITION
+            lux_mode = LightMode.TRANSITION
+
+        mode = lux_mode
+
+        # === HYBRID BRIGHTNESS OVERRIDE ===
+        # If brightness is severely off-target, force transition mode to start correction
+        # This catches cases where lux suggests "night" but brightness is already 180+
+        # (morning transition) or lux suggests "day" but brightness is <80 (clouds/evening)
+        brightness = self._last_brightness
+        brightness_override = False
+
+        if brightness is not None:
+            # Night mode but overexposed → force transition to reduce exposure
+            if lux_mode == LightMode.NIGHT and brightness > BrightnessZones.WARNING_HIGH:
+                mode = LightMode.TRANSITION
+                brightness_override = True
+                logger.info(
+                    f"[Hybrid] Night mode override: brightness {brightness:.0f} > {BrightnessZones.WARNING_HIGH} "
+                    f"→ forcing TRANSITION mode"
+                )
+
+            # Day mode but underexposed → force transition to increase exposure
+            elif lux_mode == LightMode.DAY and brightness < BrightnessZones.WARNING_LOW:
+                mode = LightMode.TRANSITION
+                brightness_override = True
+                logger.info(
+                    f"[Hybrid] Day mode override: brightness {brightness:.0f} < {BrightnessZones.WARNING_LOW} "
+                    f"→ forcing TRANSITION mode"
+                )
 
         # Log with sun elevation if available
         sun_elev = self._sun_elevation
+        override_note = " (brightness override)" if brightness_override else ""
         if sun_elev is not None:
-            logger.info(f"[Status] Sun: {sun_elev:.1f}° | Lux: {lux:.1f} | Mode: {mode}")
+            logger.info(
+                f"[Status] Sun: {sun_elev:.1f}° | Lux: {lux:.1f} | "
+                f"Brightness: {brightness if brightness else 'N/A'} | Mode: {mode}{override_note}"
+            )
         else:
-            logger.info(f"Light level: {lux:.2f} lux → Mode: {mode}")
+            logger.info(
+                f"Light level: {lux:.2f} lux | Brightness: {brightness if brightness else 'N/A'} "
+                f"→ Mode: {mode}{override_note}"
+            )
 
         return mode
 
