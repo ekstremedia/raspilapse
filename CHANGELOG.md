@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-01-11
+
+### Added
+- **Arctic-Aware ML v2**: Solar elevation-based time periods instead of clock hours
+  - Uses sun elevation to determine night/twilight/day periods
+  - Works correctly year-round at any latitude (including polar night and midnight sun)
+  - Falls back to clock-based periods if sun_elevation not available
+  - New period definitions: night (< -12°), twilight (-12° to 0°), day (> 0°)
+
+- **Aurora Frame Support in ML Training**: High-contrast night frames now included
+  - Standard frames: brightness 100-140 (target exposure)
+  - Aurora/night frames: brightness 30-90 with p95 > 150 at lux < 5
+  - Prevents rejecting valid aurora/star photography
+
+- **Database Migration System**: Auto-migrates schema on startup
+  - Schema version tracking in `schema_version` table
+  - Migration v2: Adds `sun_elevation` column
+  - No manual steps required when pulling new code to other cameras
+  - Gracefully handles "duplicate column" errors for fresh databases
+
+### Changed
+- Bumped database schema version from 1 to 2
+- ML v2 now uses `sun_elevation` from database when available
+- Updated `bootstrap_ml_v2.py` with Arctic-aware period detection
+
+### Documentation
+- Updated `ML.md` with Arctic-aware features, aurora support, and migration system
+- Added version history to ML documentation
+
 ## [1.0.9] - 2026-01-11
 
 ### Added

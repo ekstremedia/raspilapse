@@ -1,16 +1,21 @@
 """
-ML-based Adaptive Exposure Prediction System v2 - Database-Driven
+ML-based Adaptive Exposure Prediction System v2 - Database-Driven (Arctic-Aware)
 
 This is an enhanced version that trains from the SQLite database instead of
 learning frame-by-frame. Key improvements:
 
-1. Train from historical "good" frames (brightness 100-140 only)
-2. Time-of-day aware exposure predictions
+1. Train from historical "good" frames (brightness 100-140) AND aurora frames
+2. Solar elevation-based predictions (season-agnostic, works at 68°N)
 3. Use percentile data for early detection of clipping
-4. Separate models for night/transition/day conditions
+4. Separate models for night/twilight/day conditions based on sun position
 
 The system queries the database on initialization to build lookup tables,
 then provides predictions based on proven working exposures.
+
+Arctic-Aware Features:
+- Uses sun elevation instead of clock hours (works year-round at any latitude)
+- Includes high-contrast night frames (auroras) in training data
+- Twilight is defined by sun position, not time of day
 """
 
 import json
@@ -32,17 +37,30 @@ class MLExposurePredictorV2:
     Unlike v1 which learns incrementally, v2 builds its model from
     historical database data - ensuring it only learns from frames
     with good brightness (avoiding reinforcing bad exposures).
+
+    Arctic-Aware: Uses sun elevation for time periods instead of clock hours,
+    making it season-agnostic for high-latitude locations like Sortland (68°N).
     """
 
     # Lux bucket boundaries (logarithmic scale) - same as v1
     LUX_BUCKETS = [0.0, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0]
 
-    # Time periods for time-aware predictions
+    # Solar elevation-based periods (season-agnostic, works at any latitude)
+    # These thresholds are based on astronomical definitions:
+    # - Civil twilight: sun between 0° and -6°
+    # - Nautical twilight: sun between -6° and -12°
+    # - Astronomical twilight: sun between -12° and -18°
+    SOLAR_PERIODS = {
+        "night": (-90, -12),  # Deep night (astronomical night)
+        "twilight": (-12, 0),  # Twilight (civil + nautical)
+        "day": (0, 90),  # Daytime (sun above horizon)
+    }
+
+    # Fallback: Clock-based time periods (used when sun_elevation unavailable)
     TIME_PERIODS = {
-        "night": list(range(0, 6)) + list(range(20, 24)),  # 00:00-05:59, 20:00-23:59
-        "morning_transition": list(range(6, 10)),  # 06:00-09:59
-        "day": list(range(10, 14)),  # 10:00-13:59
-        "evening_transition": list(range(14, 20)),  # 14:00-19:59
+        "night": list(range(0, 6)) + list(range(20, 24)),
+        "twilight": list(range(6, 10)) + list(range(16, 20)),  # Renamed from transition
+        "day": list(range(10, 16)),
     }
 
     def __init__(self, db_path: str, config: Dict, state_dir: str = "ml_state"):
@@ -107,7 +125,7 @@ class MLExposurePredictorV2:
             self._train_from_database()
 
     def _train_from_database(self):
-        """Build lookup tables from historical database data."""
+        """Build lookup tables from historical database data (Arctic-aware)."""
         if not os.path.exists(self.db_path):
             logger.warning(f"[ML v2] Database not found at {self.db_path}")
             return
@@ -116,7 +134,8 @@ class MLExposurePredictorV2:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            # Query good frames (brightness within target range)
+            # Query good frames - includes standard AND aurora/high-contrast night frames
+            # Uses sun_elevation for solar-based periods (season-agnostic)
             cursor.execute(
                 """
                 SELECT
@@ -126,9 +145,19 @@ class MLExposurePredictorV2:
                     brightness_p5,
                     brightness_p95,
                     strftime('%H', timestamp) as hour,
-                    timestamp
+                    timestamp,
+                    sun_elevation
                 FROM captures
-                WHERE brightness_mean BETWEEN ? AND ?
+                WHERE (
+                    -- Standard good frames (day/twilight)
+                    (brightness_mean BETWEEN ? AND ?)
+                    OR
+                    -- High-contrast night frames (Aurora/Stars)
+                    -- Dark overall but with bright highlights
+                    (brightness_mean BETWEEN 30 AND 90
+                     AND brightness_p95 > 150
+                     AND lux < 5)
+                )
                 AND exposure_time_us > 0
                 AND lux > 0
                 ORDER BY timestamp DESC
@@ -144,17 +173,34 @@ class MLExposurePredictorV2:
                 logger.warning("[ML v2] No good frames found in database")
                 return
 
-            logger.info(f"[ML v2] Training from {len(good_frames)} good frames")
+            # Count frame types
+            standard_count = sum(
+                1
+                for f in good_frames
+                if self.good_brightness_min <= (f[2] or 0) <= self.good_brightness_max
+            )
+            aurora_count = len(good_frames) - standard_count
 
-            # Build lux-exposure map with time awareness
+            logger.info(
+                f"[ML v2] Training from {len(good_frames)} frames "
+                f"(standard: {standard_count}, aurora: {aurora_count})"
+            )
+
+            # Build lux-exposure map with solar period awareness
             temp_map = {}  # (bucket, period) -> list of exposures
 
-            for lux, exp_us, bright, p5, p95, hour_str, timestamp in good_frames:
+            for lux, exp_us, _bright, _p5, _p95, hour_str, _timestamp, sun_elev in good_frames:
                 if lux is None or exp_us is None:
                     continue
 
                 bucket = self._get_lux_bucket(lux)
-                period = self._get_time_period(int(hour_str) if hour_str else 12)
+
+                # Use solar period if sun_elevation available, else fall back to clock
+                if sun_elev is not None:
+                    period = self._get_solar_period(sun_elev)
+                else:
+                    period = self._get_time_period(int(hour_str) if hour_str else 12)
+
                 key = f"{bucket}_{period}"
 
                 if key not in temp_map:
@@ -185,17 +231,25 @@ class MLExposurePredictorV2:
             )
 
         except Exception as e:
-            logger.error(f"[ML v2] Training failed: {e}")
+            logger.exception(f"[ML v2] Training failed: {e}")
 
     def predict_optimal_exposure(
-        self, lux: float, timestamp: Optional[float] = None
+        self,
+        lux: float,
+        timestamp: Optional[float] = None,
+        sun_elevation: Optional[float] = None,
     ) -> Tuple[Optional[float], float]:
         """
-        Predict optimal exposure for given lux level and time.
+        Predict optimal exposure for given lux level and solar conditions.
+
+        Arctic-Aware: Uses sun_elevation for period determination when available,
+        making predictions season-agnostic. Falls back to clock-based periods
+        if sun_elevation is not provided.
 
         Args:
             lux: Current light level in lux
-            timestamp: Unix timestamp (defaults to now)
+            timestamp: Unix timestamp (defaults to now, used for clock fallback)
+            sun_elevation: Sun elevation in degrees (preferred for Arctic locations)
 
         Returns:
             Tuple of (predicted_exposure_seconds, confidence_factor)
@@ -204,9 +258,14 @@ class MLExposurePredictorV2:
         if timestamp is None:
             timestamp = time.time()
 
-        hour = datetime.fromtimestamp(timestamp).hour
         bucket = self._get_lux_bucket(lux)
-        period = self._get_time_period(hour)
+
+        # Use solar period if sun_elevation available, else fall back to clock
+        if sun_elevation is not None:
+            period = self._get_solar_period(sun_elevation)
+        else:
+            hour = datetime.fromtimestamp(timestamp).hour
+            period = self._get_time_period(hour)
 
         # Try exact match first (bucket + period)
         key = f"{bucket}_{period}"
@@ -216,16 +275,16 @@ class MLExposurePredictorV2:
             exp_seconds = exp_us / 1_000_000
             logger.debug(
                 f"[ML v2] Prediction: lux={lux:.1f}, bucket={bucket}, period={period} "
-                f"→ {exp_seconds:.4f}s (conf={confidence:.2f}, samples={count})"
+                f"(sun={sun_elevation}°) → {exp_seconds:.4f}s (conf={confidence:.2f}, samples={count})"
             )
             return exp_seconds, confidence
 
-        # Fall back to bucket-only match (any time period)
-        for fallback_period in ["day", "morning_transition", "evening_transition", "night"]:
+        # Fall back to bucket-only match (any period)
+        for fallback_period in ["day", "twilight", "night"]:
             fallback_key = f"{bucket}_{fallback_period}"
             if fallback_key in self.state["lux_exposure_map"]:
                 exp_us, count = self.state["lux_exposure_map"][fallback_key]
-                confidence = min(0.7, count / 100)  # Lower confidence for time mismatch
+                confidence = min(0.7, count / 100)  # Lower confidence for period mismatch
                 exp_seconds = exp_us / 1_000_000
                 logger.debug(
                     f"[ML v2] Fallback prediction: lux={lux:.1f}, bucket={bucket}, "
@@ -294,11 +353,34 @@ class MLExposurePredictorV2:
         return len(self.LUX_BUCKETS) - 1
 
     def _get_time_period(self, hour: int) -> str:
-        """Get time period name for an hour."""
+        """Get time period name for an hour (fallback when sun_elevation unavailable)."""
         for period, hours in self.TIME_PERIODS.items():
             if hour in hours:
                 return period
         return "day"  # Default
+
+    def _get_solar_period(self, sun_elevation: float) -> str:
+        """
+        Get time period based on sun elevation (Arctic-aware, season-agnostic).
+
+        This is the preferred method for determining time periods as it works
+        correctly year-round at any latitude, including polar regions where
+        clock-based methods fail during polar day/night.
+
+        Args:
+            sun_elevation: Sun elevation in degrees (-90 to +90)
+                - Negative = below horizon
+                - Positive = above horizon
+
+        Returns:
+            Period name: "night", "twilight", or "day"
+        """
+        for period, (min_elev, max_elev) in self.SOLAR_PERIODS.items():
+            if min_elev <= sun_elevation < max_elev:
+                return period
+
+        # Default based on sign
+        return "day" if sun_elevation >= 0 else "night"
 
     def _save_state(self):
         """Save current state to disk."""
@@ -308,7 +390,7 @@ class MLExposurePredictorV2:
                 json.dump(self.state, f, indent=2)
             logger.debug(f"[ML v2] State saved to {self.state_file}")
         except Exception as e:
-            logger.error(f"[ML v2] Failed to save state: {e}")
+            logger.exception(f"[ML v2] Failed to save state: {e}")
 
     def _load_state(self):
         """Load state from disk if available."""

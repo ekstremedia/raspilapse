@@ -787,6 +787,28 @@ At 68.7°N latitude, the system handles:
 
 Solar patterns indexed by day-of-year automatically adapt to seasonal changes.
 
+### ML v2 (Arctic-Aware Database-Driven)
+
+Enhanced ML that trains only on good frames from the database:
+
+| File | Purpose |
+|------|---------|
+| `src/ml_exposure_v2.py` | Database-driven ML predictor |
+| `src/bootstrap_ml_v2.py` | Bootstrap from database |
+| `ml_state/ml_state_v2.json` | Persisted state |
+| `ML.md` | Full ML documentation |
+
+**Arctic-Aware Time Periods** (uses sun elevation, not clock):
+- Night: sun < -12° (astronomical night)
+- Twilight: sun -12° to 0° (civil + nautical)
+- Day: sun > 0° (above horizon)
+
+**Commands:**
+```bash
+python src/bootstrap_ml_v2.py           # Bootstrap from database
+python src/bootstrap_ml_v2.py --analyze # Just show statistics
+```
+
 ---
 
 ## SQLite Database Storage
@@ -826,6 +848,18 @@ brightness_mean/median/std, brightness_p5/p25/p75/p95,
 underexposed_pct, overexposed_pct,
 weather_temperature/humidity/wind_speed/wind_gust/rain/pressure,
 system_cpu_temp, system_load_1min/5min/15min
+```
+
+### Migrations
+Database auto-migrates on startup. No manual steps required.
+
+- **Schema v1**: Initial schema
+- **Schema v2**: Added `sun_elevation` column for Arctic-aware ML
+
+When pulling new code to cameras with older databases:
+```
+[DB] Applying migration v2: Add sun_elevation column for Arctic-aware ML
+[DB] Migration v2 complete
 ```
 
 ### Usage Examples

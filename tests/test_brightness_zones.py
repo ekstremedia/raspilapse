@@ -258,8 +258,8 @@ class TestUrgencyScaledFeedback:
         timelapse._brightness_correction_factor = 1.0
         timelapse._apply_brightness_feedback(110)  # Error = -10
 
-        # Correction should be within tolerance, factor decays toward 1.0
-        # or stays near 1.0
+        # Within tolerance - factor should stay near 1.0 (decay behavior)
+        assert 0.95 <= timelapse._brightness_correction_factor <= 1.05
 
     def test_elevated_urgency_medium_error(self, timelapse):
         """Test elevated urgency for medium brightness error."""

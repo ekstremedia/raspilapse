@@ -102,7 +102,8 @@ class TestMLExposurePredictorV2Training:
                     exposure_time_us INTEGER,
                     brightness_mean REAL,
                     brightness_p5 REAL,
-                    brightness_p95 REAL
+                    brightness_p95 REAL,
+                    sun_elevation REAL
                 )
             """
             )
@@ -111,8 +112,8 @@ class TestMLExposurePredictorV2Training:
             for i in range(20):
                 conn.execute(
                     """
-                    INSERT INTO captures (timestamp, lux, exposure_time_us, brightness_mean, brightness_p5, brightness_p95)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO captures (timestamp, lux, exposure_time_us, brightness_mean, brightness_p5, brightness_p95, sun_elevation)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         "2026-01-11T12:00:00",  # Noon (day period)
@@ -121,6 +122,7 @@ class TestMLExposurePredictorV2Training:
                         120.0 + (i - 10) * 0.5,  # Good brightness
                         80.0,
                         160.0,
+                        30.0,  # Sun above horizon (day)
                     ),
                 )
             conn.commit()
@@ -149,17 +151,18 @@ class TestMLExposurePredictorV2Training:
                     exposure_time_us INTEGER,
                     brightness_mean REAL,
                     brightness_p5 REAL,
-                    brightness_p95 REAL
+                    brightness_p95 REAL,
+                    sun_elevation REAL
                 )
             """
             )
 
-            # Insert bad frames (brightness outside 100-140)
-            for i in range(20):
+            # Insert bad frames (brightness outside 100-140, and not aurora-like)
+            for _ in range(20):
                 conn.execute(
                     """
-                    INSERT INTO captures (timestamp, lux, exposure_time_us, brightness_mean, brightness_p5, brightness_p95)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO captures (timestamp, lux, exposure_time_us, brightness_mean, brightness_p5, brightness_p95, sun_elevation)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         "2026-01-11T12:00:00",
@@ -168,6 +171,7 @@ class TestMLExposurePredictorV2Training:
                         200.0,  # Overexposed - should be excluded
                         150.0,
                         250.0,
+                        30.0,
                     ),
                 )
             conn.commit()
@@ -202,17 +206,18 @@ class TestMLExposurePredictorV2Prediction:
                     exposure_time_us INTEGER,
                     brightness_mean REAL,
                     brightness_p5 REAL,
-                    brightness_p95 REAL
+                    brightness_p95 REAL,
+                    sun_elevation REAL
                 )
             """
             )
 
             # Insert good frames at known lux
-            for i in range(15):
+            for _ in range(15):
                 conn.execute(
                     """
-                    INSERT INTO captures (timestamp, lux, exposure_time_us, brightness_mean, brightness_p5, brightness_p95)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO captures (timestamp, lux, exposure_time_us, brightness_mean, brightness_p5, brightness_p95, sun_elevation)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         "2026-01-11T12:00:00",  # Noon
@@ -221,6 +226,7 @@ class TestMLExposurePredictorV2Prediction:
                         120.0,
                         80.0,
                         160.0,
+                        30.0,  # Sun above horizon (day)
                     ),
                 )
             conn.commit()
@@ -229,8 +235,8 @@ class TestMLExposurePredictorV2Prediction:
             config = {"min_samples": 5}
             predictor = MLExposurePredictorV2(db_path, config, state_dir=tmpdir)
 
-            # Predict for similar lux (bucket 9)
-            exp, conf = predictor.predict_optimal_exposure(500.0)
+            # Predict for similar lux (bucket 9) with sun elevation
+            exp, conf = predictor.predict_optimal_exposure(500.0, sun_elevation=30.0)
 
             assert exp is not None
             assert exp == pytest.approx(0.1, rel=0.1)  # ~100ms
@@ -252,7 +258,8 @@ class TestMLExposurePredictorV2Prediction:
                     exposure_time_us INTEGER,
                     brightness_mean REAL,
                     brightness_p5 REAL,
-                    brightness_p95 REAL
+                    brightness_p95 REAL,
+                    sun_elevation REAL
                 )
             """
             )
@@ -269,17 +276,17 @@ class TestMLExposurePredictorV2Prediction:
 
 
 class TestMLExposurePredictorV2TimePeriods:
-    """Tests for time period handling."""
+    """Tests for time period handling (both clock-based and solar-based)."""
 
     def test_get_time_period_night(self):
-        """Test time period detection for night hours."""
+        """Test clock-based time period detection for night hours."""
         from src.ml_exposure_v2 import MLExposurePredictorV2
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             conn = sqlite3.connect(db_path)
             conn.execute(
-                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL)"
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
             )
             conn.close()
 
@@ -289,32 +296,36 @@ class TestMLExposurePredictorV2TimePeriods:
             assert predictor._get_time_period(3) == "night"
             assert predictor._get_time_period(22) == "night"
 
-    def test_get_time_period_morning_transition(self):
-        """Test time period detection for morning transition."""
+    def test_get_time_period_twilight(self):
+        """Test clock-based time period detection for twilight hours."""
         from src.ml_exposure_v2 import MLExposurePredictorV2
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             conn = sqlite3.connect(db_path)
             conn.execute(
-                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL)"
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
             )
             conn.close()
 
             predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
 
-            assert predictor._get_time_period(6) == "morning_transition"
-            assert predictor._get_time_period(8) == "morning_transition"
+            # Morning twilight
+            assert predictor._get_time_period(6) == "twilight"
+            assert predictor._get_time_period(8) == "twilight"
+            # Evening twilight
+            assert predictor._get_time_period(17) == "twilight"
+            assert predictor._get_time_period(19) == "twilight"
 
     def test_get_time_period_day(self):
-        """Test time period detection for day."""
+        """Test clock-based time period detection for day."""
         from src.ml_exposure_v2 import MLExposurePredictorV2
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             conn = sqlite3.connect(db_path)
             conn.execute(
-                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL)"
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
             )
             conn.close()
 
@@ -322,23 +333,115 @@ class TestMLExposurePredictorV2TimePeriods:
 
             assert predictor._get_time_period(10) == "day"
             assert predictor._get_time_period(12) == "day"
+            assert predictor._get_time_period(14) == "day"
 
-    def test_get_time_period_evening_transition(self):
-        """Test time period detection for evening transition."""
+
+class TestMLExposurePredictorV2SolarPeriods:
+    """Tests for solar elevation-based period detection (Arctic-aware)."""
+
+    def test_get_solar_period_deep_night(self):
+        """Test solar period for deep night (sun < -12°)."""
         from src.ml_exposure_v2 import MLExposurePredictorV2
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             conn = sqlite3.connect(db_path)
             conn.execute(
-                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL)"
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
             )
             conn.close()
 
             predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
 
-            assert predictor._get_time_period(14) == "evening_transition"
-            assert predictor._get_time_period(18) == "evening_transition"
+            assert predictor._get_solar_period(-20) == "night"
+            assert predictor._get_solar_period(-15) == "night"
+            assert predictor._get_solar_period(-50) == "night"
+
+    def test_get_solar_period_twilight(self):
+        """Test solar period for twilight (-12° to 0°)."""
+        from src.ml_exposure_v2 import MLExposurePredictorV2
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
+            )
+            conn.close()
+
+            predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
+
+            assert predictor._get_solar_period(-10) == "twilight"
+            assert predictor._get_solar_period(-5) == "twilight"
+            assert predictor._get_solar_period(-1) == "twilight"
+
+    def test_get_solar_period_day(self):
+        """Test solar period for daytime (sun > 0°)."""
+        from src.ml_exposure_v2 import MLExposurePredictorV2
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
+            )
+            conn.close()
+
+            predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
+
+            assert predictor._get_solar_period(5) == "day"
+            assert predictor._get_solar_period(30) == "day"
+            assert predictor._get_solar_period(60) == "day"
+
+    def test_predict_uses_sun_elevation_when_provided(self):
+        """Test that prediction uses sun_elevation over timestamp."""
+        from src.ml_exposure_v2 import MLExposurePredictorV2
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE captures (
+                    id INTEGER PRIMARY KEY,
+                    timestamp TEXT,
+                    lux REAL,
+                    exposure_time_us INTEGER,
+                    brightness_mean REAL,
+                    brightness_p5 REAL,
+                    brightness_p95 REAL,
+                    sun_elevation REAL
+                )
+            """
+            )
+
+            # Insert frames with sun_elevation in twilight
+            # Lux 75 falls into bucket 7 (50-100 range)
+            for i in range(15):
+                conn.execute(
+                    """
+                    INSERT INTO captures (timestamp, lux, exposure_time_us, brightness_mean, brightness_p5, brightness_p95, sun_elevation)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        "2026-01-11T12:00:00",  # Noon by clock
+                        75.0,  # Lux bucket 7 (50-100)
+                        500000,  # 500ms
+                        120.0,
+                        80.0,
+                        160.0,
+                        -5.0,  # But sun at -5° (twilight by elevation)
+                    ),
+                )
+            conn.commit()
+            conn.close()
+
+            config = {"min_samples": 5}
+            predictor = MLExposurePredictorV2(db_path, config, state_dir=tmpdir)
+
+            # The data should be stored under twilight period (from sun_elevation)
+            # not day period (from clock time)
+            assert "7_twilight" in predictor.state["lux_exposure_map"]
 
 
 class TestMLExposurePredictorV2Trust:
@@ -395,8 +498,8 @@ class TestMLExposurePredictorV2Trust:
             predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
 
             # Add many buckets
-            for i in range(50):
-                predictor.state["lux_exposure_map"][f"{i}_day"] = [50000, 100]
+            for bucket_idx in range(50):
+                predictor.state["lux_exposure_map"][f"{bucket_idx}_day"] = [50000, 100]
 
             trust = predictor.get_trust_level()
 
@@ -468,25 +571,28 @@ class TestMLExposurePredictorV2Persistence:
                     exposure_time_us INTEGER,
                     brightness_mean REAL,
                     brightness_p5 REAL,
-                    brightness_p95 REAL
+                    brightness_p95 REAL,
+                    sun_elevation REAL
                 )
             """
             )
 
             # Insert good frames
-            for i in range(15):
+            for _ in range(15):
                 conn.execute(
                     """
-                    INSERT INTO captures (timestamp, lux, exposure_time_us, brightness_mean, brightness_p5, brightness_p95)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO captures (timestamp, lux, exposure_time_us, brightness_mean, brightness_p5, brightness_p95, sun_elevation)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                    ("2026-01-11T12:00:00", 500.0, 100000, 120.0, 80.0, 160.0),
+                    ("2026-01-11T12:00:00", 500.0, 100000, 120.0, 80.0, 160.0, 30.0),
                 )
             conn.commit()
             conn.close()
 
             config = {"min_samples": 5, "state_file_v2": "test_state.json"}
-            predictor = MLExposurePredictorV2(db_path, config, state_dir=tmpdir)
+            _ = MLExposurePredictorV2(
+                db_path, config, state_dir=tmpdir
+            )  # Creates state file as side effect
 
             state_file = os.path.join(tmpdir, "test_state.json")
             assert os.path.exists(state_file)

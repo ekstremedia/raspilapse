@@ -25,12 +25,18 @@ from typing import Dict, List, Tuple
 # Lux bucket boundaries (same as ML v2)
 LUX_BUCKETS = [0.0, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0]
 
-# Time periods
+# Solar elevation-based periods (Arctic-aware, season-agnostic)
+SOLAR_PERIODS = {
+    "night": (-90, -12),  # Deep night (astronomical night)
+    "twilight": (-12, 0),  # Twilight (civil + nautical)
+    "day": (0, 90),  # Daytime (sun above horizon)
+}
+
+# Fallback: Clock-based time periods (used when sun_elevation unavailable)
 TIME_PERIODS = {
     "night": list(range(0, 6)) + list(range(20, 24)),
-    "morning_transition": list(range(6, 10)),
-    "day": list(range(10, 14)),
-    "evening_transition": list(range(14, 20)),
+    "twilight": list(range(6, 10)) + list(range(16, 20)),
+    "day": list(range(10, 16)),
 }
 
 
@@ -43,11 +49,19 @@ def get_lux_bucket(lux: float) -> int:
 
 
 def get_time_period(hour: int) -> str:
-    """Get time period name for an hour."""
+    """Get time period name for an hour (fallback when sun_elevation unavailable)."""
     for period, hours in TIME_PERIODS.items():
         if hour in hours:
             return period
     return "day"
+
+
+def get_solar_period(sun_elevation: float) -> str:
+    """Get time period based on sun elevation (Arctic-aware)."""
+    for period, (min_elev, max_elev) in SOLAR_PERIODS.items():
+        if min_elev <= sun_elevation < max_elev:
+            return period
+    return "day" if sun_elevation >= 0 else "night"
 
 
 def get_lux_range(bucket: int) -> str:
@@ -77,7 +91,7 @@ def analyze_database(db_path: str, brightness_min: float, brightness_max: float)
     cursor.execute("SELECT COUNT(*) FROM captures")
     total_frames = cursor.fetchone()[0]
 
-    # Good frames count
+    # Good frames count (standard)
     cursor.execute(
         """
         SELECT COUNT(*) FROM captures
@@ -87,7 +101,21 @@ def analyze_database(db_path: str, brightness_min: float, brightness_max: float)
     """,
         (brightness_min, brightness_max),
     )
-    good_frames = cursor.fetchone()[0]
+    good_frames_standard = cursor.fetchone()[0]
+
+    # Aurora/high-contrast night frames
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM captures
+        WHERE brightness_mean BETWEEN 30 AND 90
+        AND brightness_p95 > 150
+        AND lux < 5
+        AND exposure_time_us > 0
+    """
+    )
+    good_frames_aurora = cursor.fetchone()[0]
+
+    good_frames = good_frames_standard + good_frames_aurora
 
     # Time range
     cursor.execute("SELECT MIN(timestamp), MAX(timestamp) FROM captures")
@@ -129,6 +157,8 @@ def analyze_database(db_path: str, brightness_min: float, brightness_max: float)
     return {
         "total_frames": total_frames,
         "good_frames": good_frames,
+        "good_frames_standard": good_frames_standard,
+        "good_frames_aurora": good_frames_aurora,
         "good_percentage": (good_frames / total_frames * 100) if total_frames > 0 else 0,
         "time_range": time_range,
         "brightness_distribution": brightness_dist,
@@ -159,7 +189,8 @@ def bootstrap_from_database(
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # Query good frames
+    # Query good frames - includes standard good frames AND high-contrast night/aurora frames
+    # Aurora shots have low mean brightness but high highlights (p95 > 150)
     cursor.execute(
         """
         SELECT
@@ -169,9 +200,19 @@ def bootstrap_from_database(
             brightness_p5,
             brightness_p95,
             strftime('%H', timestamp) as hour,
-            timestamp
+            timestamp,
+            sun_elevation
         FROM captures
-        WHERE brightness_mean BETWEEN ? AND ?
+        WHERE (
+            -- Standard good frames (day/transition)
+            (brightness_mean BETWEEN ? AND ?)
+            OR
+            -- High-contrast night frames (Aurora/Stars)
+            -- Dark overall but with bright highlights
+            (brightness_mean BETWEEN 30 AND 90
+             AND brightness_p95 > 150
+             AND lux < 5)
+        )
         AND exposure_time_us > 0
         AND lux > 0
         ORDER BY timestamp DESC
@@ -183,26 +224,46 @@ def bootstrap_from_database(
     good_frames = cursor.fetchall()
     conn.close()
 
-    print(f"Found {len(good_frames)} good frames (brightness {brightness_min}-{brightness_max})")
+    # Count standard vs aurora frames
+    standard_count = sum(1 for f in good_frames if brightness_min <= (f[2] or 0) <= brightness_max)
+    aurora_count = len(good_frames) - standard_count
+
+    print(f"Found {len(good_frames)} good frames:")
+    print(f"  - Standard (brightness {brightness_min}-{brightness_max}): {standard_count}")
+    print(f"  - Aurora/Night (dark with bright highlights): {aurora_count}")
 
     if not good_frames:
         print("ERROR: No good frames found!")
         return None
 
-    # Build lux-exposure map with time awareness
+    # Build lux-exposure map with solar period awareness (Arctic-aware)
     temp_map = {}  # (bucket, period) -> list of exposures
+    solar_period_count = 0
+    clock_period_count = 0
 
-    for lux, exp_us, bright, p5, p95, hour_str, timestamp in good_frames:
+    for lux, exp_us, _bright, _p5, _p95, hour_str, _timestamp, sun_elev in good_frames:
         if lux is None or exp_us is None:
             continue
 
         bucket = get_lux_bucket(lux)
-        period = get_time_period(int(hour_str) if hour_str else 12)
+
+        # Prefer solar period (season-agnostic), fall back to clock time
+        if sun_elev is not None:
+            period = get_solar_period(sun_elev)
+            solar_period_count += 1
+        else:
+            period = get_time_period(int(hour_str) if hour_str else 12)
+            clock_period_count += 1
+
         key = f"{bucket}_{period}"
 
         if key not in temp_map:
             temp_map[key] = []
         temp_map[key].append(exp_us)
+
+    print(f"\nPeriod determination:")
+    print(f"  - Using sun elevation: {solar_period_count}")
+    print(f"  - Using clock fallback: {clock_period_count}")
 
     # Average each bucket and build final map
     lux_exposure_map = {}
@@ -312,12 +373,14 @@ Examples:
     print("\nAnalyzing database...")
     analysis = analyze_database(args.db, args.brightness_min, args.brightness_max)
 
-    print(f"\nDatabase Statistics:")
+    print("\nDatabase Statistics:")
     print(f"  Total frames: {analysis['total_frames']}")
     print(f"  Good frames:  {analysis['good_frames']} ({analysis['good_percentage']:.1f}%)")
+    print(f"    - Standard (brightness 100-140): {analysis['good_frames_standard']}")
+    print(f"    - Aurora/Night (dark + bright highlights): {analysis['good_frames_aurora']}")
     print(f"  Time range:   {analysis['time_range'][0]} to {analysis['time_range'][1]}")
 
-    print(f"\nBrightness Distribution:")
+    print("\nBrightness Distribution:")
     for category, count in analysis["brightness_distribution"].items():
         pct = count / analysis["total_frames"] * 100 if analysis["total_frames"] > 0 else 0
         bar = "#" * int(pct / 2)

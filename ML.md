@@ -13,7 +13,7 @@ The system uses multiple approaches to maintain consistent image brightness duri
 
 ## System Architecture
 
-```
+```text
                     ┌─────────────────────┐
                     │   Test Shot (100ms) │
                     └──────────┬──────────┘
@@ -116,7 +116,8 @@ Enhanced ML system that trains ONLY on good frames from the database.
 
 **Key Improvements**:
 - Trains only on frames with brightness 100-140 (proven good)
-- Time-of-day aware predictions (morning/day/evening/night)
+- **Arctic-aware**: Uses sun elevation for time periods (not clock hours)
+- **Aurora support**: Includes high-contrast night frames in training
 - Retrains automatically when state is stale (>24h)
 - Higher initial trust (0.5 vs 0.0)
 
@@ -136,6 +137,32 @@ python src/bootstrap_ml_v2.py --analyze
 # Custom brightness range
 python src/bootstrap_ml_v2.py --brightness-min 95 --brightness-max 145
 ```
+
+#### Arctic-Aware Time Periods
+
+Instead of using clock hours (which fail at high latitudes), ML v2 uses **sun elevation** to determine time periods:
+
+| Period | Sun Elevation | Description |
+|--------|---------------|-------------|
+| Night | < -12° | Astronomical night (deep darkness) |
+| Twilight | -12° to 0° | Civil + nautical twilight |
+| Day | > 0° | Sun above horizon |
+
+This works correctly year-round at any latitude, including:
+- **Polar night** (68°N in December): Sun stays below -12° = always "night"
+- **Midnight sun** (68°N in June): Sun stays above 0° = always "day"
+- **Normal days**: Proper transitions based on actual sun position
+
+The system falls back to clock-based periods if `sun_elevation` is not available in the database.
+
+#### Aurora Frame Support
+
+Training data includes two types of "good" frames:
+
+1. **Standard frames**: brightness 100-140 (target exposure)
+2. **Aurora/night frames**: Low mean brightness (30-90) BUT high highlights (p95 > 150) at low lux (< 5)
+
+This prevents rejecting valid aurora/star photography where the sky is dark but contains bright highlights.
 
 ## Database Schema
 
@@ -177,6 +204,38 @@ CREATE TABLE captures (
     weather_humidity INTEGER,
     ...
 );
+```
+
+## Database Migrations
+
+The database schema auto-migrates when the timelapse starts. No manual steps required.
+
+**Current Schema Version**: 2
+
+| Version | Changes |
+|---------|---------|
+| 1 | Initial schema |
+| 2 | Added `sun_elevation` column for Arctic-aware ML |
+
+**How it works**:
+1. On startup, `CaptureDatabase` checks the current schema version
+2. If migrations are pending, they run automatically
+3. Existing data is preserved
+4. Schema version is updated
+
+**When pulling new code to other cameras**:
+```
+[DB] Applying migration v2: Add sun_elevation column for Arctic-aware ML
+[DB] Migration v2 complete
+[DB] Initialized: data/timelapse.db (schema v2)
+```
+
+**Adding future migrations** (in `src/database.py`):
+```python
+MIGRATIONS = {
+    2: ("Add sun_elevation column", ["ALTER TABLE captures ADD COLUMN sun_elevation REAL"]),
+    3: ("Future migration", ["ALTER TABLE captures ADD COLUMN new_field TEXT"]),
+}
 ```
 
 ## Configuration
@@ -279,3 +338,4 @@ python src/generate_database_graph.py --period 1d
 - **v1.0**: Original formula-based exposure with slow feedback
 - **v1.1**: Added ML v1 frame-by-frame learning
 - **v2.0**: Added emergency zones, hybrid mode detection, urgency scaling, ML v2
+- **v2.1**: Arctic-aware ML v2 with solar elevation-based time periods, aurora frame support, database migrations
