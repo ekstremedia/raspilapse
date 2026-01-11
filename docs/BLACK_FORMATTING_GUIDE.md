@@ -1,4 +1,4 @@
-# 🎨 Black Formatting Guide
+# Black Formatting Guide
 
 ## The Problem
 
@@ -61,10 +61,10 @@ pre-commit install
 
 ## Why This Matters
 
-- ✅ Consistent code style across the project
-- ✅ Easier code reviews
-- ✅ CI pipeline passes automatically
-- ✅ No more "would reformat X files" errors
+- Consistent code style across the project
+- Easier code reviews
+- CI pipeline passes automatically
+- No more "would reformat X files" errors
 
 ## Remember
 
@@ -74,7 +74,7 @@ pre-commit install
 make format  # or: black src/ tests/ --line-length=100
 ```
 
-This is the #1 reason CI fails! 💥
+This is the #1 reason CI fails!
 
 ---
 

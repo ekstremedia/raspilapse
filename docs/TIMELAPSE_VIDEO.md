@@ -6,12 +6,12 @@ Generate timelapse videos from captured images using the `make_timelapse.py` scr
 
 The timelapse video generator (`src/make_timelapse.py`) creates smooth timelapse videos from images captured by the Raspilapse system. It supports:
 
-- ✅ **Time-based selection** - Select images by start/end time
-- ✅ **Automatic file finding** - Searches date-organized directories
-- ✅ **High-quality output** - Configurable codec, framerate, and quality
-- ✅ **Logging support** - Full logging of the generation process
-- ✅ **Pretty output** - Colored, descriptive terminal output
-- ✅ **Testing mode** - Limit image count for quick testing
+- **Time-based selection** - Select images by start/end time
+- **Automatic file finding** - Searches date-organized directories
+- **High-quality output** - Configurable codec, framerate, and quality
+- **Logging support** - Full logging of the generation process
+- **Pretty output** - Colored, descriptive terminal output
+- **Testing mode** - Limit image count for quick testing
 
 ## Quick Start
 
@@ -193,28 +193,28 @@ Example output:
 
 ```
 ══════════════════════════════════════════════════════════════════════
-  🎥 TIMELAPSE VIDEO GENERATOR
+  TIMELAPSE VIDEO GENERATOR
 ══════════════════════════════════════════════════════════════════════
 
-⏰ Time Range
+Time Range
 ──────────────────────────────────────────────────────────────────────
   Start: 2025-11-05 20:00
   End: 2025-11-06 08:00
   Duration: 12.0 hours
 
-⚙️  Configuration
+Configuration
 ──────────────────────────────────────────────────────────────────────
   Image directory: /var/www/html/images
   Project name: kringelen
   Video settings: 25 fps, libx264, CRF 20
 
-🔍 Searching for Images
+Searching for Images
 ──────────────────────────────────────────────────────────────────────
-  ✓ Found 1440 images
-  → First: kringelen_2025_11_05_20_00_18.jpg
-  → Last:  kringelen_2025_11_06_07_59_55.jpg
+  Found 1440 images
+  First: kringelen_2025_11_05_20_00_18.jpg
+  Last:  kringelen_2025_11_06_07_59_55.jpg
 
-🎬 Generating Video
+Generating Video
 ──────────────────────────────────────────────────────────────────────
   Images: 1440 frames
   Frame rate: 25 fps
@@ -222,15 +222,15 @@ Example output:
   Pixel format: yuv420p
   Video duration: 57.6s (0.96 minutes)
 
-⏳ Processing video with ffmpeg...
+Processing video with ffmpeg...
    (This may take a few minutes for large timelapses)
 
-✓ Video created successfully!
+Video created successfully!
   Output file: videos/kringelen_2025-11-05_to_2025-11-06.mp4
   File size: 98.63 MB
 
 ══════════════════════════════════════════════════════════════════════
-  ✓ TIMELAPSE VIDEO CREATED SUCCESSFULLY!
+  TIMELAPSE VIDEO CREATED SUCCESSFULLY
 ══════════════════════════════════════════════════════════════════════
 ```
 

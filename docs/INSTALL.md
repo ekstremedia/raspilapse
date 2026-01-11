@@ -1,227 +1,177 @@
 # Raspilapse Installation Guide
 
-This guide will walk you through installing and setting up Raspilapse on your Raspberry Pi.
-
 ## Prerequisites
 
-### Hardware Requirements
+### Hardware
 - Raspberry Pi (any model with CSI camera port)
-- Raspberry Pi Camera Module V3 (or V2, HQ Camera)
-- microSD card with Raspberry Pi OS installed (Bullseye or later)
-- Power supply for your Raspberry Pi
+- Raspberry Pi Camera Module V2, V3, or HQ Camera
+- microSD card with Raspberry Pi OS (Bullseye or later)
+- Power supply
 
-### Software Requirements
+### Software
 - Raspberry Pi OS Bullseye or later (32-bit or 64-bit)
-- Python 3.7 or higher
-- Internet connection for initial setup
+- Python 3.9 or higher
 
----
+## Installation
 
-## Installation Steps
-
-### 1. Enable the Camera Interface
-
-First, ensure the camera interface is enabled on your Raspberry Pi:
+### 1. Enable Camera Interface
 
 ```bash
 sudo raspi-config
 ```
 
-Navigate to:
-- **Interface Options** → **Camera** → **Enable**
+Navigate to: **Interface Options** > **Camera** > **Enable**
 
-Reboot your Raspberry Pi:
-
+Reboot:
 ```bash
 sudo reboot
 ```
 
-### 2. Connect the Camera Module
+### 2. Connect Camera Module
 
-1. Power off your Raspberry Pi
-2. Locate the CSI camera port (between HDMI and audio jack on most models)
-3. Gently lift the plastic clip
-4. Insert the camera ribbon cable with contacts facing toward the HDMI port
-5. Press the clip back down
-6. Power on your Raspberry Pi
+1. Power off the Raspberry Pi
+2. Locate the CSI camera port (between HDMI and audio jack)
+3. Lift the plastic clip
+4. Insert ribbon cable with contacts facing the HDMI port
+5. Press clip down
+6. Power on
 
-### 3. Update System Packages
+### 3. Update System
 
 ```bash
 sudo apt update && sudo apt upgrade -y
 ```
 
-### 4. Install Picamera2 Library
-
-Raspilapse uses the official Picamera2 library for camera control:
+### 4. Install Dependencies
 
 ```bash
-# Standard installation (includes GUI preview support)
-sudo apt install -y python3-picamera2
+# Core dependencies
+sudo apt install -y python3-picamera2 python3-yaml python3-pil python3-numpy
 
-# OR for headless systems (minimal installation):
-sudo apt install -y python3-picamera2 --no-install-recommends
+# For video generation
+sudo apt install -y ffmpeg
+
+# For analysis and graphs (optional but recommended)
+sudo apt install -y python3-matplotlib python3-openpyxl
+
+# For sun position calculations (optional, for polar locations)
+pip3 install astral
 ```
 
-**Important:** Always install via `apt`, never via `pip`, to avoid compilation issues.
+**Note:** Always install picamera2 via apt, not pip.
 
-### 5. Install Additional Dependencies
-
-Install PyYAML for configuration file parsing:
-
-```bash
-sudo apt install -y python3-yaml
-```
-
-### 6. Test Camera Hardware
-
-Verify the camera is working:
+### 5. Test Camera
 
 ```bash
 rpicam-still -o test.jpg
 ```
 
-If successful, you should see a `test.jpg` file. View it to confirm the camera works.
+Check that test.jpg was created and looks correct.
 
-### 7. Clone or Download Raspilapse
-
-#### Option A: Clone from GitHub
+### 6. Clone Repository
 
 ```bash
 cd ~
-git clone https://github.com/YOUR_USERNAME/raspilapse.git
+git clone https://github.com/ekstremedia/raspilapse.git
 cd raspilapse
 ```
 
-#### Option B: Download ZIP
-
-Download the repository and extract it:
+### 7. Create Configuration
 
 ```bash
-cd ~
-# Download and extract (example)
-unzip raspilapse-main.zip
-cd raspilapse-main
+cp config/config.example.yml config/config.yml
 ```
 
-### 8. Verify Installation
+Edit as needed:
+```bash
+nano config/config.yml
+```
 
-Test the installation by capturing a single image:
+### 8. Test Installation
 
 ```bash
-cd ~/raspilapse
-python3 src/capture_image.py
+python3 src/auto_timelapse.py --test
 ```
 
-You should see output like:
-```
-Image captured: test_photos/raspilapse_0000.jpg
-Metadata saved: test_photos/raspilapse_0000_metadata.json
-```
+You should see output indicating a successful capture.
 
-Check the logs directory for detailed logging:
+### 9. Install as Service (Optional)
+
+For 24/7 operation:
 
 ```bash
-cat logs/capture_image.log
+./scripts/install.sh
+sudo systemctl start raspilapse
+sudo systemctl status raspilapse
 ```
 
----
+## Directory Structure
 
-## Optional: Set Up Python Virtual Environment
+After installation:
 
-For advanced users who want to isolate dependencies (though Raspilapse works with system packages):
-
-```bash
-cd ~/raspilapse
-python3 -m venv venv
-source venv/bin/activate
-pip install pyyaml
 ```
-
-Note: You still need to install `python3-picamera2` via apt, not pip.
-
----
+raspilapse/
+├── config/
+│   └── config.yml       # Your configuration
+├── src/                 # Python source code
+├── scripts/             # Utility scripts
+├── logs/                # Log files (created automatically)
+├── data/                # Database (created automatically)
+└── graphs/              # Generated graphs
+```
 
 ## Troubleshooting
 
 ### Camera Not Detected
 
-**Check cable connection:**
 ```bash
+# Test hardware
 rpicam-still -o test.jpg
-```
 
-If this fails, check:
-- Camera cable is properly inserted
-- Camera interface is enabled in raspi-config
-- Camera is compatible (V2, V3, HQ Camera)
+# Check interface enabled
+sudo raspi-config  # Interface Options > Camera
+```
 
 ### Permission Errors
 
-Add your user to the `video` group:
-
 ```bash
 sudo usermod -aG video $USER
-# Log out and log back in
+# Log out and back in
 ```
 
 ### Import Errors
 
-If you get `ModuleNotFoundError: No module named 'picamera2'`:
-
 ```bash
-# Remove any pip installations
+# Remove pip installations
 pip3 uninstall picamera2
 
-# Install via apt
+# Reinstall via apt
 sudo apt install -y python3-picamera2
 ```
 
-### Configuration File Not Found
-
-Ensure you're running commands from the raspilapse directory:
+### Missing Dependencies
 
 ```bash
-cd ~/raspilapse
-python3 src/capture_image.py
+# Check what's installed
+python3 -c "import picamera2; print('picamera2 OK')"
+python3 -c "import yaml; print('yaml OK')"
+python3 -c "import PIL; print('PIL OK')"
+python3 -c "import numpy; print('numpy OK')"
 ```
-
-Or specify the config path:
-
-```bash
-python3 src/capture_image.py -c /full/path/to/config.yml
-```
-
----
 
 ## Next Steps
 
-Once installed, proceed to [USAGE.md](USAGE.md) to learn how to:
-- Configure camera settings
-- Capture images
-- Create timelapses
-- Adjust logging levels
-- Customize output locations
-
----
+- [USAGE.md](USAGE.md) - Learn how to use Raspilapse
+- [SERVICE.md](SERVICE.md) - Set up 24/7 operation
+- [OVERLAY.md](OVERLAY.md) - Configure image overlays
 
 ## Uninstallation
 
-To remove Raspilapse:
-
 ```bash
+# Remove service
+./scripts/uninstall.sh
+
+# Remove repository
 cd ~
 rm -rf raspilapse
-
-# Optionally remove picamera2 (if not used by other apps)
-sudo apt remove python3-picamera2
 ```
-
----
-
-## Getting Help
-
-- Check [USAGE.md](USAGE.md) for usage instructions
-- Review logs in `logs/capture_image.log` for error details
-- Visit the GitHub repository for issues and discussions
-- Consult [Picamera2 Manual](https://datasheets.raspberrypi.com/camera/picamera2-manual.pdf)

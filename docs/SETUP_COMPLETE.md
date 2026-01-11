@@ -1,30 +1,30 @@
-# ✅ Setup Complete - Year-Long Timelapse Ready!
+# Setup Complete - Year-Long Timelapse Ready
 
 Your Raspberry Pi timelapse system is now fully configured for reliable 24/7 operation.
 
 ## What's Installed
 
-### 🎥 Main Services
+### Main Services
 1. **raspilapse.service** - Captures images every 30s, 24/7
 2. **raspilapse-daily-video.timer** - Creates daily videos at 00:04 AM
-3. **raspilapse-cleanup.timer** - Deletes old images at 01:00 AM ⭐ NEW!
+3. **raspilapse-cleanup.timer** - Deletes old images at 01:00 AM
 
-### 📊 Current Status
+### Current Status
 ```
-Memory:     150 MB stable (no leaks) ✅
-CPU:        4.1% average ✅
-Timing:     Perfect 30s intervals ✅
-4K:         Working flawlessly ✅
-Auto-start: Enabled on boot ✅
-Cleanup:    Automatic (daily at 01:00) ✅
+Memory:     150 MB stable (no leaks)
+CPU:        4.1% average
+Timing:     Perfect 30s intervals
+4K:         Working flawlessly
+Auto-start: Enabled on boot
+Cleanup:    Automatic (daily at 01:00)
 ```
 
-### 💾 Disk Space Solution
+### Disk Space Solution
 **Problem Solved!** The cleanup service automatically deletes images older than 7 days:
 - Before: Only 9 days of storage remaining
 - After: Infinite operation! Videos are kept forever, images auto-deleted
 
-### 📅 Daily Schedule
+### Daily Schedule
 ```
 00:04 AM → Create yesterday's timelapse video
 01:00 AM → Delete images older than 7 days
@@ -95,7 +95,7 @@ Your system will:
 
 ## After Reboot
 
-Everything starts automatically - no action needed! ✅
+Everything starts automatically - no action needed.
 
 All 3 services are enabled and will start on boot.
 
@@ -173,18 +173,18 @@ sudo reboot  # If restart doesn't help
 - `/home/pi/raspilapse/YEAR_LONG_CHECKLIST.md`
 - `/home/pi/raspilapse/MONITORING_SETUP.md`
 
-## Success Criteria ✅
+## Success Criteria
 
 Your system is ready for year-long operation when:
 
-- ✅ raspilapse.service shows "active (running)"
-- ✅ Both timers show "active (waiting)"
-- ✅ Cleanup service successfully ran (check logs)
-- ✅ Images are being captured every 30s
-- ✅ Daily video timer scheduled for 00:04
-- ✅ Cleanup timer scheduled for 01:00
+- raspilapse.service shows "active (running)"
+- Both timers show "active (waiting)"
+- Cleanup service successfully ran (check logs)
+- Images are being captured every 30s
+- Daily video timer scheduled for 00:04
+- Cleanup timer scheduled for 01:00
 
-**All criteria met!** 🎉
+**All criteria met.**
 
 ## Next Steps
 
@@ -216,7 +216,7 @@ Your system is ready for year-long operation when:
 
 Your Raspberry Pi is now a professional timelapse camera that will operate for a year (or more) without intervention. The code is rock-solid, services are properly configured, and disk cleanup is automatic.
 
-**Just let it run!** 🎥✨
+**Just let it run.**
 
 If you need to change any settings:
 - Edit `/home/pi/raspilapse/config/config.yml`
@@ -224,8 +224,6 @@ If you need to change any settings:
 
 ---
 
-**System Status:** ✅ Ready for Year-Long Operation
+**System Status:** Ready for Year-Long Operation
 **Last Updated:** 2025-11-09
 **Configuration:** 4K @ 30s intervals with automatic cleanup
-
-Enjoy your timelapse! 📹

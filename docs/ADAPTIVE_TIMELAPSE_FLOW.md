@@ -124,21 +124,21 @@ The adaptive timelapse automatically adjusts camera settings based on ambient li
 Without optimization, a 20-second exposure could take 99-124 seconds!
 
 **Applied optimizations:**
-1. ✅ `FrameDurationLimits` set to match exposure time (prevents pipeline delays)
-2. ✅ `AwbEnable = 0` in night mode (AWB causes 5x slowdown!)
-3. ✅ `buffer_count = 3` in configuration (prevents frame queuing)
-4. ✅ `queue = False` (ensures fresh frame)
-5. ✅ `capture_request()` instead of `capture_file()` + `capture_metadata()` (no blocking!)
-6. ✅ Camera properly closed between test shot and actual capture
+1. `FrameDurationLimits` set to match exposure time (prevents pipeline delays)
+2. `AwbEnable = 0` in night mode (AWB causes 5x slowdown!)
+3. `buffer_count = 3` in configuration (prevents frame queuing)
+4. `queue = False` (ensures fresh frame)
+5. `capture_request()` instead of `capture_file()` + `capture_metadata()` (no blocking!)
+6. Camera properly closed between test shot and actual capture
 
-**Result:** 20-second exposure completes in ~20 seconds (not 99+ seconds) ⚡
+**Result:** 20-second exposure completes in ~20 seconds (not 99+ seconds)
 
 ---
 
 ## Metadata: YES, Saved After Every Shot
 
-**Test shots:** ✅ Metadata saved to `test_shots/*_metadata.json`
-**Actual frames:** ✅ Metadata saved to `test_photos/*_metadata.json`
+**Test shots:** Metadata saved to `test_shots/*_metadata.json`
+**Actual frames:** Metadata saved to `test_photos/*_metadata.json`
 
 **How it works:**
 ```python
@@ -315,13 +315,13 @@ For full diagnostic documentation, see `TRANSITION_SMOOTHING.md`.
 
 | Aspect | Implementation |
 |--------|---------------|
-| **Metadata saved?** | ✅ YES - every shot (test + actual) |
-| **Diagnostic data?** | ✅ YES - exposure targets, brightness analysis |
-| **Open/close for metadata?** | ❌ NO - single `capture_request()` call |
-| **Test shots stored?** | ✅ YES - in `metadata/` directory (overwritten) |
-| **Blocking delays?** | ❌ NO - `capture_request()` is non-blocking |
-| **Long exposure speed** | ⚡ 20s exposure = ~20s total (optimized!) |
-| **Camera instances** | 🔄 Opens/closes between test shot and actual capture |
-| **Filename pattern** | 📅 `kringelen_YYYY_MM_DD_HH_MM_SS.jpg` |
+| **Metadata saved?** | YES - every shot (test + actual) |
+| **Diagnostic data?** | YES - exposure targets, brightness analysis |
+| **Open/close for metadata?** | NO - single `capture_request()` call |
+| **Test shots stored?** | YES - in `metadata/` directory (overwritten) |
+| **Blocking delays?** | NO - `capture_request()` is non-blocking |
+| **Long exposure speed** | 20s exposure = ~20s total (optimized!) |
+| **Camera instances** | Opens/closes between test shot and actual capture |
+| **Filename pattern** | `kringelen_YYYY_MM_DD_HH_MM_SS.jpg` |
 
-**The system is fully optimized for 24/7 timelapse with adaptive exposure!** 🎉
+**The system is fully optimized for 24/7 timelapse with adaptive exposure.**

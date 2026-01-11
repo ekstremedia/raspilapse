@@ -1,6 +1,6 @@
 # Contributing to Raspilapse
 
-Thank you for your interest in contributing to Raspilapse! 🎉
+Thank you for your interest in contributing to Raspilapse.
 
 ## Code Formatting (CRITICAL!)
 
@@ -62,4 +62,4 @@ See full guidelines: [CONTRIBUTING.md full version coming soon]
 
 ---
 
-**Thank you for contributing!** 🙏
+**Thank you for contributing.**

@@ -2,7 +2,7 @@
 
 Quick guide to set up automated monitoring for year-long operation.
 
-## 1. Install Monitoring Scripts (Already Done! ✅)
+## 1. Install Monitoring Scripts
 
 Scripts are located in `/home/pi/raspilapse/scripts/`:
 - `cleanup_old_images.sh` - Deletes images older than 7 days (runs as systemd service)
@@ -10,7 +10,7 @@ Scripts are located in `/home/pi/raspilapse/scripts/`:
 - `check_service.sh` - Ensures service is running
 - `check_capture_rate.sh` - Verifies captures are happening
 
-## 2. Cleanup Service (Already Installed! ✅)
+## 2. Cleanup Service
 
 The cleanup script runs as a **systemd timer** (not cron):
 
@@ -273,4 +273,4 @@ Your monitoring is now active. The system will:
 - Clean up old images automatically
 - Log all activity for review
 
-Sleep well knowing your year-long timelapse is protected! 🎥✅
+Your monitoring is ready for year-long operation.

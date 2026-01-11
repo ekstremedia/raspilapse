@@ -326,7 +326,7 @@ def _apply_ev_safety_clamp(self, target_exposure, target_gain):
 
 **Important**: The `_ev_clamp_applied` flag ensures the clamp only runs once per transition cycle. When the camera returns to day mode, this flag is reset along with `_transition_seeded`.
 
-**⚠️ IMPORTANT: Street Lamp / Bright Point Light Issue**
+**IMPORTANT: Street Lamp / Bright Point Light Issue**
 
 The EV safety clamp can cause severely underexposed images when a bright point light source (street lamp, security light, etc.) is in the frame:
 

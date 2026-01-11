@@ -4,13 +4,13 @@ Raspilapse supports displaying real-time weather data from Netatmo weather stati
 
 ## Features
 
-- ✅ Fetch weather data from Netatmo API endpoint
-- ✅ Display temperature, humidity, wind, rain, and pressure
-- ✅ Smart caching (5-minute default, configurable)
-- ✅ Automatic fallback to "-" for stale/unavailable data
-- ✅ Seamless integration with existing overlay system
-- ✅ Wind speed conversion (km/h → m/s)
-- ✅ Compass wind direction (N, NE, E, SE, S, SW, W, NW)
+- Fetch weather data from Netatmo API endpoint
+- Display temperature, humidity, wind, rain, and pressure
+- Smart caching (5-minute default, configurable)
+- Automatic fallback to "-" for stale/unavailable data
+- Seamless integration with existing overlay system
+- Wind speed conversion (km/h to m/s)
+- Compass wind direction (N, NE, E, SE, S, SW, W, NW)
 
 ## Configuration
 
@@ -237,7 +237,7 @@ overlay:
     weather:
       enabled: true
       lines:
-        - "🌡️ {temp} | 💧 {humidity} | 💨 {wind}"
+        - "Temp: {temp} | Humidity: {humidity} | Wind: {wind}"
 ```
 
 ### Conditional Weather Display

@@ -375,13 +375,13 @@ test_capture.initialize_camera(settings_B)  # Works!
 - 20s exposure capture: **99-124 seconds** (5x slowdown!)
 - Post-capture metadata: **+20 seconds blocking**
 - Camera reinitialization: **Fails with "Camera in Running state"**
-- Total time between frames: **140+ seconds** ❌
+- Total time between frames: **140+ seconds**
 
 #### After All Optimizations:
-- 20s exposure capture: **18-20 seconds** ✅
-- Post-capture metadata: **0 seconds** (non-blocking) ✅
-- Camera reinitialization: **Works perfectly** ✅
-- Total time between frames: **~60 seconds** (60s interval) ✅
+- 20s exposure capture: **18-20 seconds**
+- Post-capture metadata: **0 seconds** (non-blocking)
+- Camera reinitialization: **Works perfectly**
+- Total time between frames: **~60 seconds** (60s interval)
 
 #### Overall Improvement: ~7x faster!
 
@@ -439,20 +439,20 @@ picam2.close()
 
 ### Common Pitfalls to Avoid
 
-❌ **DON'T**: Use `capture_file()` + `capture_metadata()` with long exposures
-✅ **DO**: Use `capture_request()` to get both image and metadata
+**DON'T**: Use `capture_file()` + `capture_metadata()` with long exposures
+**DO**: Use `capture_request()` to get both image and metadata
 
-❌ **DON'T**: Leave AWB enabled (`AwbEnable: 1`) for night captures
-✅ **DO**: Disable AWB (`AwbEnable: 0`) for long exposures
+**DON'T**: Leave AWB enabled (`AwbEnable: 1`) for night captures
+**DO**: Disable AWB (`AwbEnable: 0`) for long exposures
 
-❌ **DON'T**: Forget to set `FrameDurationLimits` matching exposure time
-✅ **DO**: Set `FrameDurationLimits = (exposure + 100ms, exposure + 100ms)`
+**DON'T**: Forget to set `FrameDurationLimits` matching exposure time
+**DO**: Set `FrameDurationLimits = (exposure + 100ms, exposure + 100ms)`
 
-❌ **DON'T**: Create new camera instance without closing the previous one
-✅ **DO**: Always call `picam2.close()` before creating new instance
+**DON'T**: Create new camera instance without closing the previous one
+**DO**: Always call `picam2.close()` before creating new instance
 
-❌ **DON'T**: Use default buffer settings for long exposures
-✅ **DO**: Set `buffer_count=3` and `queue=False` in configuration
+**DON'T**: Use default buffer settings for long exposures
+**DO**: Set `buffer_count=3` and `queue=False` in configuration
 
 ### References
 - GitHub Discussion #343: https://github.com/raspberrypi/picamera2/discussions/343
@@ -476,10 +476,10 @@ The adaptive timelapse (`src/auto_timelapse.py`) automatically adjusts exposure 
 5. **Wait** → Sleep until next interval
 
 **Metadata Handling:**
-- ✅ Saved after EVERY shot (both test shots and actual frames)
-- ✅ Uses `capture_request()` method - gets image + metadata in ONE operation
-- ✅ Non-blocking - no delays waiting for metadata
-- ❌ Does NOT close/reopen camera between image and metadata
+- Saved after EVERY shot (both test shots and actual frames)
+- Uses `capture_request()` method - gets image + metadata in ONE operation
+- Non-blocking - no delays waiting for metadata
+- Does NOT close/reopen camera between image and metadata
 
 **Metadata Directory:**
 - Stored in `metadata/` directory with fixed filenames (overwritten each time)
@@ -507,11 +507,11 @@ For detailed flow documentation, see `ADAPTIVE_TIMELAPSE_FLOW.md`.
 Modern text overlay system for adding camera information to images:
 
 **Features:**
-- ✅ Configurable content (timestamps, camera settings, debug info)
-- ✅ Semi-transparent backgrounds for readability
-- ✅ Resolution-independent sizing
-- ✅ Flexible positioning (corners or custom)
-- ✅ Automatic during capture OR standalone script
+- Configurable content (timestamps, camera settings, debug info)
+- Semi-transparent backgrounds for readability
+- Resolution-independent sizing
+- Flexible positioning (corners or custom)
+- Automatic during capture OR standalone script
 
 **Quick Enable:**
 ```yaml
@@ -539,13 +539,13 @@ python3 src/apply_overlay.py test_photos/*.jpg --output-dir overlayed/
 Beautiful colored status display showing system state, configuration, and recent captures.
 
 **Features:**
-- ✅ Service status (running/stopped/failed) with color indicators
-- ✅ Configuration summary (resolution, interval, light thresholds)
-- ✅ Overlay settings display
-- ✅ Recent captures with timing analysis
-- ✅ Average interval calculation
-- ✅ Symlink status for web display
-- ✅ ANSI colored output for readability
+- Service status (running/stopped/failed) with color indicators
+- Configuration summary (resolution, interval, light thresholds)
+- Overlay settings display
+- Recent captures with timing analysis
+- Average interval calculation
+- Symlink status for web display
+- ANSI colored output for readability
 
 **Usage:**
 ```bash
@@ -559,32 +559,32 @@ python3 src/status.py -c config/custom.yml
 **Output Example:**
 ```
 ============================================================
-  🎥  RASPILAPSE STATUS  🎥
+  RASPILAPSE STATUS
 ============================================================
 
-📡 SERVICE STATUS
+SERVICE STATUS
 ────────────────────────────────────────────────────────────
-  Status:      ● RUNNING
+  Status:      RUNNING
   Description: Service is running normally
 
-⚙️  CONFIGURATION
+CONFIGURATION
 ────────────────────────────────────────────────────────────
   Resolution:  1920x1080 (2.1MP)
   Interval:    30s (2.0 captures/min)
-  Day Mode:    >100 lux ☀️
-  Night Mode:  <10 lux 🌙
+  Day Mode:    >100 lux
+  Night Mode:  <10 lux
   Max Exposure: 20s (ISO 600)
   Output:      /var/www/html/images
 
-🖼️  OVERLAY
+OVERLAY
 ────────────────────────────────────────────────────────────
-  ✓ Enabled
+  Enabled
   Position:    top-bar
   Camera Name: Kringelen Timelapse
   Font:        DejaVuSans-Bold.ttf (size: 0.020)
-  Background:  ✓ (43% opacity)
+  Background:  Enabled (43% opacity)
 
-📸 RECENT CAPTURES
+RECENT CAPTURES
 ────────────────────────────────────────────────────────────
   Average Interval: 30.5s (target: 30s)
 
@@ -599,13 +599,13 @@ python3 src/status.py -c config/custom.yml
 Comprehensive test suite for verifying installation and configuration.
 
 **What it checks:**
-- ✅ Python dependencies (picamera2, yaml, PIL, numpy)
-- ✅ Configuration file syntax
-- ✅ Camera hardware detection
-- ✅ Output directory permissions
-- ✅ Service installation and status
-- ✅ Optional test capture
-- ✅ Full status display
+- Python dependencies (picamera2, yaml, PIL, numpy)
+- Configuration file syntax
+- Camera hardware detection
+- Output directory permissions
+- Service installation and status
+- Optional test capture
+- Full status display
 
 **Usage:**
 ```bash
@@ -628,12 +628,12 @@ Comprehensive test suite for verifying installation and configuration.
 Powerful analysis tool that generates beautiful graphs and Excel reports from timelapse metadata.
 
 **Features:**
-- ✅ **Fast**: Only reads JSON metadata files (no image processing)
-- ✅ **Beautiful dark-themed lux graph** with day/night zones
-- ✅ **5 detailed graphs**: Lux, Exposure, Gain, White Balance, Overview
-- ✅ **Excel export** with 3 sheets: Raw Data, Statistics, Hourly Averages
-- ✅ **Real-world lux references** (sunlight, twilight, full moon, etc.)
-- ✅ **Chronologically sorted** data from earliest to latest
+- **Fast**: Only reads JSON metadata files (no image processing)
+- **Beautiful dark-themed lux graph** with day/night zones
+- **5 detailed graphs**: Lux, Exposure, Gain, White Balance, Overview
+- **Excel export** with 3 sheets: Raw Data, Statistics, Hourly Averages
+- **Real-world lux references** (sunlight, twilight, full moon, etc.)
+- **Chronologically sorted** data from earliest to latest
 
 **Usage:**
 ```bash
@@ -652,7 +652,7 @@ python3 src/analyze_timelapse.py -c config/custom.yml
 
 **Generated Files** (in `graphs/` directory):
 
-1. **`lux_levels.png`** ⭐ Most Important!
+1. **`lux_levels.png`** (Most Important)
    - Dark-themed graph with colored day/night/twilight zones
    - Orange glowing line with fill effect
    - Real-world reference lines (sunlight, twilight, etc.)

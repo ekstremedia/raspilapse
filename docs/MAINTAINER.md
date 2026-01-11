@@ -14,16 +14,16 @@ This document contains instructions for project maintainers and administrators.
 
 Raspilapse uses [Codecov](https://codecov.io) for tracking test coverage across pull requests and commits.
 
-### Initial Setup (Already Completed ✅)
+### Initial Setup (Already Completed)
 
 The project is already configured with:
-- ✅ Pytest with coverage support (`pytest-cov`)
-- ✅ GitHub Actions workflow generates coverage reports
-- ✅ Codecov action uploads reports automatically
+- Pytest with coverage support (`pytest-cov`)
+- GitHub Actions workflow generates coverage reports
+- Codecov action uploads reports automatically
 
 ### Adding the Codecov Token (Required for Maintainers)
 
-**⚠️ Organization admin access required**
+**Organization admin access required**
 
 1. **Get the Codecov Token**
 
@@ -67,11 +67,11 @@ The project is already configured with:
 4. Codecov analyzes and displays results on PRs
 
 **Coverage Report Features:**
-- ✅ Line coverage (which lines are tested)
-- ✅ Branch coverage (which code paths are tested)
-- ✅ PR comments showing coverage changes
-- ✅ Coverage trends over time
-- ✅ Badges for README
+- Line coverage (which lines are tested)
+- Branch coverage (which code paths are tested)
+- PR comments showing coverage changes
+- Coverage trends over time
+- Badges for README
 
 ### Codecov Badge
 
@@ -103,10 +103,10 @@ The following secrets are configured for this repository:
 4. Click **"Add secret"**
 
 **Security Notes:**
-- ⚠️ Never commit secrets to the repository
-- ⚠️ Use repository secrets for public repos
-- ⚠️ Use organization secrets for shared access across repos
-- ✅ Secrets are encrypted and only exposed during workflow runs
+- Never commit secrets to the repository
+- Use repository secrets for public repos
+- Use organization secrets for shared access across repos
+- Secrets are encrypted and only exposed during workflow runs
 
 ---
 

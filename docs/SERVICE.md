@@ -1,49 +1,67 @@
 # Running Raspilapse as a Service
 
-This guide explains how to run Raspilapse continuously as a background service on your Raspberry Pi.
+This guide explains how to run Raspilapse continuously as a background service.
 
 ## Quick Start
 
 ```bash
-# 1. Install the service
+# Install and start the service
 ./install_service.sh
-
-# 2. Start the service
 sudo systemctl start raspilapse
-
-# 3. Check status
 sudo systemctl status raspilapse
-
-# 4. View logs
 sudo journalctl -u raspilapse -f
+```
+
+## All Raspilapse Services
+
+Your system includes 3 systemd services:
+
+| Service | Purpose | Schedule |
+|---------|---------|----------|
+| `raspilapse.service` | Main timelapse capture | 24/7 continuous |
+| `raspilapse-daily-video.timer` | Generate daily videos | 00:04 AM |
+| `raspilapse-cleanup.timer` | Delete old images | 01:00 AM |
+
+### Service Timeline (Daily)
+```
+00:04 AM  - Daily video generation (yesterday's images)
+01:00 AM  - Cleanup old images (>7 days)
+24/7      - Continuous capture every 30s
+```
+
+### Quick Status Check
+```bash
+# View all Raspilapse services
+systemctl list-units --type=service,timer | grep raspilapse
+
+# View timer schedules
+systemctl list-timers | grep raspilapse
 ```
 
 ## Installation
 
-### Automated Installation (Recommended)
-
-The installation script will:
-- Create the image directory (`/var/www/html/images/`)
-- Set up proper permissions
-- Install the systemd service
-- Enable autostart on boot
+### Automated (Recommended)
 
 ```bash
 cd /home/pi/raspilapse
 ./install_service.sh
 ```
 
+This will:
+- Create image directory (`/var/www/html/images/`)
+- Set up proper permissions
+- Install systemd services
+- Enable autostart on boot
+
 ### Manual Installation
 
-If you prefer to install manually:
-
 ```bash
-# 1. Create directories
+# Create directories
 sudo mkdir -p /var/www/html/images
 sudo chown -R pi:www-data /var/www/html/images
 sudo chmod -R 775 /var/www/html/images
 
-# 2. Install service
+# Install services
 sudo cp raspilapse.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable raspilapse
@@ -51,98 +69,92 @@ sudo systemctl enable raspilapse
 
 ## Service Management
 
-### Start Service
+### Basic Commands
 
 ```bash
+# Start/Stop/Restart
 sudo systemctl start raspilapse
-```
-
-### Stop Service
-
-```bash
 sudo systemctl stop raspilapse
-```
-
-### Restart Service
-
-```bash
 sudo systemctl restart raspilapse
-```
 
-### Check Status
-
-```bash
+# Check status
 sudo systemctl status raspilapse
-```
 
-Example output:
-```
-● raspilapse.service - Raspilapse Continuous Timelapse Service
-     Loaded: loaded (/etc/systemd/system/raspilapse.service; enabled)
-     Active: active (running) since Tue 2025-11-05 14:30:00 GMT; 2h 15min ago
-   Main PID: 1234 (python3)
-      Tasks: 3 (limit: 4915)
-     Memory: 45.2M
-        CPU: 1min 23.456s
-     CGroup: /system.slice/raspilapse.service
-             └─1234 /usr/bin/python3 /home/pi/raspilapse/src/auto_timelapse.py
-```
-
-### View Logs
-
-**Follow logs in real-time:**
-```bash
-sudo journalctl -u raspilapse -f
-```
-
-**View last 100 lines:**
-```bash
-sudo journalctl -u raspilapse -n 100
-```
-
-**View logs since today:**
-```bash
-sudo journalctl -u raspilapse --since today
-```
-
-**View logs with timestamps:**
-```bash
-sudo journalctl -u raspilapse --since "2025-11-05 14:00:00"
-```
-
-### Enable/Disable Autostart
-
-**Enable (start on boot):**
-```bash
+# Enable/Disable autostart
 sudo systemctl enable raspilapse
+sudo systemctl disable raspilapse
 ```
 
-**Disable (don't start on boot):**
+### Managing All Services
+
 ```bash
-sudo systemctl disable raspilapse
+# Enable all
+sudo systemctl enable raspilapse.service
+sudo systemctl enable raspilapse-daily-video.timer
+sudo systemctl enable raspilapse-cleanup.timer
+
+# Restart all
+sudo systemctl restart raspilapse.service
+sudo systemctl restart raspilapse-daily-video.timer
+sudo systemctl restart raspilapse-cleanup.timer
+
+# Stop everything
+sudo systemctl stop raspilapse.service
+sudo systemctl stop raspilapse-daily-video.timer
+sudo systemctl stop raspilapse-cleanup.timer
+```
+
+### Manual Trigger
+
+```bash
+# Trigger daily video now
+sudo systemctl start raspilapse-daily-video.service
+
+# Trigger cleanup now
+sudo systemctl start raspilapse-cleanup.service
+```
+
+## Viewing Logs
+
+```bash
+# Follow live
+sudo journalctl -u raspilapse -f
+
+# Last 100 lines
+sudo journalctl -u raspilapse -n 100
+
+# Since today
+sudo journalctl -u raspilapse --since today
+
+# Errors only
+sudo journalctl -u raspilapse -p err
+
+# All services
+journalctl -u raspilapse.service -u raspilapse-daily-video.service -u raspilapse-cleanup.service -f
+
+# Check for errors (last 24h)
+journalctl -u raspilapse.service --since "24 hours ago" | grep -i error
 ```
 
 ## Configuration
 
-### Edit Configuration
+Edit config and restart:
 
 ```bash
 nano /home/pi/raspilapse/config/config.yml
+sudo systemctl restart raspilapse
 ```
 
-### Apply Configuration Changes
+### Cleanup Configuration
 
-After editing the config, restart the service:
-
+Edit `/home/pi/raspilapse/scripts/cleanup_old_images.sh`:
 ```bash
-sudo systemctl restart raspilapse
+KEEP_DAYS=7  # Change to keep images longer
 ```
 
 ## Image Storage
 
 ### Directory Structure
-
-Images are organized by date:
 
 ```
 /var/www/html/images/
@@ -150,194 +162,110 @@ Images are organized by date:
 │   ├── 11/
 │   │   ├── 05/
 │   │   │   ├── kringelen_2025_11_05_00_00_00.jpg
-│   │   │   ├── kringelen_2025_11_05_00_30_00.jpg
-│   │   │   ├── kringelen_2025_11_05_01_00_00.jpg
-│   │   │   └── ...
-│   │   ├── 06/
 │   │   │   └── ...
 │   │   └── ...
 │   └── ...
 └── ...
 ```
 
-### Access via Web Browser
+### Web Access
 
-If you have a web server running (e.g., Apache or Nginx), you can view images at:
-
+With nginx installed:
 ```
 http://your-pi-ip/images/2025/11/05/
+http://your-pi-ip/status.jpg  # Latest image
 ```
 
-Latest image (via symlink):
+## Monitoring
+
+### Check If Running
+```bash
+systemctl is-active raspilapse
 ```
-http://your-pi-ip/status.jpg
+
+### Resource Usage
+```bash
+systemctl status raspilapse
+ps aux | grep auto_timelapse
+```
+
+### Disk Space
+```bash
+df -h /var/www/html/images
+du -sh /var/www/html/images
+```
+
+### Capture Rate
+```bash
+# Images in last hour (should be ~120 for 30s interval)
+find /var/www/html/images -name "*.jpg" -mmin -60 | wc -l
+
+# Today's captures
+find /var/www/html/images -name "*.jpg" -mtime -1 | wc -l
 ```
 
 ## Troubleshooting
 
 ### Service Won't Start
 
-**Check logs:**
 ```bash
+# Check logs
 sudo journalctl -u raspilapse -n 50
-```
 
-**Common issues:**
-- Camera in use by another process
-- Missing dependencies
-- Configuration errors
-- Permission issues
+# Common causes:
+# - Camera in use by another process
+# - Configuration errors
+# - Permission issues
+```
 
 ### Camera Not Detected
 
 ```bash
-# Test camera
 rpicam-still -o test.jpg
-
-# Check camera interface
-sudo raspi-config
-# Navigate to: Interface Options → Camera → Enable
+sudo raspi-config  # Interface Options > Camera > Enable
 ```
 
 ### Permission Issues
 
 ```bash
-# Fix image directory permissions
 sudo chown -R pi:www-data /var/www/html/images
 sudo chmod -R 775 /var/www/html/images
-
-# Add user to video group
-sudo usermod -aG video pi
-# Log out and back in
+sudo usermod -aG video pi  # Re-login required
 ```
 
-### Disk Space
+### Cleanup Not Running
 
 ```bash
-# Check available space
-df -h /var/www/html
+# Check timer enabled
+systemctl is-enabled raspilapse-cleanup.timer
 
-# Find large directories
-du -h --max-depth=2 /var/www/html/images | sort -hr | head -20
-```
+# Check next run
+systemctl list-timers | grep cleanup
 
-### Service Crashes/Restarts
-
-The service automatically restarts after 10 seconds if it crashes.
-
-**View crash logs:**
-```bash
-sudo journalctl -u raspilapse --since "1 hour ago" | grep -i error
-```
-
-## Monitoring
-
-### Check If Running
-
-```bash
-systemctl is-active raspilapse
-# Output: active (running) or inactive (dead)
-```
-
-### View Resource Usage
-
-```bash
-systemctl status raspilapse
-```
-
-### Count Images Captured Today
-
-```bash
-find /var/www/html/images/$(date +%Y/%m/%d) -name "*.jpg" | wc -l
-```
-
-### Latest Image
-
-```bash
-ls -lh /var/www/html/status.jpg
+# Test manually
+sudo systemctl start raspilapse-cleanup.service
+journalctl -u raspilapse-cleanup.service -n 50
 ```
 
 ## Alternative Running Methods
 
-### Foreground (for testing)
-
+### Foreground (Testing)
 ```bash
-cd /home/pi/raspilapse
 python3 src/auto_timelapse.py
-# Press Ctrl+C to stop
+# Ctrl+C to stop
 ```
 
-### Screen/Tmux (manual background)
-
+### Screen/Tmux
 ```bash
-# Using screen
 screen -S timelapse
 python3 src/auto_timelapse.py
-# Press Ctrl+A then D to detach
-
-# Reattach later
-screen -r timelapse
-
-# Using tmux
-tmux new -s timelapse
-python3 src/auto_timelapse.py
-# Press Ctrl+B then D to detach
-
-# Reattach later
-tmux attach -t timelapse
+# Ctrl+A then D to detach
+screen -r timelapse  # Reattach
 ```
-
-### Cron (not recommended)
-
-While possible, cron is not recommended for continuous capture because:
-- Service automatically restarts on failure
-- Better logging with systemd
-- Easier management
-
-## Uninstallation
-
-```bash
-cd /home/pi/raspilapse
-./uninstall_service.sh
-```
-
-Or manually:
-
-```bash
-sudo systemctl stop raspilapse
-sudo systemctl disable raspilapse
-sudo rm /etc/systemd/system/raspilapse.service
-sudo systemctl daemon-reload
-```
-
-## Advanced Configuration
-
-### Change Capture Interval
-
-Edit `config/config.yml`:
-
-```yaml
-adaptive_timelapse:
-  interval: 30  # seconds between captures
-```
-
-Then restart:
-```bash
-sudo systemctl restart raspilapse
-```
-
-### Multiple Instances
-
-To run multiple timelapse instances (e.g., different cameras):
-
-1. Create separate directories
-2. Copy and modify service file with different names
-3. Update paths in each service file
 
 ## Web Server Setup (Optional)
 
 ### Install Nginx
-
 ```bash
 sudo apt install nginx
 ```
@@ -345,12 +273,10 @@ sudo apt install nginx
 ### Configure Directory Listing
 
 Create `/etc/nginx/sites-available/timelapse`:
-
 ```nginx
 server {
     listen 80;
     server_name _;
-
     root /var/www/html;
     index index.html;
 
@@ -366,35 +292,56 @@ server {
 }
 ```
 
-Enable and restart:
+Enable:
 ```bash
 sudo ln -s /etc/nginx/sites-available/timelapse /etc/nginx/sites-enabled/
 sudo systemctl restart nginx
 ```
 
-## Summary
+## Uninstallation
 
-**Essential Commands:**
 ```bash
-sudo systemctl start raspilapse       # Start
-sudo systemctl stop raspilapse        # Stop
-sudo systemctl restart raspilapse     # Restart
-sudo systemctl status raspilapse      # Status
-sudo journalctl -u raspilapse -f      # Logs
+./uninstall_service.sh
+
+# Or manually:
+sudo systemctl stop raspilapse
+sudo systemctl disable raspilapse
+sudo rm /etc/systemd/system/raspilapse.service
+sudo systemctl daemon-reload
 ```
 
-**Configuration:**
-- Edit: `nano /home/pi/raspilapse/config/config.yml`
-- Apply: `sudo systemctl restart raspilapse`
+## Configuration Files
 
-**Images:**
-- Location: `/var/www/html/images/YYYY/MM/DD/`
-- Latest: `/var/www/html/status.jpg`
+### Systemd Services
+- `/etc/systemd/system/raspilapse.service`
+- `/etc/systemd/system/raspilapse-daily-video.service`
+- `/etc/systemd/system/raspilapse-daily-video.timer`
+- `/etc/systemd/system/raspilapse-cleanup.service`
+- `/etc/systemd/system/raspilapse-cleanup.timer`
 
----
+### Application
+- `/home/pi/raspilapse/config/config.yml`
 
-**For more help, see:**
-- [README.md](README.md) - Project overview
-- [INSTALL.md](INSTALL.md) - Installation guide
-- [USAGE.md](USAGE.md) - Usage examples
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Common issues
+### Scripts
+- `/home/pi/raspilapse/src/auto_timelapse.py`
+- `/home/pi/raspilapse/src/make_timelapse_daily.py`
+- `/home/pi/raspilapse/scripts/cleanup_old_images.sh`
+
+## Quick Reference
+
+```bash
+# Essential commands
+sudo systemctl start raspilapse
+sudo systemctl stop raspilapse
+sudo systemctl restart raspilapse
+sudo systemctl status raspilapse
+sudo journalctl -u raspilapse -f
+
+# Configuration
+nano /home/pi/raspilapse/config/config.yml
+sudo systemctl restart raspilapse
+
+# Images
+ls /var/www/html/images/$(date +%Y/%m/%d)/
+ls -lh /var/www/html/status.jpg
+```

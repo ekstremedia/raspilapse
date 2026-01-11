@@ -25,6 +25,7 @@ graphs/
 videos/
 logs/
 data/
+ml_state/
 
 # Output files
 *.jpg

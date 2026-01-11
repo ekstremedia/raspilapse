@@ -6,13 +6,13 @@ Modern, flexible text overlay system for timelapse images with configurable cont
 
 ## Features
 
-✅ **Modular Design**: Can be used during capture OR as standalone script
-✅ **Highly Configurable**: Everything controlled via `config/config.yml`
-✅ **Resolution Independent**: Automatic font sizing based on image dimensions
-✅ **Semi-Transparent Backgrounds**: Dark backgrounds for text readability
-✅ **Rich Content**: Camera settings, timestamps, debug info, custom text
-✅ **Flexible Positioning**: Presets (corners) or custom positioning
-✅ **Batch Processing**: Apply overlays to multiple existing images
+- **Modular Design**: Can be used during capture OR as standalone script
+- **Highly Configurable**: Everything controlled via `config/config.yml`
+- **Resolution Independent**: Automatic font sizing based on image dimensions
+- **Semi-Transparent Backgrounds**: Dark backgrounds for text readability
+- **Rich Content**: Camera settings, timestamps, debug info, custom text
+- **Flexible Positioning**: Presets (corners) or custom positioning
+- **Batch Processing**: Apply overlays to multiple existing images
 
 ---
 
@@ -555,12 +555,10 @@ The overlay system provides a powerful, flexible way to add professional-looking
 
 | Feature | Status |
 |---------|--------|
-| **Automatic Integration** | ✅ During capture |
-| **Standalone Processing** | ✅ After capture |
-| **Resolution Independent** | ✅ Scales automatically |
-| **Configurable Content** | ✅ Via YAML config |
-| **Semi-transparent BG** | ✅ For readability |
-| **Batch Processing** | ✅ Multiple images |
-| **Performance** | ✅ Fast & efficient |
-
-Happy timelapsing! 🎥
+| Automatic Integration | During capture |
+| Standalone Processing | After capture |
+| Resolution Independent | Scales automatically |
+| Configurable Content | Via YAML config |
+| Semi-transparent BG | For readability |
+| Batch Processing | Multiple images |
+| Performance | Fast and efficient |

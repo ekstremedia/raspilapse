@@ -275,22 +275,6 @@ Examples:
         "camera_id", config.get("output", {}).get("project_name", "unknown")
     )
 
-    # Fallback: load missing upload config fields from old config file
-    # Only fill in missing fields (url, api_key) - don't override enabled setting
-    if not upload_config.get("url"):
-        old_config_path = "/home/pi/raspberrypi-picamera-timelapse/config.yaml"
-        if os.path.exists(old_config_path):
-            with open(old_config_path, "r") as f:
-                old_config = yaml.safe_load(f)
-            old_upload = old_config.get("video_upload", {})
-            # Only copy fields that are missing in new config
-            for key in ["url", "api_key"]:
-                if key not in upload_config and key in old_upload:
-                    upload_config[key] = old_upload[key]
-            if "camera_id" not in upload_config:
-                camera_id = old_config.get("camera_id", camera_id)
-            logger.info("Using upload config from old config file (merged)")
-
     # Step 1: Create timelapse video, keogram, and slitscan
     if not args.only_upload:
         print("\n=== Creating Timelapse Video ===")
