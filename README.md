@@ -3,7 +3,7 @@
 ![Tests](https://github.com/ekstremedia/raspilapse/workflows/Tests/badge.svg)
 [![codecov](https://codecov.io/gh/ekstremedia/raspilapse/branch/main/graph/badge.svg)](https://codecov.io/gh/ekstremedia/raspilapse)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Version](https://img.shields.io/badge/version-1.0.5-brightgreen)
+![Version](https://img.shields.io/badge/version-1.0.9-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A Python library for creating timelapses with Raspberry Pi Camera. Supports adaptive day/night exposure, image overlays, and optimized long exposures up to 20 seconds.
@@ -91,9 +91,12 @@ overlay:
 
 **Image Overlays** - Configurable text overlays with timestamps, camera settings, and weather data.
 
-**Analysis Tools** - Generate graphs and Excel reports from capture metadata:
+**Analysis Tools** - Generate graphs from the capture database:
 ```bash
-python3 src/analyze_timelapse.py --hours 24
+python3 scripts/db_graphs.py           # Last 24 hours (default)
+python3 scripts/db_graphs.py 6h        # Last 6 hours
+python3 scripts/db_graphs.py 7d        # Last 7 days
+python3 scripts/db_stats.py --all      # View database statistics
 ```
 
 **Video Generation with Deflicker** - Create timelapse videos with FFMPEG deflicker filter to smooth any remaining exposure transitions:
@@ -132,11 +135,13 @@ raspilapse/
 │   ├── auto_timelapse.py   # Adaptive day/night capture
 │   ├── capture_image.py    # Core capture module
 │   ├── make_timelapse.py   # Video generation
-│   ├── analyze_timelapse.py # Graphs and analysis
 │   ├── overlay.py          # Image overlays
 │   └── status.py           # Status display
+├── scripts/                # Utility scripts
+│   ├── db_graphs.py        # Generate graphs from database
+│   ├── db_stats.py         # View database statistics
+│   └── install.sh          # Service installation
 ├── config/                 # Configuration files
-├── scripts/                # Install/uninstall scripts
 ├── systemd/                # Service files
 ├── docs/                   # Documentation
 └── tests/                  # Unit tests

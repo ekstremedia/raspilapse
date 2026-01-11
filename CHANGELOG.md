@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.9] - 2026-01-11
+
+### Added
+- **Database Graph Generator** (`scripts/db_graphs.py`): Generate visually pleasing PNG graphs from capture database
+  - 6 graph types: lux_levels, exposure_gain, brightness, weather, system, overview
+  - Dark theme with vibrant colors for easy reading
+  - Gaussian smoothing for smooth curves (window=15)
+  - Temperature line with blue/red gradient based on value (blue ≤0°C, red >0°C)
+  - Plain number formatting on axes (no scientific notation)
+  - Hourly x-axis labels for easy time reading
+  - Time range options: `24h` (default), `6h`, `7d`, `--all`
+  - Custom output directory with `-o` flag
+  - New tests: 25 tests in `tests/test_db_graphs.py`
+
 ## [1.0.8] - 2026-01-10
 
 ### Fixed
