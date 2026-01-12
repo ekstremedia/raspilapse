@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-01-12
+
+### Changed
+- **ML v2 Integration Complete**: `auto_timelapse.py` now uses ML v2 instead of v1
+  - ML v2 is database-driven and only learns from good frames (brightness 100-140)
+  - Passes `sun_elevation` to predictions for Arctic-aware time periods
+  - Requires database to be enabled (fails gracefully if not)
+  - Removes frame-by-frame learning (v1's `learn_from_frame()`) - prevents perpetuating bad exposures
+  - Higher initial trust (0.5) since it's trained only on proven good data
+
+### Deprecated
+- **ML v1** (`src/ml_exposure.py`): No longer used by `auto_timelapse.py`
+  - Kept for reference but not imported
+  - Old state file `ml_state/ml_state.json` can be safely deleted
+
+### Added
+- New tests for ML v2 integration in `tests/test_auto_timelapse.py`
+  - `test_ml_v2_disabled_by_default`
+  - `test_ml_v2_requires_database`
+  - `test_ml_v2_disabled_without_database`
+
+### Documentation
+- Updated `ML.md` to reflect v2 integration and v1 deprecation
+
 ## [1.1.0] - 2026-01-11
 
 ### Added

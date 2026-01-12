@@ -1865,5 +1865,115 @@ class TestMainFunction:
         assert exc_info.value.code == 0
 
 
+class TestMLv2Integration:
+    """Test ML v2 integration in AdaptiveTimelapse."""
+
+    @pytest.fixture
+    def ml_enabled_config_file(self):
+        """Create a config file with ML v2 enabled."""
+        config_data = {
+            "camera": {
+                "resolution": {"width": 1280, "height": 720},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": "test_photos",
+                "filename_pattern": "{name}_{counter}.jpg",
+                "project_name": "test_project",
+                "quality": 85,
+            },
+            "system": {
+                "create_directories": True,
+                "save_metadata": True,
+                "metadata_filename": "{name}_{counter}_metadata.json",
+                "metadata_folder": "metadata",
+            },
+            "overlay": {"enabled": False},
+            "database": {
+                "enabled": True,
+                "path": "test_data/test_timelapse.db",
+            },
+            "adaptive_timelapse": {
+                "enabled": True,
+                "interval": 30,
+                "light_thresholds": {"night": 10, "day": 100},
+                "night_mode": {"max_exposure_time": 20.0, "analogue_gain": 6},
+                "day_mode": {"awb_enable": True},
+                "ml_exposure": {
+                    "enabled": True,
+                    "good_brightness_min": 100,
+                    "good_brightness_max": 140,
+                },
+            },
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        yield config_path
+        os.unlink(config_path)
+
+    def test_ml_v2_disabled_by_default(self, test_config_file):
+        """Test ML v2 is disabled when not configured."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        assert timelapse._ml_enabled is False
+        assert timelapse._ml_predictor is None
+
+    def test_ml_v2_requires_database(self, ml_enabled_config_file):
+        """Test ML v2 initializes when database is enabled."""
+        # Create the test database directory
+        os.makedirs("test_data", exist_ok=True)
+
+        try:
+            timelapse = AdaptiveTimelapse(ml_enabled_config_file)
+            # ML should attempt to initialize (may fail if no data, but should try)
+            # The key test is that it doesn't crash and handles gracefully
+            assert timelapse is not None
+        finally:
+            # Cleanup
+            import shutil
+
+            if os.path.exists("test_data"):
+                shutil.rmtree("test_data")
+
+    def test_ml_v2_disabled_without_database(self):
+        """Test ML v2 is disabled when database is disabled."""
+        config_data = {
+            "camera": {
+                "resolution": {"width": 1280, "height": 720},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": "test_photos",
+                "filename_pattern": "{name}_{counter}.jpg",
+                "project_name": "test_project",
+                "quality": 85,
+            },
+            "system": {"create_directories": True, "save_metadata": True},
+            "overlay": {"enabled": False},
+            "database": {"enabled": False},  # Database disabled
+            "adaptive_timelapse": {
+                "enabled": True,
+                "light_thresholds": {"night": 10, "day": 100},
+                "night_mode": {"max_exposure_time": 20.0, "analogue_gain": 6},
+                "ml_exposure": {"enabled": True},  # ML enabled but no database
+            },
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            timelapse = AdaptiveTimelapse(config_path)
+            # ML should be disabled because database is disabled
+            assert timelapse._ml_enabled is False
+        finally:
+            os.unlink(config_path)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

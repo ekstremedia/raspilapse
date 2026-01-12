@@ -27,7 +27,7 @@ except ImportError:
 try:
     from src.logging_config import get_logger
     from src.capture_image import CameraConfig, ImageCapture
-    from src.ml_exposure import MLExposurePredictor
+    from src.ml_exposure_v2 import MLExposurePredictorV2
     from src.database import CaptureDatabase
     from src.system_monitor import SystemMonitor
 except ImportError:
@@ -35,9 +35,9 @@ except ImportError:
     from capture_image import CameraConfig, ImageCapture
 
     try:
-        from ml_exposure import MLExposurePredictor
+        from ml_exposure_v2 import MLExposurePredictorV2
     except ImportError:
-        MLExposurePredictor = None  # ML module not available
+        MLExposurePredictorV2 = None  # ML v2 module not available
 
     try:
         from database import CaptureDatabase
@@ -225,27 +225,45 @@ class AdaptiveTimelapse:
             self._location = None
 
     def _init_ml_predictor(self):
-        """Initialize ML-based exposure predictor if enabled."""
-        if MLExposurePredictor is None:
-            logger.debug("[ML] MLExposurePredictor not available")
+        """Initialize ML v2 exposure predictor if enabled.
+
+        ML v2 is database-driven and Arctic-aware:
+        - Trains only on good frames (brightness 100-140) from database
+        - Uses sun elevation for time periods (not clock hours)
+        - Doesn't learn from bad frames, avoiding reinforced mistakes
+        """
+        if MLExposurePredictorV2 is None:
+            logger.debug("[ML v2] MLExposurePredictorV2 not available")
             return
 
         ml_config = self.config.get("adaptive_timelapse", {}).get("ml_exposure", {})
         self._ml_enabled = ml_config.get("enabled", False)
 
         if not self._ml_enabled:
-            logger.debug("[ML] ML exposure prediction disabled in config")
+            logger.debug("[ML v2] ML exposure prediction disabled in config")
+            return
+
+        # Get database path for ML v2 (it trains from database)
+        db_config = self.config.get("database", {})
+        db_path = db_config.get("path", "data/timelapse.db")
+
+        if not db_config.get("enabled", False):
+            logger.warning("[ML v2] Database disabled - ML v2 requires database for training")
+            self._ml_enabled = False
             return
 
         try:
-            self._ml_predictor = MLExposurePredictor(ml_config, state_dir="ml_state")
+            self._ml_predictor = MLExposurePredictorV2(
+                db_path=db_path, config=ml_config, state_dir="ml_state"
+            )
             stats = self._ml_predictor.get_statistics()
             logger.info(
-                f"[ML] Initialized: trust={self._ml_predictor.get_trust_level():.2f}, "
-                f"confidence={stats['confidence']}, shadow_mode={stats['shadow_mode']}"
+                f"[ML v2] Initialized: trust={self._ml_predictor.get_trust_level():.2f}, "
+                f"buckets={stats.get('lux_exposure_buckets', 0)}, "
+                f"trained={stats.get('last_trained', 'never')}"
             )
         except Exception as e:
-            logger.warning(f"[ML] Failed to initialize predictor: {e}")
+            logger.warning(f"[ML v2] Failed to initialize predictor: {e}")
             self._ml_predictor = None
             self._ml_enabled = False
 
@@ -1160,19 +1178,20 @@ class AdaptiveTimelapse:
         # to maintain consistent brightness even when lux formula is imperfect
         formula_exposure = base_exposure * self._brightness_correction_factor
 
-        # === ML EXPOSURE PREDICTION ===
-        # If ML is enabled, blend ML prediction with formula-based exposure
+        # === ML v2 EXPOSURE PREDICTION ===
+        # If ML v2 is enabled, blend ML prediction with formula-based exposure
+        # ML v2 uses sun_elevation for Arctic-aware predictions
         target_exposure = formula_exposure
         if self._ml_enabled and self._ml_predictor is not None:
             ml_exposure, ml_confidence = self._ml_predictor.predict_optimal_exposure(
-                lux, time.time()
+                lux=lux, timestamp=time.time(), sun_elevation=self._sun_elevation
             )
             if ml_exposure is not None:
                 target_exposure = self._ml_predictor.blend_with_formula(
                     ml_exposure, formula_exposure
                 )
                 logger.debug(
-                    f"[ML] Blending: formula={formula_exposure:.4f}s, "
+                    f"[ML v2] Blending: formula={formula_exposure:.4f}s, "
                     f"ML={ml_exposure:.4f}s (conf={ml_confidence:.2f}) "
                     f"→ blended={target_exposure:.4f}s"
                 )
@@ -2252,16 +2271,9 @@ class AdaptiveTimelapse:
                         except Exception as e:
                             logger.debug(f"Could not apply brightness feedback: {e}")
 
-                    # ML Learning: Learn from this frame's metadata
-                    if self._ml_enabled and self._ml_predictor is not None and metadata_path:
-                        try:
-                            import json
-
-                            with open(metadata_path, "r") as f:
-                                frame_metadata = json.load(f)
-                            self._ml_predictor.learn_from_frame(frame_metadata)
-                        except Exception as e:
-                            logger.debug(f"Could not learn from frame: {e}")
+                    # Note: ML v2 does not learn frame-by-frame like v1
+                    # It trains from the database on initialization (daily retrain)
+                    # This avoids reinforcing bad exposures during problematic transitions
 
                     # Update day WB reference from actual capture metadata
                     # This allows us to learn good daylight WB values for smooth transitions

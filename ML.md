@@ -94,35 +94,37 @@ Brightness correction speed scales with error magnitude:
 
 **Location**: `src/auto_timelapse.py` - `_apply_brightness_feedback()` method
 
-### 4. ML v1 (Frame-by-Frame Learning)
+### 4. ML v1 (Frame-by-Frame Learning) - DEPRECATED
 
-Original ML system that learns incrementally from each captured frame.
+> **⚠️ DEPRECATED**: ML v1 has been replaced by ML v2 in `auto_timelapse.py`.
+> v1 is kept for reference but is no longer used.
 
-**Components**:
-- **Solar Pattern Memory**: Expected lux for each time/day
-- **Lux-Exposure Mapper**: Optimal exposure for each lux level
-- **Correction Memory**: What corrections worked in the past
+Original ML system that learned incrementally from each captured frame.
 
-**Files**:
-- `src/ml_exposure.py` - Main ML class
-- `src/bootstrap_ml.py` - Initialize from historical metadata
-- `ml_state/ml_state.json` - Persisted state
+**Problem**: Learned from ALL frames, including bad ones. If transitions were problematic, it would learn and perpetuate those problematic patterns.
 
-**Problem**: Learns from ALL frames, including bad ones. If transitions are problematic, it learns the problematic patterns.
+**Files** (deprecated):
+- `src/ml_exposure.py` - Original ML class (not used)
+- `src/bootstrap_ml.py` - Original bootstrap script (not used)
+- `ml_state/ml_state.json` - Old state file (can be deleted)
 
-### 5. ML v2 (Database-Driven Learning)
+### 5. ML v2 (Database-Driven Learning) - ACTIVE
+
+**✅ INTEGRATED**: ML v2 is now the active ML system used by `auto_timelapse.py`.
 
 Enhanced ML system that trains ONLY on good frames from the database.
 
-**Key Improvements**:
+**Key Improvements over v1**:
 - Trains only on frames with brightness 100-140 (proven good)
+- **Never learns from bad frames** - avoids perpetuating transition problems
 - **Arctic-aware**: Uses sun elevation for time periods (not clock hours)
 - **Aurora support**: Includes high-contrast night frames in training
 - Retrains automatically when state is stale (>24h)
 - Higher initial trust (0.5 vs 0.0)
+- **Requires database** - won't enable if database is disabled
 
 **Files**:
-- `src/ml_exposure_v2.py` - ML v2 class
+- `src/ml_exposure_v2.py` - ML v2 class (used by auto_timelapse.py)
 - `src/bootstrap_ml_v2.py` - Bootstrap from database
 - `ml_state/ml_state_v2.json` - Persisted state
 
