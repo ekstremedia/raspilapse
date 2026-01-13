@@ -1739,6 +1739,38 @@ class AdaptiveTimelapse:
                     target_gain = self._calculate_target_gain_from_lux(lux)
                     target_exposure = self._calculate_target_exposure_from_lux(lux)
 
+                # === BRIGHTNESS CORRECTION FOR TRANSITION MODE ===
+                # Apply brightness correction factor to sequential ramping results
+                # This compensates for sensor differences and scene variations
+                # that the seed-based ramping doesn't account for
+                if self._brightness_correction_factor != 1.0:
+                    corrected_exposure = target_exposure * self._brightness_correction_factor
+                    # Clamp to valid range
+                    max_exp = self.config["adaptive_timelapse"]["night_mode"]["max_exposure_time"]
+                    min_exp = (
+                        self.config["adaptive_timelapse"]
+                        .get("day_mode", {})
+                        .get("exposure_time", 0.01)
+                    )
+                    corrected_exposure = max(min_exp, min(max_exp, corrected_exposure))
+                    logger.debug(
+                        f"[Transition] Brightness correction: {target_exposure:.4f}s × "
+                        f"{self._brightness_correction_factor:.3f} = {corrected_exposure:.4f}s"
+                    )
+                    target_exposure = corrected_exposure
+
+                # === EMERGENCY BRIGHTNESS CORRECTION ===
+                # Apply immediate correction when brightness is severely off-target
+                emergency_factor = self._get_emergency_brightness_factor(self._last_brightness)
+                if emergency_factor != 1.0:
+                    target_exposure *= emergency_factor
+                    max_exp = self.config["adaptive_timelapse"]["night_mode"]["max_exposure_time"]
+                    target_exposure = min(max_exp, target_exposure)
+                    logger.debug(
+                        f"[Transition] Emergency factor {emergency_factor:.2f} → "
+                        f"exposure now {target_exposure:.4f}s"
+                    )
+
                 # === EV SAFETY CLAMP ===
                 # Ensure first manual frame matches last auto frame exactly
                 target_exposure, target_gain = self._apply_ev_safety_clamp(

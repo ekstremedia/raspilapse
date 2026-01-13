@@ -719,6 +719,45 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 
 ## Changelog
 
+### 2026-01-13 - Brightness Correction Applied to Sequential Ramping
+
+**Problem Identified:**
+- Images stayed consistently dark (brightness ~35 vs target ~120) on one camera
+- Logs showed `correction=4.000` (maximum) but exposure didn't change
+- Other camera with identical software/config worked perfectly
+- Root cause: brightness correction factor was never applied to sequential ramping results
+
+**The Bug:**
+- Sequential ramping calculates exposure from seed values (captured during day mode auto-exposure)
+- The `_brightness_correction_factor` was only applied in `_calculate_target_exposure_from_lux()`
+- But transition mode with `sequential_ramping: true` uses `_calculate_sequential_ramping()` instead
+- This function returned exposure without any brightness correction applied
+- Result: feedback system detected underexposure, calculated correction, but it was ignored
+
+**The Fix:**
+- Apply brightness correction factor AND emergency factor to sequential ramping results
+- Added after sequential ramping calculation, before EV safety clamp
+- Clamped to valid exposure range (min_exposure to max_exposure)
+
+**Code Changes:**
+```python
+# After sequential ramping calculates target_exposure:
+if self._brightness_correction_factor != 1.0:
+    corrected_exposure = target_exposure * self._brightness_correction_factor
+    corrected_exposure = max(min_exp, min(max_exp, corrected_exposure))
+    target_exposure = corrected_exposure
+
+# Also apply emergency factor for severe underexposure
+emergency_factor = self._get_emergency_brightness_factor(self._last_brightness)
+if emergency_factor != 1.0:
+    target_exposure *= emergency_factor
+```
+
+**Why it only affected one camera:**
+- Different camera sensors have different sensitivity
+- The seed values from auto-exposure happened to work for the "good" camera
+- The other camera needed brightness correction that was being ignored
+
 ### 2026-01-10 - EV Safety Clamp Single-Apply Fix
 
 **Problem Identified:**

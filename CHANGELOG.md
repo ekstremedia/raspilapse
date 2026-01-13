@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-01-13
+
+### Fixed
+- **Critical: Brightness correction not applied in transition mode with sequential ramping**
+  - Root cause: `_brightness_correction_factor` was only applied in `_calculate_target_exposure_from_lux()`, but sequential ramping bypassed this function entirely
+  - Symptoms: Images stayed dark (brightness ~35 instead of target ~120) even with correction factor at maximum (4.0x)
+  - The feedback system correctly detected underexposure but corrections were never applied
+  - Fix: Apply both brightness correction factor AND emergency brightness factor to sequential ramping results
+  - This affects cameras where auto-exposure seed values don't match the actual scene brightness (e.g., different sensor sensitivity)
+
+### Technical Details
+- Sequential ramping calculates exposure from seed values (captured during day mode auto-exposure)
+- If the seed exposure produces dark images on a particular camera, the brightness feedback system detects this
+- Previously, the correction factor was calculated but never applied to the transition mode exposure
+- Now, correction is applied immediately after sequential ramping calculation, before EV safety clamp
+- Emergency factor also applied for severe underexposure (brightness < 60)
+
+### Why this only affected some cameras
+- Different cameras have different sensor sensitivity
+- The "other camera" happened to have seed values that produced correct brightness
+- This camera's seeds produced dark images, requiring the correction that was being ignored
+
 ## [1.2.0] - 2026-01-12
 
 ### Changed

@@ -301,6 +301,46 @@ ml:
 2. ML v2 provides stable baseline from proven good exposures
 3. Urgency scaling provides proportional response
 
+### Problem: Images stay dark despite high correction factor (Fixed in v1.2.1)
+
+**Symptoms**:
+- Images consistently dark (brightness ~35 instead of target ~120)
+- Logs show `[Feedback] URGENT: brightness=35, error=-85, correction=4.000`
+- Correction factor at maximum (4.0) but images don't improve
+- Other cameras with same software/config work fine
+
+**Root cause**: Brightness correction factor not applied to sequential ramping in transition mode
+
+**Technical explanation**:
+1. Sequential ramping calculates exposure from "seed" values (captured during day mode auto-exposure)
+2. The seed values work for one camera but produce dark images on another (different sensor sensitivity)
+3. Brightness feedback correctly detects underexposure and sets correction=4.0
+4. **Bug**: The correction was only applied in `_calculate_target_exposure_from_lux()`, but sequential ramping bypasses this function
+5. Result: Correction calculated but never applied, images stay dark forever
+
+**Fix (v1.2.1)**: Apply brightness correction factor AND emergency factor to sequential ramping results:
+```python
+# After sequential ramping calculates target_exposure:
+if self._brightness_correction_factor != 1.0:
+    target_exposure *= self._brightness_correction_factor
+# Also apply emergency factor for severe underexposure
+emergency_factor = self._get_emergency_brightness_factor(self._last_brightness)
+if emergency_factor != 1.0:
+    target_exposure *= emergency_factor
+```
+
+**How to identify this issue**:
+```bash
+# Check if correction is high but exposure isn't changing
+tail -f logs/auto_timelapse.log | grep -E "correction=|exposure="
+# If you see correction=4.0 but exposure stays constant, this was the bug
+```
+
+**Why it only affects some cameras**:
+- Different camera modules have different sensor sensitivity
+- The seed exposure from auto-exposure may be correct for one sensor but wrong for another
+- Cameras with matching sensor/seed values work fine; mismatched ones need the correction
+
 ## Development Notes
 
 ### Running Tests
@@ -341,3 +381,4 @@ python src/generate_database_graph.py --period 1d
 - **v1.1**: Added ML v1 frame-by-frame learning
 - **v2.0**: Added emergency zones, hybrid mode detection, urgency scaling, ML v2
 - **v2.1**: Arctic-aware ML v2 with solar elevation-based time periods, aurora frame support, database migrations
+- **v2.2**: Fixed brightness correction not applied to sequential ramping in transition mode (critical fix for multi-camera setups with different sensor sensitivities)
