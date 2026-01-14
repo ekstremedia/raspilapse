@@ -69,57 +69,77 @@ class TestEmergencyBrightnessFactor:
         return timelapse
 
     def test_emergency_high_factor(self, timelapse):
-        """Test emergency factor for severe overexposure."""
+        """Test emergency factor converges for severe overexposure."""
         from src.auto_timelapse import BrightnessZones
 
-        # Test severe overexposure (>180)
-        factor = timelapse._get_emergency_brightness_factor(200)
-        assert factor == BrightnessZones.EMERGENCY_HIGH_FACTOR
-        assert factor == 0.7
+        # Test severe overexposure (>180) - factor should converge towards 0.7
+        # With smoothing, need multiple calls to approach target
+        for _ in range(20):
+            factor = timelapse._get_emergency_brightness_factor(200)
+
+        # Should have converged close to target (within 10%)
+        assert factor < 0.8  # Moving towards 0.7
+        assert factor > BrightnessZones.EMERGENCY_HIGH_FACTOR - 0.05
 
     def test_warning_high_factor(self, timelapse):
-        """Test emergency factor for moderate overexposure."""
+        """Test emergency factor converges for moderate overexposure."""
         from src.auto_timelapse import BrightnessZones
 
-        # Test moderate overexposure (>160, <=180)
-        factor = timelapse._get_emergency_brightness_factor(170)
-        assert factor == BrightnessZones.WARNING_HIGH_FACTOR
-        assert factor == 0.85
+        # Test moderate overexposure (>160, <=180) - factor should converge towards 0.85
+        for _ in range(20):
+            factor = timelapse._get_emergency_brightness_factor(170)
+
+        # Should have converged close to target
+        assert factor < 0.9  # Moving towards 0.85
+        assert factor > BrightnessZones.WARNING_HIGH_FACTOR - 0.05
 
     def test_no_factor_in_normal_range(self, timelapse):
         """Test no emergency factor in normal brightness range."""
-        # Test normal range (80-160)
-        factor = timelapse._get_emergency_brightness_factor(120)
-        assert factor == 1.0
+        # Test normal range (80-160) - factor should stay at 1.0
+        for _ in range(10):
+            factor = timelapse._get_emergency_brightness_factor(120)
+        assert 0.98 < factor < 1.02
 
-        factor = timelapse._get_emergency_brightness_factor(100)
-        assert factor == 1.0
+        timelapse._smoothed_emergency_factor = 1.0  # Reset
+        for _ in range(10):
+            factor = timelapse._get_emergency_brightness_factor(100)
+        assert 0.98 < factor < 1.02
 
-        factor = timelapse._get_emergency_brightness_factor(150)
-        assert factor == 1.0
+        timelapse._smoothed_emergency_factor = 1.0  # Reset
+        for _ in range(10):
+            factor = timelapse._get_emergency_brightness_factor(150)
+        assert 0.98 < factor < 1.02
 
     def test_warning_low_factor(self, timelapse):
-        """Test emergency factor for moderate underexposure."""
+        """Test emergency factor converges for moderate underexposure."""
         from src.auto_timelapse import BrightnessZones
 
-        # Test moderate underexposure (<80, >=60)
-        factor = timelapse._get_emergency_brightness_factor(70)
-        assert factor == BrightnessZones.WARNING_LOW_FACTOR
-        assert factor == 1.2
+        # Test moderate underexposure (<80, >=60) - factor should converge towards 1.2
+        for _ in range(20):
+            factor = timelapse._get_emergency_brightness_factor(70)
+
+        # Should have converged close to target
+        assert factor > 1.1  # Moving towards 1.2
+        assert factor < BrightnessZones.WARNING_LOW_FACTOR + 0.05
 
     def test_emergency_low_factor(self, timelapse):
-        """Test emergency factor for severe underexposure."""
+        """Test emergency factor converges for severe underexposure."""
         from src.auto_timelapse import BrightnessZones
 
-        # Test severe underexposure (<60)
-        factor = timelapse._get_emergency_brightness_factor(50)
-        assert factor == BrightnessZones.EMERGENCY_LOW_FACTOR
-        assert factor == 1.4
+        # Test severe underexposure (<60) - factor should converge towards 1.4
+        for _ in range(20):
+            factor = timelapse._get_emergency_brightness_factor(50)
 
-    def test_none_brightness_returns_one(self, timelapse):
-        """Test that None brightness returns factor of 1.0."""
+        # Should have converged close to target
+        assert factor > 1.25  # Moving towards 1.4
+        assert factor < BrightnessZones.EMERGENCY_LOW_FACTOR + 0.05
+
+    def test_none_brightness_returns_current(self, timelapse):
+        """Test that None brightness returns current smoothed factor."""
+        # Set a non-default factor
+        timelapse._smoothed_emergency_factor = 0.85
         factor = timelapse._get_emergency_brightness_factor(None)
-        assert factor == 1.0
+        assert factor == 0.85
 
 
 class TestHybridModeDetection:
