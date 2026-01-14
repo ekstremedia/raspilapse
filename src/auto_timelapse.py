@@ -1357,13 +1357,23 @@ class AdaptiveTimelapse:
             # Validate gains are reasonable
             if 1.0 < colour_gains[0] < 4.0 and 1.0 < colour_gains[1] < 4.0:
                 self._seed_wb_gains = tuple(colour_gains)
-                self._last_colour_gains = tuple(colour_gains)
                 # Update day WB reference since this is what AWB chose at transition
                 self._day_wb_reference = tuple(colour_gains)
-                logger.info(
-                    f"[Holy Grail] Seeded WB from AWB: "
-                    f"[{colour_gains[0]:.2f}, {colour_gains[1]:.2f}]"
-                )
+                # DON'T set _last_colour_gains directly - let interpolation continue
+                # smoothly from wherever it currently is. This prevents abrupt WB jumps.
+                # Only initialize if we don't have any previous gains
+                if self._last_colour_gains is None:
+                    self._last_colour_gains = tuple(colour_gains)
+                    logger.info(
+                        f"[Holy Grail] Initialized WB from AWB: "
+                        f"[{colour_gains[0]:.2f}, {colour_gains[1]:.2f}]"
+                    )
+                else:
+                    logger.info(
+                        f"[Holy Grail] Updated WB reference from AWB: "
+                        f"[{colour_gains[0]:.2f}, {colour_gains[1]:.2f}] "
+                        f"(interpolating from [{self._last_colour_gains[0]:.2f}, {self._last_colour_gains[1]:.2f}])"
+                    )
 
         # If we have actual capture metadata (from last day mode frame), use its exposure/gain
         if capture_metadata:
