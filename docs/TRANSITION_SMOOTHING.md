@@ -719,6 +719,46 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 
 ## Changelog
 
+### 2026-01-14 - Smoothed Emergency Factor (Anti-Oscillation Fix)
+
+**Problem Identified:**
+- Visible flickering in slitscan during bright daytime (between 11:00-12:00)
+- Database showed exposure alternating between 14.2ms and 15.7ms every frame
+- Brightness oscillating between 173 and 187 around the 180 emergency threshold
+
+**Root Cause Analysis:**
+The emergency brightness factor used hard thresholds that caused instant on/off toggling:
+1. Frame at brightness 187 (> 180) → emergency factor 0.7 → 30% exposure reduction
+2. Next frame at brightness 173 (< 180) → emergency factor 1.0 → no reduction
+3. Exposure rises → brightness rises to 187 → factor 0.7 again
+4. Perfect oscillation pattern that never settles
+
+**The Fix - Smoothed Emergency Factor:**
+Instead of hard threshold switching, the emergency factor now changes gradually:
+
+```python
+# Old behavior (oscillation-prone):
+if brightness > 180: return 0.7
+else: return 1.0
+
+# New behavior (smooth):
+target_factor = 0.7 if brightness > 180 else 1.0
+self._smoothed_emergency_factor += speed * (target_factor - self._smoothed_emergency_factor)
+return self._smoothed_emergency_factor
+```
+
+**Key Design Decisions:**
+- **Asymmetric speed**: Applies corrections faster (2x) when brightness worsening, relaxes slower (0.5x) when improving
+- **Gradual change**: Factor moves towards target over several frames instead of jumping
+- **Prevents reversal oscillation**: Slow relaxation prevents immediate reversal when brightness crosses threshold
+- **State variable**: `_smoothed_emergency_factor` persists between frames
+
+**New State Variables:**
+```python
+self._smoothed_emergency_factor: float = 1.0  # Current smoothed factor
+self._emergency_factor_speed: float = 0.15    # Base interpolation speed
+```
+
 ### 2026-01-13 - Brightness Correction Applied to Sequential Ramping
 
 **Problem Identified:**

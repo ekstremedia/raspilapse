@@ -121,6 +121,11 @@ class AdaptiveTimelapse:
         )
         self._underexposure_severity: str = None  # "warning" or "critical"
 
+        # Smoothed emergency factor to prevent oscillation
+        # Instead of hard on/off switching, this gradually moves towards target factor
+        self._smoothed_emergency_factor: float = 1.0
+        self._emergency_factor_speed: float = 0.15  # How fast to adjust (0.0-1.0)
+
         # Holy Grail transition state - seeded from actual camera metadata
         self._transition_seeded: bool = False  # True once we've seeded from metadata
         self._seed_exposure: float = None  # Actual exposure from last auto frame
@@ -920,52 +925,71 @@ class AdaptiveTimelapse:
 
     def _get_emergency_brightness_factor(self, brightness: float) -> float:
         """
-        Get emergency correction factor based on brightness zones.
+        Get smoothed emergency correction factor based on brightness zones.
 
-        This provides immediate, aggressive correction when brightness is
-        severely off-target, bypassing the slow gradual correction system.
-        This is critical for catching up during rapid transitions.
+        This provides correction when brightness is off-target, but uses
+        smooth transitions to prevent oscillation. The factor gradually
+        moves towards the ideal value rather than jumping instantly.
 
         Args:
             brightness: Current mean brightness (0-255)
 
         Returns:
-            Correction factor (1.0 = no change, <1.0 = reduce exposure, >1.0 = increase)
+            Smoothed correction factor (1.0 = no change, <1.0 = reduce, >1.0 = increase)
         """
         if brightness is None:
-            return 1.0
+            return self._smoothed_emergency_factor
+
+        # Calculate the ideal (target) factor based on current brightness
+        target_factor = 1.0
+        zone_name = None
 
         if brightness > BrightnessZones.EMERGENCY_HIGH:
-            factor = BrightnessZones.EMERGENCY_HIGH_FACTOR
-            logger.info(
-                f"[Emergency] SEVERE OVEREXPOSURE: brightness={brightness:.1f} > {BrightnessZones.EMERGENCY_HIGH} "
-                f"→ applying {(1-factor)*100:.0f}% reduction"
-            )
-            return factor
+            target_factor = BrightnessZones.EMERGENCY_HIGH_FACTOR
+            zone_name = "SEVERE OVEREXPOSURE"
         elif brightness > BrightnessZones.WARNING_HIGH:
-            factor = BrightnessZones.WARNING_HIGH_FACTOR
-            logger.info(
-                f"[Emergency] Overexposure warning: brightness={brightness:.1f} > {BrightnessZones.WARNING_HIGH} "
-                f"→ applying {(1-factor)*100:.0f}% reduction"
-            )
-            return factor
+            target_factor = BrightnessZones.WARNING_HIGH_FACTOR
+            zone_name = "Overexposure warning"
         elif brightness < BrightnessZones.EMERGENCY_LOW:
-            factor = BrightnessZones.EMERGENCY_LOW_FACTOR
-            logger.info(
-                f"[Emergency] SEVERE UNDEREXPOSURE: brightness={brightness:.1f} < {BrightnessZones.EMERGENCY_LOW} "
-                f"→ applying {(factor-1)*100:.0f}% increase"
-            )
-            return factor
+            target_factor = BrightnessZones.EMERGENCY_LOW_FACTOR
+            zone_name = "SEVERE UNDEREXPOSURE"
         elif brightness < BrightnessZones.WARNING_LOW:
-            factor = BrightnessZones.WARNING_LOW_FACTOR
-            logger.info(
-                f"[Emergency] Underexposure warning: brightness={brightness:.1f} < {BrightnessZones.WARNING_LOW} "
-                f"→ applying {(factor-1)*100:.0f}% increase"
-            )
-            return factor
+            target_factor = BrightnessZones.WARNING_LOW_FACTOR
+            zone_name = "Underexposure warning"
 
-        # Within acceptable range
-        return 1.0
+        # Smoothly move towards target factor to prevent oscillation
+        # Use faster speed when moving away from 1.0 (applying correction)
+        # Use slower speed when returning to 1.0 (relaxing correction)
+        if abs(target_factor - 1.0) > abs(self._smoothed_emergency_factor - 1.0):
+            # Getting worse - apply correction faster
+            speed = self._emergency_factor_speed * 2.0
+        else:
+            # Getting better - relax slowly to prevent oscillation
+            speed = self._emergency_factor_speed * 0.5
+
+        # Interpolate towards target
+        old_factor = self._smoothed_emergency_factor
+        self._smoothed_emergency_factor += speed * (target_factor - self._smoothed_emergency_factor)
+
+        # Clamp to valid range
+        self._smoothed_emergency_factor = max(0.5, min(1.5, self._smoothed_emergency_factor))
+
+        # Only log when factor is significantly different from 1.0
+        if abs(self._smoothed_emergency_factor - 1.0) > 0.02:
+            if self._smoothed_emergency_factor < 1.0:
+                reduction_pct = (1 - self._smoothed_emergency_factor) * 100
+                logger.info(
+                    f"[Emergency] {zone_name or 'Correction'}: brightness={brightness:.1f} "
+                    f"→ smoothed factor {self._smoothed_emergency_factor:.2f} ({reduction_pct:.0f}% reduction)"
+                )
+            else:
+                increase_pct = (self._smoothed_emergency_factor - 1) * 100
+                logger.info(
+                    f"[Emergency] {zone_name or 'Correction'}: brightness={brightness:.1f} "
+                    f"→ smoothed factor {self._smoothed_emergency_factor:.2f} ({increase_pct:.0f}% increase)"
+                )
+
+        return self._smoothed_emergency_factor
 
     def _calculate_target_gain_from_lux(self, lux: float) -> float:
         """

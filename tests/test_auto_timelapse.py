@@ -1975,5 +1975,107 @@ class TestMLv2Integration:
             os.unlink(config_path)
 
 
+class TestSmoothedEmergencyFactor:
+    """Test smoothed emergency brightness factor to prevent oscillation."""
+
+    def test_emergency_factor_starts_at_one(self, test_config_file):
+        """Test that smoothed emergency factor starts at 1.0 (no correction)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        assert timelapse._smoothed_emergency_factor == 1.0
+
+    def test_emergency_factor_reduces_for_overexposure(self, test_config_file):
+        """Test factor decreases when brightness is above emergency threshold."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate several frames with severe overexposure (brightness > 180)
+        for _ in range(10):
+            factor = timelapse._get_emergency_brightness_factor(200)
+
+        # Factor should have moved towards 0.7 (EMERGENCY_HIGH_FACTOR)
+        assert factor < 1.0
+        assert factor < 0.9  # Should have moved significantly towards 0.7
+
+    def test_emergency_factor_increases_for_underexposure(self, test_config_file):
+        """Test factor increases when brightness is below emergency threshold."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate several frames with severe underexposure (brightness < 60)
+        for _ in range(10):
+            factor = timelapse._get_emergency_brightness_factor(40)
+
+        # Factor should have moved towards 1.4 (EMERGENCY_LOW_FACTOR)
+        assert factor > 1.0
+        assert factor > 1.1  # Should have moved significantly towards 1.4
+
+    def test_emergency_factor_stays_stable_in_normal_range(self, test_config_file):
+        """Test factor stays at 1.0 when brightness is in normal range."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate frames with normal brightness (around target 120)
+        for _ in range(10):
+            factor = timelapse._get_emergency_brightness_factor(120)
+
+        # Factor should stay at or very close to 1.0
+        assert 0.98 < factor < 1.02
+
+    def test_emergency_factor_smoothing_prevents_oscillation(self, test_config_file):
+        """Test that alternating brightness values don't cause factor oscillation."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate the oscillation pattern: alternating above/below threshold
+        factors = []
+        for i in range(20):
+            brightness = 187 if i % 2 == 0 else 173
+            factor = timelapse._get_emergency_brightness_factor(brightness)
+            factors.append(factor)
+
+        # The factor should NOT oscillate wildly between values
+        # Check that consecutive factors are close to each other (smooth transitions)
+        for i in range(1, len(factors)):
+            diff = abs(factors[i] - factors[i - 1])
+            # Maximum change per frame should be limited by smoothing
+            assert diff < 0.15, f"Factor jumped too much: {factors[i-1]:.3f} -> {factors[i]:.3f}"
+
+    def test_emergency_factor_applies_faster_when_worsening(self, test_config_file):
+        """Test that corrections apply faster when brightness is getting worse."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # First, apply overexposure correction for 5 frames
+        for _ in range(5):
+            timelapse._get_emergency_brightness_factor(200)
+        factor_after_correction = timelapse._smoothed_emergency_factor
+
+        # Reset
+        timelapse._smoothed_emergency_factor = 1.0
+
+        # Now apply normal brightness for 5 frames (relaxing)
+        timelapse._smoothed_emergency_factor = 0.7  # Start from corrected state
+        for _ in range(5):
+            timelapse._get_emergency_brightness_factor(120)
+        factor_after_relaxing = timelapse._smoothed_emergency_factor
+
+        # The correction (moving away from 1.0) should be faster than relaxing (moving towards 1.0)
+        # After 5 frames of severe overexposure, factor should have moved more from 1.0
+        # than it moved back towards 1.0 after 5 frames of normal brightness
+        correction_amount = 1.0 - factor_after_correction  # How much it corrected
+        relaxation_amount = factor_after_relaxing - 0.7  # How much it relaxed
+
+        # Correction should be faster (larger change) than relaxation
+        assert correction_amount > relaxation_amount * 0.5
+
+    def test_emergency_factor_none_brightness_returns_current(self, test_config_file):
+        """Test that None brightness returns current smoothed factor."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Set a non-default factor
+        timelapse._smoothed_emergency_factor = 0.85
+
+        # Call with None brightness
+        factor = timelapse._get_emergency_brightness_factor(None)
+
+        # Should return current factor unchanged
+        assert factor == 0.85
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

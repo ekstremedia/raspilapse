@@ -341,6 +341,52 @@ tail -f logs/auto_timelapse.log | grep -E "correction=|exposure="
 - The seed exposure from auto-exposure may be correct for one sensor but wrong for another
 - Cameras with matching sensor/seed values work fine; mismatched ones need the correction
 
+### Problem: Daytime flickering / exposure oscillation (Fixed in v1.2.1)
+
+**Symptoms**:
+- Visible flickering in slitscan during bright daytime
+- Exposure bouncing between two values every frame (e.g., 14ms ↔ 16ms)
+- Brightness oscillating around the emergency threshold (e.g., 173 ↔ 187)
+- Database shows alternating exposure values every 30 seconds
+
+**Root cause**: Emergency brightness factor using hard threshold caused on/off toggling
+
+**Technical explanation**:
+1. Emergency factor triggers at brightness > 180 (EMERGENCY_HIGH threshold)
+2. Frame 1: brightness 187 → emergency factor 0.7 (30% reduction) → exposure drops to 14ms
+3. Frame 2: brightness 173 (from lower exposure) → emergency factor 1.0 (no reduction) → exposure rises to 16ms
+4. Frame 3: brightness 187 again → factor 0.7 → and the cycle repeats forever
+5. This creates a perfect oscillation pattern visible as flickering
+
+**Fix (v1.2.1)**: Replaced hard threshold with **smoothed emergency factor**:
+```python
+# Instead of instant on/off:
+# OLD: if brightness > 180: return 0.7 else: return 1.0
+
+# NEW: Gradually move towards target factor
+self._smoothed_emergency_factor += speed * (target_factor - self._smoothed_emergency_factor)
+```
+
+Key improvements:
+- Factor changes gradually instead of jumping
+- Applies corrections faster (2x speed) when brightness worsening
+- Relaxes corrections slower (0.5x speed) when improving - prevents oscillation
+- No instant reversal when brightness crosses threshold
+
+**How to identify this issue**:
+```bash
+# Check for alternating exposure values in database
+python3 -c "
+import sqlite3
+conn = sqlite3.connect('data/timelapse.db')
+cursor = conn.cursor()
+cursor.execute('SELECT timestamp, exposure_time_us FROM captures ORDER BY timestamp DESC LIMIT 20')
+for row in cursor.fetchall():
+    print(f'{row[0]}: {row[1]/1000:.1f}ms')
+"
+# If you see values alternating (14.2, 15.7, 14.2, 15.7...) = oscillation
+```
+
 ## Development Notes
 
 ### Running Tests
@@ -382,3 +428,4 @@ python src/generate_database_graph.py --period 1d
 - **v2.0**: Added emergency zones, hybrid mode detection, urgency scaling, ML v2
 - **v2.1**: Arctic-aware ML v2 with solar elevation-based time periods, aurora frame support, database migrations
 - **v2.2**: Fixed brightness correction not applied to sequential ramping in transition mode (critical fix for multi-camera setups with different sensor sensitivities)
+- **v2.3**: Smoothed emergency factor to prevent daytime flickering/oscillation caused by hard threshold toggling

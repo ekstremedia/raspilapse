@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.1] - 2026-01-13
+## [1.2.1] - 2026-01-14
 
 ### Fixed
 - **Critical: Brightness correction not applied in transition mode with sequential ramping**
@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The feedback system correctly detected underexposure but corrections were never applied
   - Fix: Apply both brightness correction factor AND emergency brightness factor to sequential ramping results
   - This affects cameras where auto-exposure seed values don't match the actual scene brightness (e.g., different sensor sensitivity)
+
+- **Daytime flickering caused by emergency factor oscillation**
+  - Root cause: Emergency brightness factor used hard thresholds (180) causing on/off toggling every frame
+  - Symptoms: Exposure bouncing between ~14ms and ~16ms every frame, visible as flickering in slitscan
+  - Pattern: brightness 187 → factor 0.7 → exposure drops → brightness 173 → factor 1.0 → exposure rises → repeat
+  - Fix: Replaced hard threshold with smoothed emergency factor that gradually moves towards target
+  - Applies corrections faster (2x speed) when brightness worsening, relaxes slower (0.5x speed) when improving
+  - Prevents oscillation by not instantly reverting correction when brightness crosses threshold
 
 ### Technical Details
 - Sequential ramping calculates exposure from seed values (captured during day mode auto-exposure)
