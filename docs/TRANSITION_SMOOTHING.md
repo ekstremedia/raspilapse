@@ -791,6 +791,7 @@ if self._brightness_correction_factor != 1.0:
 emergency_factor = self._get_emergency_brightness_factor(self._last_brightness)
 if emergency_factor != 1.0:
     target_exposure *= emergency_factor
+    target_exposure = max(min_exp, min(max_exp, target_exposure))
 ```
 
 **Why it only affected one camera:**

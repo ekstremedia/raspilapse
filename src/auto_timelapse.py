@@ -968,7 +968,6 @@ class AdaptiveTimelapse:
             speed = self._emergency_factor_speed * 0.5
 
         # Interpolate towards target
-        old_factor = self._smoothed_emergency_factor
         self._smoothed_emergency_factor += speed * (target_factor - self._smoothed_emergency_factor)
 
         # Clamp to valid range
@@ -1235,9 +1234,9 @@ class AdaptiveTimelapse:
         target_exposure = max(min_exposure, min(night_exposure, target_exposure))
 
         logger.debug(
-            f"Lux-based exposure: lux={lux:.2f} → base={base_exposure:.4f}s "
-            f"× correction={self._brightness_correction_factor:.3f} "
-            f"× emergency={emergency_factor:.2f} → target={target_exposure:.4f}s"
+            f"Lux-based exposure: lux={lux:.2f} -> base={base_exposure:.4f}s "
+            f"x correction={self._brightness_correction_factor:.3f} "
+            f"x emergency={emergency_factor:.2f} -> target={target_exposure:.4f}s"
         )
 
         return target_exposure
@@ -1600,11 +1599,11 @@ class AdaptiveTimelapse:
         if sun_elev is not None:
             logger.info(
                 f"[Status] Sun: {sun_elev:.1f}° | Lux: {lux:.1f} | "
-                f"Brightness: {brightness if brightness else 'N/A'} | Mode: {mode}{override_note}"
+                f"Brightness: {brightness if brightness is not None else 'N/A'} | Mode: {mode}{override_note}"
             )
         else:
             logger.info(
-                f"Light level: {lux:.2f} lux | Brightness: {brightness if brightness else 'N/A'} "
+                f"Light level: {lux:.2f} lux | Brightness: {brightness if brightness is not None else 'N/A'} "
                 f"→ Mode: {mode}{override_note}"
             )
 
@@ -1778,7 +1777,7 @@ class AdaptiveTimelapse:
                     )
                     corrected_exposure = max(min_exp, min(max_exp, corrected_exposure))
                     logger.debug(
-                        f"[Transition] Brightness correction: {target_exposure:.4f}s × "
+                        f"[Transition] Brightness correction: {target_exposure:.4f}s x "
                         f"{self._brightness_correction_factor:.3f} = {corrected_exposure:.4f}s"
                     )
                     target_exposure = corrected_exposure
@@ -1788,10 +1787,16 @@ class AdaptiveTimelapse:
                 emergency_factor = self._get_emergency_brightness_factor(self._last_brightness)
                 if emergency_factor != 1.0:
                     target_exposure *= emergency_factor
+                    # Clamp to valid range (same as brightness correction block)
                     max_exp = self.config["adaptive_timelapse"]["night_mode"]["max_exposure_time"]
-                    target_exposure = min(max_exp, target_exposure)
+                    min_exp = (
+                        self.config["adaptive_timelapse"]
+                        .get("day_mode", {})
+                        .get("exposure_time", 0.01)
+                    )
+                    target_exposure = max(min_exp, min(max_exp, target_exposure))
                     logger.debug(
-                        f"[Transition] Emergency factor {emergency_factor:.2f} → "
+                        f"[Transition] Emergency factor {emergency_factor:.2f} -> "
                         f"exposure now {target_exposure:.4f}s"
                     )
 

@@ -50,7 +50,7 @@ The system uses multiple approaches to maintain consistent image brightness duri
               │    Analyze Brightness          │
               │    Update Feedback             │
               │    Store in Database           │
-              │    Learn (ML v1)               │
+              │    Learn (ML v2)               │
               └────────────────────────────────┘
 ```
 
