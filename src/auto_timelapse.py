@@ -70,13 +70,15 @@ class BrightnessZones:
     WARNING_HIGH = 160  # Moderate overexposure - 15% reduction
     TARGET = 120  # Ideal brightness
     WARNING_LOW = 80  # Moderate underexposure - 20% increase
-    EMERGENCY_LOW = 60  # Severe underexposure - 40% increase
+    EMERGENCY_LOW = 60  # Severe underexposure - 100% increase
+    CRITICAL_LOW = 40  # Critical underexposure (e.g., Arctic twilight) - 300% increase
 
     # Emergency correction multipliers (applied directly to exposure)
     EMERGENCY_HIGH_FACTOR = 0.7  # Reduce exposure by 30%
     WARNING_HIGH_FACTOR = 0.85  # Reduce by 15%
     WARNING_LOW_FACTOR = 1.2  # Increase by 20%
-    EMERGENCY_LOW_FACTOR = 1.4  # Increase by 40%
+    EMERGENCY_LOW_FACTOR = 2.0  # Increase by 100%
+    CRITICAL_LOW_FACTOR = 4.0  # Increase by 300% for Arctic winter twilight
 
 
 class AdaptiveTimelapse:
@@ -950,6 +952,9 @@ class AdaptiveTimelapse:
         elif brightness > BrightnessZones.WARNING_HIGH:
             target_factor = BrightnessZones.WARNING_HIGH_FACTOR
             zone_name = "Overexposure warning"
+        elif brightness < BrightnessZones.CRITICAL_LOW:
+            target_factor = BrightnessZones.CRITICAL_LOW_FACTOR
+            zone_name = "CRITICAL UNDEREXPOSURE"
         elif brightness < BrightnessZones.EMERGENCY_LOW:
             target_factor = BrightnessZones.EMERGENCY_LOW_FACTOR
             zone_name = "SEVERE UNDEREXPOSURE"
@@ -971,7 +976,9 @@ class AdaptiveTimelapse:
         self._smoothed_emergency_factor += speed * (target_factor - self._smoothed_emergency_factor)
 
         # Clamp to valid range
-        self._smoothed_emergency_factor = max(0.5, min(1.5, self._smoothed_emergency_factor))
+        # Allow up to 4x increase for severe underexposure (e.g., Arctic winter twilight)
+        # but limit reduction to 50% to prevent sudden darkening
+        self._smoothed_emergency_factor = max(0.5, min(4.0, self._smoothed_emergency_factor))
 
         # Only log when factor is significantly different from 1.0
         if abs(self._smoothed_emergency_factor - 1.0) > 0.02:

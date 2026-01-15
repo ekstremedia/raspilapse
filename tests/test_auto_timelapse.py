@@ -1999,13 +1999,13 @@ class TestSmoothedEmergencyFactor:
         """Test factor increases when brightness is below emergency threshold."""
         timelapse = AdaptiveTimelapse(test_config_file)
 
-        # Simulate several frames with severe underexposure (brightness < 60)
-        for _ in range(10):
-            factor = timelapse._get_emergency_brightness_factor(40)
+        # Simulate several frames with critical underexposure (brightness < 40)
+        for _ in range(15):
+            factor = timelapse._get_emergency_brightness_factor(30)
 
-        # Factor should have moved towards 1.4 (EMERGENCY_LOW_FACTOR)
+        # Factor should have moved towards 4.0 (CRITICAL_LOW_FACTOR for brightness < 40)
         assert factor > 1.0
-        assert factor > 1.1  # Should have moved significantly towards 1.4
+        assert factor > 3.0  # Should have moved significantly towards 4.0
 
     def test_emergency_factor_stays_stable_in_normal_range(self, test_config_file):
         """Test factor stays at 1.0 when brightness is in normal range."""

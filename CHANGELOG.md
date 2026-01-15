@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-01-15
+
+### Fixed
+- **Critical: Severe underexposure during Arctic winter twilight**
+  - Root cause: Exposure interpolation (15% per frame) too slow for rapid Arctic light changes, combined with emergency factor cap (1.5x) being far too low
+  - Symptoms: Images going nearly black (brightness ~17 instead of target ~120) during afternoon/evening at high latitudes
+  - The lux calculation was accurate (correctly detecting 1154 → 125 lux), but exposure couldn't catch up
+  - At 30-second intervals, log-space interpolation takes 5+ minutes to reach target exposure
+  - Emergency factor was capped at 1.5x when 4x+ correction was needed
+
+### Changed
+- **Increased emergency factor cap from 1.5x to 4.0x** - allows much faster recovery from severe underexposure
+- **Increased EMERGENCY_LOW_FACTOR from 1.4x to 2.0x** - 100% exposure increase for brightness < 60
+- **Added new CRITICAL_LOW brightness zone** - 300% exposure increase for brightness < 40 (Arctic twilight conditions)
+
+### Technical Details
+- Emergency factor asymmetric by design: aggressive on underexposure (up to 4x), conservative on overexposure (max 50% reduction)
+- New zone thresholds:
+  - EMERGENCY_LOW: brightness < 60 → 2.0x correction (was 1.4x)
+  - CRITICAL_LOW: brightness < 40 → 4.0x correction (new)
+- Factors still smoothed over multiple frames to prevent flickering
+- Only affects severe underexposure scenarios - normal operation unchanged
+
+### Why this only affected Arctic locations
+- At 68°N in January, daylight lasts only 2-3 hours with rapid light changes
+- Sun barely rises above horizon during polar twilight period
+- Light drops much faster than at lower latitudes
+- Standard exposure interpolation designed for temperate latitudes couldn't keep up
+
+### Added
+- New test `test_critical_low_factor` for CRITICAL_LOW zone
+- Updated test assertions for new EMERGENCY_LOW_FACTOR value
+
 ## [1.2.1] - 2026-01-14
 
 ### Fixed

@@ -66,7 +66,8 @@ Immediate exposure correction when brightness is severely off-target:
 | Warning High | > 160 | 15% exposure reduction |
 | Target | ~120 | No change |
 | Warning Low | < 80 | 20% exposure increase |
-| Emergency Low | < 60 | 40% exposure increase |
+| Emergency Low | < 60 | 100% exposure increase |
+| Critical Low | < 40 | 300% exposure increase (Arctic twilight) |
 
 **Location**: `src/auto_timelapse.py` - `BrightnessZones` class and `_get_emergency_brightness_factor()` method
 
@@ -341,6 +342,56 @@ tail -f logs/auto_timelapse.log | grep -E "correction=|exposure="
 - The seed exposure from auto-exposure may be correct for one sensor but wrong for another
 - Cameras with matching sensor/seed values work fine; mismatched ones need the correction
 
+### Problem: Severe underexposure during Arctic twilight (Fixed in v2.4)
+
+**Symptoms**:
+- Images go nearly black (brightness ~17 instead of target ~120) during afternoon/evening
+- Occurs during rapid light changes (Arctic winter sunset, polar twilight)
+- Logs show `[Emergency] SEVERE UNDEREXPOSURE` but images don't improve
+- Emergency factor stuck at 1.40 (40% increase) when 4x+ is needed
+- Exposure stuck at low values (e.g., 141ms) when it should be 600ms+
+
+**Root cause**: Exposure interpolation lag combined with insufficient emergency factor cap
+
+**Technical explanation**:
+1. Lux is calculated correctly from test shot (e.g., drops from 1154 → 125 as sun sets)
+2. Target exposure is calculated correctly (e.g., 0.6s for lux 125)
+3. **BUT**: Exposure uses log-space interpolation at 15% per frame
+4. With 30-second intervals, it takes 5+ minutes to catch up to target
+5. In Arctic winter, light drops faster than the interpolation can track
+6. Emergency factor was capped at 1.5x - insufficient for 4x+ correction needed
+7. Result: Exposure lags severely, images go dark
+
+**The fix (v2.4)**:
+1. Increased emergency factor cap from 1.5x to **4.0x**
+2. Increased EMERGENCY_LOW_FACTOR from 1.4x to **2.0x** (100% increase)
+3. Added new **CRITICAL_LOW zone** (brightness < 40) with **4.0x** correction
+
+```python
+# New brightness zones for underexposure
+EMERGENCY_LOW = 60   # 100% exposure increase (was 40%)
+CRITICAL_LOW = 40    # 300% exposure increase (Arctic twilight)
+
+# New emergency factor limits
+max_factor = 4.0     # Was 1.5 - allows much faster recovery
+```
+
+**How to identify this issue**:
+```bash
+# Check for severe underexposure with maxed-out correction
+journalctl -u raspilapse.service | grep -E "brightness=1[0-9]\.|brightness=2[0-9]\." | tail -20
+
+# Check if emergency factor is capped
+journalctl -u raspilapse.service | grep "smoothed factor 1.4" | tail -10
+# If you see many "1.40 (40% increase)" when brightness is <40, update needed
+```
+
+**Why it only affects Arctic locations**:
+- At 68°N in January, the sun barely rises above horizon
+- "Daylight" lasts only 2-3 hours with rapid light changes
+- Light drops much faster than at lower latitudes
+- The slow exposure interpolation (designed for smooth transitions) can't keep up
+
 ### Problem: Daytime flickering / exposure oscillation (Fixed in v1.2.1)
 
 **Symptoms**:
@@ -429,3 +480,4 @@ python src/generate_database_graph.py --period 1d
 - **v2.1**: Arctic-aware ML v2 with solar elevation-based time periods, aurora frame support, database migrations
 - **v2.2**: Fixed brightness correction not applied to sequential ramping in transition mode (critical fix for multi-camera setups with different sensor sensitivities)
 - **v2.3**: Smoothed emergency factor to prevent daytime flickering/oscillation caused by hard threshold toggling
+- **v2.4**: Arctic twilight fix - increased emergency factor cap (1.5x → 4.0x) and added CRITICAL_LOW zone for severe underexposure during rapid Arctic light changes

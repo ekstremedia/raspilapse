@@ -32,6 +32,7 @@ class TestBrightnessZones:
         # Factors for underexposure should increase exposure (> 1.0)
         assert BrightnessZones.WARNING_LOW_FACTOR > 1.0
         assert BrightnessZones.EMERGENCY_LOW_FACTOR > 1.0
+        assert BrightnessZones.CRITICAL_LOW_FACTOR > BrightnessZones.EMERGENCY_LOW_FACTOR
 
 
 class TestEmergencyBrightnessFactor:
@@ -126,13 +127,25 @@ class TestEmergencyBrightnessFactor:
         """Test emergency factor converges for severe underexposure."""
         from src.auto_timelapse import BrightnessZones
 
-        # Test severe underexposure (<60) - factor should converge towards 1.4
+        # Test severe underexposure (40-60) - factor should converge towards EMERGENCY_LOW_FACTOR
         for _ in range(20):
             factor = timelapse._get_emergency_brightness_factor(50)
 
         # Should have converged close to target
-        assert factor > 1.25  # Moving towards 1.4
-        assert factor < BrightnessZones.EMERGENCY_LOW_FACTOR + 0.05
+        assert factor > 1.5  # Moving towards 2.0
+        assert factor < BrightnessZones.EMERGENCY_LOW_FACTOR + 0.1
+
+    def test_critical_low_factor(self, timelapse):
+        """Test emergency factor converges for critical underexposure (Arctic twilight)."""
+        from src.auto_timelapse import BrightnessZones
+
+        # Test critical underexposure (<40) - factor should converge towards CRITICAL_LOW_FACTOR
+        for _ in range(20):
+            factor = timelapse._get_emergency_brightness_factor(20)
+
+        # Should have converged close to 4.0 target
+        assert factor > 3.0  # Moving towards 4.0
+        assert factor < BrightnessZones.CRITICAL_LOW_FACTOR + 0.1
 
     def test_none_brightness_returns_current(self, timelapse):
         """Test that None brightness returns current smoothed factor."""

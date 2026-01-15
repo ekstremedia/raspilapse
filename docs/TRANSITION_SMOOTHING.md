@@ -719,6 +719,51 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 
 ## Changelog
 
+### 2026-01-15 - Arctic Twilight Severe Underexposure Fix
+
+**Problem Identified:**
+- Images going nearly black (brightness ~17) during Arctic winter afternoon/evening
+- Exposure stuck at 141ms when it should be 600ms+
+- Emergency factor capped at 1.40 (40%) when 4x+ correction was needed
+- Root cause: Exposure interpolation (15% per frame) too slow for rapid Arctic light changes
+
+**Root Cause Analysis:**
+The lux calculation from test shots was accurate - it correctly detected light dropping from 1154 → 125 lux. However:
+1. Target exposure formula gave correct 0.6s for lux 125
+2. But log-space interpolation at 15% per frame takes 5+ minutes to reach target
+3. Arctic winter light drops faster than interpolation can track
+4. Emergency factor cap of 1.5x was far too low for the 4x+ correction needed
+5. Result: Exposure lagged severely behind rapidly dropping light
+
+**The Fix - Increased Emergency Correction Capacity:**
+
+| Setting | Before | After |
+|---------|--------|-------|
+| Emergency factor cap | 1.5x | **4.0x** |
+| EMERGENCY_LOW_FACTOR | 1.4x | **2.0x** |
+| New CRITICAL_LOW zone | - | **4.0x** for brightness < 40 |
+
+```python
+# New brightness zones
+class BrightnessZones:
+    EMERGENCY_LOW = 60      # 100% increase (was 40%)
+    CRITICAL_LOW = 40       # 300% increase (Arctic twilight) - NEW
+
+    EMERGENCY_LOW_FACTOR = 2.0   # Was 1.4
+    CRITICAL_LOW_FACTOR = 4.0    # NEW
+```
+
+**Why this design is safe:**
+- Asymmetric: aggressive on underexposure (up to 4x), conservative on overexposure (max 50% reduction)
+- Factors are still smoothed over multiple frames (no sudden jumps)
+- Only triggers at severe underexposure (brightness < 60 or < 40)
+- Higher cap allows system to catch up during rapid Arctic light changes
+
+**Test Coverage:**
+- Added `test_critical_low_factor` for new CRITICAL_LOW zone
+- Updated `test_emergency_low_factor` for new 2.0x factor
+- Added assertion for CRITICAL_LOW_FACTOR > EMERGENCY_LOW_FACTOR
+
 ### 2026-01-14 - Smoothed Emergency Factor (Anti-Oscillation Fix)
 
 **Problem Identified:**
