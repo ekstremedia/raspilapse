@@ -179,17 +179,48 @@ class TestSimplifiedStructure:
         assert top_pixel[3] > bottom_pixel[3]
 
     def test_weather_data_missing(self, simplified_config, test_metadata):
-        """Test with weather data unavailable."""
+        """Test with weather data unavailable and no cached fallback."""
         overlay = ImageOverlay(simplified_config)
 
         # Mock weather data as unavailable
         with patch.object(overlay.weather, "get_weather_data", return_value=None):
             data = overlay._prepare_overlay_data(test_metadata, mode="day")
 
-            # Should show "-" for weather fields
+            # Should show "-" for weather fields when no fallback exists
             assert data["temp"] == "-"
             assert data["humidity"] == "-"
             assert data["wind"] == "-"
+
+    def test_weather_data_fallback(self, simplified_config, test_metadata):
+        """Test weather data fallback when fetch fails after previous success."""
+        overlay = ImageOverlay(simplified_config)
+
+        # First call returns valid weather data
+        valid_weather = {
+            "temperature": 15.5,
+            "humidity": 65,
+            "wind_speed": 18,
+            "wind_gust": 25,
+            "wind_angle": 180,
+            "rain": 0.0,
+            "rain_1h": 0.0,
+            "rain_24h": 2.5,
+            "pressure": 1013,
+        }
+
+        with patch.object(overlay.weather, "get_weather_data", return_value=valid_weather):
+            data = overlay._prepare_overlay_data(test_metadata, mode="day")
+            # Should use the valid weather data
+            assert "15.5" in data["temp"]
+            assert "65" in data["humidity"]
+
+        # Second call returns None (fetch failed)
+        with patch.object(overlay.weather, "get_weather_data", return_value=None):
+            data = overlay._prepare_overlay_data(test_metadata, mode="day")
+            # Should use cached fallback, not show "-"
+            assert "15.5" in data["temp"]
+            assert "65" in data["humidity"]
+            assert data["temp"] != "-"
 
     def test_line_1_right_with_pipe_separator(self, simplified_config, test_metadata):
         """Test line_1_right with pipe separator in content."""
