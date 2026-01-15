@@ -225,7 +225,7 @@ def create_solar_pattern_graph(db_path: str, output_path: str, days: int = 14):
             first_val = midday_lux[0]
             last_val = midday_lux[-1]
             days_span = len(midday_lux)
-            if first_val > 0:
+            if first_val > 1:  # Require meaningful baseline for trend
                 pct_change = ((last_val / first_val) ** (1 / days_span) - 1) * 100
                 trend_label = f"Trend: {pct_change:+.1f}%/day"
             else:
@@ -271,8 +271,11 @@ def load_ml_state(state_file: str) -> dict:
 
     if not os.path.exists(state_file):
         return {}
-    with open(state_file, "r") as f:
-        return json.load(f)
+    try:
+        with open(state_file, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def main():
@@ -290,8 +293,10 @@ def main():
     # Get database path
     db_path = args.db or get_db_path()
 
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    # Ensure output directory exists (guard against empty dirname)
+    output_dir = os.path.dirname(args.output)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
     # Create graph
     print("  Creating solar patterns graph from database...")

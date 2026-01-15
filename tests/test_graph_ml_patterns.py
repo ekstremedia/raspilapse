@@ -33,116 +33,110 @@ class TestFetchDailyLuxData:
         """Test fetching from database with no captures."""
         from src.graph_ml_patterns import fetch_daily_lux_data
 
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
 
-        # Create empty database with schema
-        conn = sqlite3.connect(db_path)
-        conn.execute(
+            # Create empty database with schema
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE captures (
+                    timestamp TEXT,
+                    lux REAL,
+                    mode TEXT,
+                    sun_elevation REAL
+                )
             """
-            CREATE TABLE captures (
-                timestamp TEXT,
-                lux REAL,
-                mode TEXT,
-                sun_elevation REAL
             )
-        """
-        )
-        conn.commit()
-        conn.close()
+            conn.commit()
+            conn.close()
 
-        result = fetch_daily_lux_data(db_path, days=7)
-        assert result == {}
-
-        os.unlink(db_path)
+            result = fetch_daily_lux_data(db_path, days=7)
+            assert result == {}
 
     def test_fetch_with_data(self):
         """Test fetching data from database with captures."""
         from src.graph_ml_patterns import fetch_daily_lux_data
 
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
 
-        conn = sqlite3.connect(db_path)
-        conn.execute(
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE captures (
+                    timestamp TEXT,
+                    lux REAL,
+                    mode TEXT,
+                    sun_elevation REAL
+                )
             """
-            CREATE TABLE captures (
-                timestamp TEXT,
-                lux REAL,
-                mode TEXT,
-                sun_elevation REAL
             )
-        """
-        )
 
-        # Insert test data for today and yesterday
-        now = datetime.now()
-        yesterday = now - timedelta(days=1)
+            # Insert test data for today and yesterday
+            now = datetime.now()
+            yesterday = now - timedelta(days=1)
 
-        test_data = [
-            (now.replace(hour=10, minute=0).isoformat(), 100.0, "day", 5.0),
-            (now.replace(hour=11, minute=0).isoformat(), 200.0, "day", 8.0),
-            (now.replace(hour=12, minute=0).isoformat(), 300.0, "day", 10.0),
-            (yesterday.replace(hour=10, minute=0).isoformat(), 80.0, "day", 4.0),
-            (yesterday.replace(hour=11, minute=0).isoformat(), 150.0, "day", 7.0),
-        ]
+            test_data = [
+                (now.replace(hour=10, minute=0).isoformat(), 100.0, "day", 5.0),
+                (now.replace(hour=11, minute=0).isoformat(), 200.0, "day", 8.0),
+                (now.replace(hour=12, minute=0).isoformat(), 300.0, "day", 10.0),
+                (yesterday.replace(hour=10, minute=0).isoformat(), 80.0, "day", 4.0),
+                (yesterday.replace(hour=11, minute=0).isoformat(), 150.0, "day", 7.0),
+            ]
 
-        conn.executemany("INSERT INTO captures VALUES (?, ?, ?, ?)", test_data)
-        conn.commit()
-        conn.close()
+            conn.executemany("INSERT INTO captures VALUES (?, ?, ?, ?)", test_data)
+            conn.commit()
+            conn.close()
 
-        result = fetch_daily_lux_data(db_path, days=7)
+            result = fetch_daily_lux_data(db_path, days=7)
 
-        assert len(result) == 2  # Two days of data
-        today_key = now.strftime("%Y-%m-%d")
-        yesterday_key = yesterday.strftime("%Y-%m-%d")
+            assert len(result) == 2  # Two days of data
+            today_key = now.strftime("%Y-%m-%d")
+            yesterday_key = yesterday.strftime("%Y-%m-%d")
 
-        assert today_key in result
-        assert yesterday_key in result
-        assert len(result[today_key]["times"]) == 3
-        assert len(result[yesterday_key]["times"]) == 2
-
-        os.unlink(db_path)
+            assert today_key in result
+            assert yesterday_key in result
+            assert len(result[today_key]["times"]) == 3
+            assert len(result[yesterday_key]["times"]) == 2
 
     def test_fetch_filters_by_days(self):
         """Test that data is filtered by days parameter."""
         from src.graph_ml_patterns import fetch_daily_lux_data
 
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
 
-        conn = sqlite3.connect(db_path)
-        conn.execute(
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE captures (
+                    timestamp TEXT,
+                    lux REAL,
+                    mode TEXT,
+                    sun_elevation REAL
+                )
             """
-            CREATE TABLE captures (
-                timestamp TEXT,
-                lux REAL,
-                mode TEXT,
-                sun_elevation REAL
             )
-        """
-        )
 
-        # Insert data from 10 days ago and today
-        now = datetime.now()
-        old_date = now - timedelta(days=10)
+            # Insert data from 10 days ago and today
+            now = datetime.now()
+            old_date = now - timedelta(days=10)
 
-        test_data = [
-            (now.replace(hour=12).isoformat(), 100.0, "day", 5.0),
-            (old_date.replace(hour=12).isoformat(), 100.0, "day", 5.0),
-        ]
+            test_data = [
+                (now.replace(hour=12).isoformat(), 100.0, "day", 5.0),
+                (old_date.replace(hour=12).isoformat(), 100.0, "day", 5.0),
+            ]
 
-        conn.executemany("INSERT INTO captures VALUES (?, ?, ?, ?)", test_data)
-        conn.commit()
-        conn.close()
+            conn.executemany("INSERT INTO captures VALUES (?, ?, ?, ?)", test_data)
+            conn.commit()
+            conn.close()
 
-        # Fetch only last 7 days
-        result = fetch_daily_lux_data(db_path, days=7)
+            # Fetch only last 7 days
+            result = fetch_daily_lux_data(db_path, days=7)
 
-        assert len(result) == 1  # Only today's data
-        assert now.strftime("%Y-%m-%d") in result
-
-        os.unlink(db_path)
+            assert len(result) == 1  # Only today's data
+            assert now.strftime("%Y-%m-%d") in result
 
     def test_fetch_nonexistent_db(self):
         """Test fetching from nonexistent database."""
