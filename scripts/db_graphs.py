@@ -32,6 +32,14 @@ import numpy as np
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+# Import ML patterns graph generator (optional - only if ml_state exists)
+try:
+    from src.graph_ml_patterns import load_ml_state, create_solar_pattern_graph
+
+    HAS_ML_GRAPH = True
+except ImportError:
+    HAS_ML_GRAPH = False
+
 # === STYLING CONSTANTS ===
 DARK_BG = "#1a1a1a"
 AXES_BG = "#2d2d2d"
@@ -938,6 +946,20 @@ Examples:
     create_weather_graph(data, output_dir, time_desc)
     create_system_graph(data, output_dir, time_desc)
     create_overview_graph(data, output_dir, time_desc)
+
+    # Generate ML solar patterns graph if available
+    if HAS_ML_GRAPH:
+        ml_state_path = project_root / "ml_state" / "ml_state.json"
+        if ml_state_path.exists():
+            print("  Creating ml_solar_patterns.png...")
+            try:
+                state = load_ml_state(str(ml_state_path))
+                ml_output = output_dir / "ml_solar_patterns.png"
+                create_solar_pattern_graph(state, str(ml_output))
+            except Exception as e:
+                print(f"    Skipped: ML graph failed - {e}")
+        else:
+            print("  Skipped ml_solar_patterns.png: No ML state data")
 
     print(f"\n  All graphs saved to: {output_dir}")
     print()
