@@ -48,6 +48,9 @@ class ImageOverlay:
         self.overlay_config = config.get("overlay", {})
         self.enabled = self.overlay_config.get("enabled", False)
 
+        # Initialize defaults (needed even when disabled for attribute safety)
+        self._last_weather_data: Optional[Dict] = None
+
         if not self.enabled:
             logger.debug("Overlay disabled in configuration")
             return
@@ -366,6 +369,15 @@ class ImageOverlay:
 
         # Add weather data if available
         weather_data = self.weather.get_weather_data()
+
+        # If no fresh data, use our cached fallback
+        if weather_data is None and self._last_weather_data is not None:
+            logger.debug("Using overlay's cached weather data as fallback")
+            weather_data = self._last_weather_data
+        elif weather_data is not None:
+            # Update our fallback cache with fresh data
+            self._last_weather_data = weather_data
+
         if weather_data:
             data.update(
                 {
@@ -387,7 +399,7 @@ class ImageOverlay:
                 }
             )
         else:
-            # Show "-" for stale/unavailable weather data
+            # Only show "-" if we have no data at all (first run, never succeeded)
             data.update(
                 {
                     "temp": "-",
