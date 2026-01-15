@@ -41,8 +41,8 @@ def get_db_path() -> str:
             if not os.path.isabs(db_path):
                 db_path = project_root / db_path
             return str(db_path)
-        except Exception:
-            pass
+        except (OSError, yaml.YAMLError):
+            pass  # Fall back to default path
 
     return str(default_path)
 
@@ -53,24 +53,23 @@ def fetch_daily_lux_data(db_path: str, days: int = 14) -> dict:
         print(f"Database not found: {db_path}")
         return {}
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
 
-    cutoff = datetime.now() - timedelta(days=days)
+        cutoff = datetime.now() - timedelta(days=days)
 
-    cur.execute(
-        """
-        SELECT timestamp, lux, mode, sun_elevation
-        FROM captures
-        WHERE timestamp >= ? AND lux > 0
-        ORDER BY timestamp ASC
-        """,
-        [cutoff.isoformat()],
-    )
+        cur.execute(
+            """
+            SELECT timestamp, lux, mode, sun_elevation
+            FROM captures
+            WHERE timestamp >= ? AND lux > 0
+            ORDER BY timestamp ASC
+            """,
+            [cutoff.isoformat()],
+        )
 
-    rows = cur.fetchall()
-    conn.close()
+        rows = cur.fetchall()
 
     if not rows:
         return {}
@@ -96,7 +95,9 @@ def fetch_daily_lux_data(db_path: str, days: int = 14) -> dict:
             daily_data[day_key]["lux"].append(row["lux"] or 0.01)
             daily_data[day_key]["modes"].append(row["mode"])
             daily_data[day_key]["sun_elevations"].append(row["sun_elevation"])
-        except Exception:
+        except (ValueError, KeyError, TypeError) as e:
+            # Skip malformed rows but log for debugging
+            print(f"    Warning: Skipping malformed row: {e}")
             continue
 
     return daily_data
@@ -202,7 +203,7 @@ def create_solar_pattern_graph(db_path: str, output_path: str, days: int = 14):
     if midday_lux and len(midday_lux) > 1:
         # Create bar chart
         bar_colors = plt.cm.plasma(np.linspace(0.15, 0.85, len(midday_lux)))
-        bars = ax2.bar(day_dates, midday_lux, color=bar_colors, alpha=0.8, width=0.8)
+        ax2.bar(day_dates, midday_lux, color=bar_colors, alpha=0.8, width=0.8)
 
         ax2.set_xlabel("Date", fontsize=11)
         ax2.set_ylabel("Average Midday Lux (10:00-14:00)", fontsize=11)
@@ -293,7 +294,7 @@ def main():
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
     # Create graph
-    print(f"  Creating solar patterns graph from database...")
+    print("  Creating solar patterns graph from database...")
     print(f"    Database: {db_path}")
     print(f"    Days: {args.days}")
     create_solar_pattern_graph(db_path, args.output, args.days)

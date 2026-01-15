@@ -330,7 +330,7 @@ class TestMainFunction:
             db_path = os.path.join(tmpdir, "test.db")
             output_path = os.path.join(tmpdir, "subdir", "output.png")
 
-            # Create test database
+            # Create test database with sufficient data (5+ points per day, 2+ days)
             conn = sqlite3.connect(db_path)
             conn.execute(
                 """
@@ -340,9 +340,22 @@ class TestMainFunction:
             """
             )
             now = datetime.now()
-            conn.execute(
-                "INSERT INTO captures VALUES (?, ?, ?, ?)", (now.isoformat(), 100.0, "day", 5.0)
-            )
+            yesterday = now - timedelta(days=1)
+
+            # Insert data for today (6 points including midday)
+            for hour in [8, 10, 11, 12, 13, 14]:
+                ts = now.replace(hour=hour, minute=0).isoformat()
+                conn.execute(
+                    "INSERT INTO captures VALUES (?, ?, ?, ?)", (ts, 100.0 * hour, "day", 5.0)
+                )
+
+            # Insert data for yesterday (6 points including midday)
+            for hour in [8, 10, 11, 12, 13, 14]:
+                ts = yesterday.replace(hour=hour, minute=0).isoformat()
+                conn.execute(
+                    "INSERT INTO captures VALUES (?, ?, ?, ?)", (ts, 80.0 * hour, "day", 4.0)
+                )
+
             conn.commit()
             conn.close()
 
@@ -351,5 +364,6 @@ class TestMainFunction:
             ):
                 main()
 
-            # Output dir should be created
+            # Output dir should be created and graph file should exist
             assert os.path.exists(os.path.dirname(output_path))
+            assert os.path.exists(output_path)
