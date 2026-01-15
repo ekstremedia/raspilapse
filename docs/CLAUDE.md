@@ -668,9 +668,9 @@ python3 src/analyze_timelapse.py -c config/custom.yml
 
 5. **`overview.png`** - 4-panel summary of all key metrics
 
-6. **`ml_solar_patterns.png`** - ML learned light patterns
-   - Lux by time of day for each learned day
-   - Daily midday light levels with trend
+6. **`daily_solar_patterns.png`** - Daily light patterns from database
+   - Lux curves by time of day for each recent day (14 days)
+   - Daily midday light levels with trend (polar winter recovery)
 
 7. **`timelapse_analysis_24h.xlsx`** - Excel file with:
    - **Raw Data**: Every image with timestamp, lux, exposure, gain, temp, etc.
@@ -749,10 +749,11 @@ This prevents the system from rejecting valid night photography where the overal
 ### Files
 | File | Purpose |
 |------|---------|
-| `src/ml_exposure.py` | Main ML predictor class |
-| `src/bootstrap_ml.py` | Bootstrap from historical data |
-| `src/graph_ml_patterns.py` | Generate solar pattern visualization |
-| `ml_state/ml_state.json` | Persisted learned state |
+| `src/ml_exposure_v2.py` | ML v2 predictor (database-trained, arctic-aware) |
+| `src/ml_exposure.py` | Legacy ML v1 predictor class |
+| `src/bootstrap_ml_v2.py` | Bootstrap v2 from database |
+| `src/graph_ml_patterns.py` | Generate daily solar pattern visualization from database |
+| `ml_state/ml_state_v2.json` | ML v2 persisted state |
 | `docs/ML_EXPOSURE_SYSTEM.md` | Full documentation |
 
 ### Configuration
@@ -768,14 +769,14 @@ adaptive_timelapse:
 
 ### Commands
 ```bash
-# Bootstrap from historical data
-python src/bootstrap_ml.py --days 7
+# Bootstrap ML v2 from database (auto-retrains daily)
+python src/bootstrap_ml_v2.py
 
-# View learned patterns
-python src/bootstrap_ml.py --show-table
+# Generate daily solar patterns graph (last 14 days from database)
+python src/graph_ml_patterns.py --days 14
 
-# Generate visualization
-python src/graph_ml_patterns.py
+# Or run all graphs including solar patterns via db_graphs.py
+python scripts/db_graphs.py
 ```
 
 ### Polar Location Adaptation

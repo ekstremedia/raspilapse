@@ -158,11 +158,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New documentation: `docs/ML_EXPOSURE_SYSTEM.md`
   - 43 tests in `tests/test_ml_exposure.py`
 
-- **ML Solar Patterns Graph**: Visualization of learned light patterns
-  - Shows lux by time of day for each learned day
+- **Daily Solar Patterns Graph**: Visualization of light patterns from database
+  - Shows lux curves by time of day for each recent day (last 14 days)
   - Displays daily midday light levels with trend line
-  - Tracks polar winter recovery (+100 lux/day trend visible)
-  - Generated at `graphs/ml_solar_patterns.png`
+  - Tracks polar winter recovery
+  - Generated at `graphs/daily_solar_patterns.png` via `db_graphs.py`
 
 - **Fast Underexposure Ramp-Up**: Symmetric to existing overexposure ramp-down
   - Triggers when brightness < 70 (warning) or < 50 (critical)
