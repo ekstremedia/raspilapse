@@ -2342,5 +2342,83 @@ class TestDriftCorrectorIntegration:
         assert hasattr(timelapse, "_last_lux_timestamp")
 
 
+class TestP95HighlightProtection:
+    """Tests for proactive p95-based highlight protection."""
+
+    def test_p95_factor_safe_range(self, test_config_file):
+        """Test no adjustment when p95 is in safe range (<200)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Safe range - no adjustment
+        assert timelapse.get_p95_highlight_factor(100.0) == 1.0
+        assert timelapse.get_p95_highlight_factor(150.0) == 1.0
+        assert timelapse.get_p95_highlight_factor(199.0) == 1.0
+
+    def test_p95_factor_warning_range(self, test_config_file):
+        """Test gentle reduction in warning range (200-220)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # At 200 - just entering warning
+        factor_200 = timelapse.get_p95_highlight_factor(200.0)
+        assert factor_200 == 1.0
+
+        # At 210 - mid warning (should be ~0.975)
+        factor_210 = timelapse.get_p95_highlight_factor(210.0)
+        assert 0.97 < factor_210 < 0.98
+
+        # At 220 - end of warning (should be ~0.95)
+        factor_220 = timelapse.get_p95_highlight_factor(220.0)
+        assert 0.94 < factor_220 < 0.96
+
+    def test_p95_factor_critical_range(self, test_config_file):
+        """Test moderate reduction in critical range (220-240)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # At 230 - mid critical (should be ~0.90)
+        factor_230 = timelapse.get_p95_highlight_factor(230.0)
+        assert 0.88 < factor_230 < 0.92
+
+        # At 240 - end of critical (should be ~0.85)
+        factor_240 = timelapse.get_p95_highlight_factor(240.0)
+        assert 0.84 < factor_240 < 0.86
+
+    def test_p95_factor_emergency_range(self, test_config_file):
+        """Test aggressive reduction for imminent clipping (>240)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # At 245 - emergency (should be ~0.82)
+        factor_245 = timelapse.get_p95_highlight_factor(245.0)
+        assert 0.78 < factor_245 < 0.84
+
+        # At 250 - severe emergency (should be ~0.75)
+        factor_250 = timelapse.get_p95_highlight_factor(250.0)
+        assert 0.74 <= factor_250 <= 0.80
+
+        # At 255 - maximum (should be ~0.70)
+        factor_255 = timelapse.get_p95_highlight_factor(255.0)
+        assert factor_255 >= 0.70
+
+    def test_p95_factor_none_returns_1(self, test_config_file):
+        """Test that None p95 returns factor of 1.0."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        assert timelapse.get_p95_highlight_factor(None) == 1.0
+
+    def test_p95_factor_never_below_0_7(self, test_config_file):
+        """Test factor never goes below 0.70."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Even for impossible values
+        assert timelapse.get_p95_highlight_factor(255.0) >= 0.70
+        assert timelapse.get_p95_highlight_factor(300.0) >= 0.70
+
+    def test_p95_tracking_initialized(self, test_config_file):
+        """Test p95 tracking is initialized."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        assert hasattr(timelapse, "_last_p95")
+        assert timelapse._last_p95 is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

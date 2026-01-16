@@ -195,6 +195,7 @@ class AdaptiveTimelapse:
 
         # Brightness feedback state for smooth transitions
         self._last_brightness: float = None  # Previous frame's mean brightness
+        self._last_p95: float = None  # Previous frame's 95th percentile (highlight level)
         self._brightness_correction_factor: float = 1.0  # Multiplier for exposure adjustment
 
         # Overexposure detection for fast ramp-down
@@ -1185,6 +1186,61 @@ class AdaptiveTimelapse:
 
         return 1.0
 
+    def get_p95_highlight_factor(self, p95: float) -> float:
+        """
+        Get proactive exposure reduction factor based on p95 (highlight level).
+
+        This implements proactive highlight protection from the Raspberry Pi
+        Camera Algorithm Guide: "top 2% of pixels must be at or below 0.8"
+        (upper bound constraint). Instead of waiting for pixels to clip (>245),
+        we reduce exposure when p95 approaches saturation.
+
+        Philosophy: Prevent clipping BEFORE it happens, rather than correcting
+        after highlights are blown out.
+
+        Thresholds (0-255 scale):
+        - p95 < 200: No adjustment (highlights have headroom)
+        - p95 200-220: Gentle reduction (approaching saturation)
+        - p95 220-240: Moderate reduction (near saturation)
+        - p95 > 240: Aggressive reduction (imminent clipping)
+
+        Args:
+            p95: 95th percentile brightness (0-255)
+
+        Returns:
+            Exposure factor (0.7-1.0, multiply target exposure by this)
+        """
+        if p95 is None:
+            return 1.0
+
+        # Thresholds for highlight protection
+        safe_threshold = 200  # Below this, no adjustment needed
+        warning_threshold = 220  # Start gentle reduction
+        critical_threshold = 240  # Near clipping, more aggressive
+
+        if p95 <= safe_threshold:
+            return 1.0
+
+        if p95 <= warning_threshold:
+            # Gentle reduction: 200→1.0, 220→0.95
+            factor = 1.0 - ((p95 - safe_threshold) / (warning_threshold - safe_threshold)) * 0.05
+            logger.debug(f"[P95-Protect] Highlight warning: p95={p95:.1f} → factor={factor:.3f}")
+            return factor
+
+        if p95 <= critical_threshold:
+            # Moderate reduction: 220→0.95, 240→0.85
+            factor = (
+                0.95 - ((p95 - warning_threshold) / (critical_threshold - warning_threshold)) * 0.10
+            )
+            logger.info(f"[P95-Protect] Highlight critical: p95={p95:.1f} → factor={factor:.3f}")
+            return factor
+
+        # Very high p95 (>240): Aggressive reduction to 0.70-0.85
+        # 240→0.85, 250→0.77, 255→0.70
+        factor = max(0.70, 0.85 - ((p95 - critical_threshold) / 15) * 0.15)
+        logger.warning(f"[P95-Protect] Highlight EMERGENCY: p95={p95:.1f} → factor={factor:.3f}")
+        return factor
+
     def _calculate_target_gain_from_lux(self, lux: float) -> float:
         """
         Calculate target analogue gain based on current lux level.
@@ -1434,6 +1490,17 @@ class AdaptiveTimelapse:
                 # Update lux tracking for next frame
                 self._previous_lux_for_stability = lux
                 self._last_lux_timestamp = current_time
+
+        # === PROACTIVE P95 HIGHLIGHT PROTECTION ===
+        # Reduce exposure BEFORE highlights clip (when p95 approaches 255)
+        # This is proactive (prevent clipping) vs reactive (fix after clipping)
+        p95_factor = self.get_p95_highlight_factor(self._last_p95)
+        if p95_factor < 1.0:
+            target_exposure *= p95_factor
+            logger.debug(
+                f"[P95] Applied highlight protection: p95={self._last_p95:.1f}, "
+                f"factor={p95_factor:.3f}"
+            )
 
         # === SEVERE-ONLY SAFETY CLAMPS ===
         # Only apply hard corrections for extreme cases (after all adjustments)
@@ -2273,6 +2340,12 @@ class AdaptiveTimelapse:
             diagnostics["target_brightness"] = self._target_brightness
             if self._last_brightness is not None:
                 diagnostics["last_brightness"] = round(self._last_brightness, 2)
+            if self._last_p95 is not None:
+                diagnostics["last_p95"] = round(self._last_p95, 2)
+                # Include p95 highlight protection factor for debugging
+                p95_factor = self.get_p95_highlight_factor(self._last_p95)
+                if p95_factor < 1.0:
+                    diagnostics["p95_highlight_factor"] = round(p95_factor, 3)
 
             # Analyze image brightness
             brightness_analysis = self._analyze_image_brightness(image_path)
@@ -2557,6 +2630,8 @@ class AdaptiveTimelapse:
                             if brightness_metrics:
                                 actual_brightness = brightness_metrics.get("mean_brightness")
                                 self._apply_brightness_feedback(actual_brightness)
+                                # Track p95 for proactive highlight protection
+                                self._last_p95 = brightness_metrics.get("percentile_95")
                                 # Check for overexposure and enable fast ramp-down if needed
                                 self._check_overexposure(brightness_metrics)
                                 # Check for underexposure at min exposure and enable fast recovery

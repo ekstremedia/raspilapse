@@ -293,6 +293,30 @@ transition_mode:
 4. **Safety rails only for severe cases**: Not constant intervention
 5. **Small variations acceptable**: 70-170 range is fine if curve is smooth
 
+#### 6. Proactive P95 Highlight Protection
+
+Implements proactive highlight protection based on the Raspberry Pi Camera Algorithm Guide's histogram constraint concept: "top 2% of pixels must be at or below a threshold."
+
+Instead of waiting for pixels to clip (>245) and then correcting, the system monitors p95 (95th percentile brightness) and reduces exposure BEFORE highlights blow out.
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  P95 Highlight Protection Thresholds                        │
+│                                                              │
+│  p95 < 200     → No adjustment (highlights have headroom)   │
+│  p95 200-220   → Gentle reduction (0.95-1.0x exposure)      │
+│  p95 220-240   → Moderate reduction (0.85-0.95x exposure)   │
+│  p95 > 240     → Aggressive reduction (0.70-0.85x exposure) │
+│                                                              │
+│  Philosophy: Prevent clipping BEFORE it happens             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+This is especially useful for:
+- Sunrise when sky can blow out before overall brightness rises
+- Aurora/stars with bright peaks against dark sky
+- High-contrast scenes with bright reflections
+
 ### Verification
 
 1. Run timelapse for full day/night cycle

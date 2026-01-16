@@ -44,6 +44,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Brightness < 35: Force 80% exposure increase
 - Philosophy: Small brightness variations (70-170) are acceptable if curve is smooth
 
+#### Proactive P95 Highlight Protection
+- **New**: `get_p95_highlight_factor()` method prevents highlight clipping BEFORE it happens
+- Based on Raspberry Pi Camera Algorithm Guide's histogram constraint concept
+- Monitors p95 (95th percentile brightness) and reduces exposure proactively:
+  - p95 < 200: No adjustment (highlights have headroom)
+  - p95 200-220: Gentle reduction (0.95-1.0x exposure)
+  - p95 220-240: Moderate reduction (0.85-0.95x exposure)
+  - p95 > 240: Aggressive reduction (0.70-0.85x exposure)
+- Especially useful for sunrise sky blowout, Aurora bright peaks, and high-contrast scenes
+
 ### Config Changes
 ```yaml
 ml_exposure:
