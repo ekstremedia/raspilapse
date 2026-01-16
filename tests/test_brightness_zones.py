@@ -147,12 +147,14 @@ class TestEmergencyBrightnessFactor:
         assert factor > 3.0  # Moving towards 4.0
         assert factor < BrightnessZones.CRITICAL_LOW_FACTOR + 0.1
 
-    def test_none_brightness_returns_current(self, timelapse):
-        """Test that None brightness returns current smoothed factor."""
-        # Set a non-default factor
+    def test_none_brightness_decays_towards_1(self, timelapse):
+        """Test that None brightness decays factor towards 1.0."""
+        # Set a non-default factor (below 1.0)
         timelapse._smoothed_emergency_factor = 0.85
         factor = timelapse._get_emergency_brightness_factor(None)
-        assert factor == 0.85
+        # Should decay towards 1.0 (factor should increase from 0.85)
+        assert factor > 0.85
+        assert factor < 1.0
 
 
 class TestHybridModeDetection:
