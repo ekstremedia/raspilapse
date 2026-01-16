@@ -42,10 +42,10 @@ class TestMLExposurePredictorV2Init:
             config = {}
             predictor = MLExposurePredictorV2(db_path, config, state_dir=tmpdir)
 
-            assert predictor.good_brightness_min == 100
-            assert predictor.good_brightness_max == 140
+            assert predictor.good_brightness_min == 105
+            assert predictor.good_brightness_max == 135
             assert predictor.min_samples == 10
-            assert predictor.initial_trust == 0.5
+            assert predictor.initial_trust == 0.70
 
     def test_init_with_custom_config(self):
         """Test initialization with custom config values."""
@@ -417,7 +417,7 @@ class TestMLExposurePredictorV2SolarPeriods:
 
             # Insert frames with sun_elevation in twilight
             # Lux 75 falls into bucket 7 (50-100 range)
-            for i in range(15):
+            for _ in range(15):
                 conn.execute(
                     """
                     INSERT INTO captures (timestamp, lux, exposure_time_us, brightness_mean, brightness_p5, brightness_p95, sun_elevation)

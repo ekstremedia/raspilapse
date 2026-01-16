@@ -1393,6 +1393,9 @@ class AdaptiveTimelapse:
                 # Get base trust from ML predictor (0.65-0.90)
                 base_trust = self._ml_predictor.get_trust_level()
 
+                # Scale by ML confidence (indicates prediction quality from sample count)
+                base_trust *= ml_confidence
+
                 # Adjust trust based on brightness deviation
                 adjusted_trust = self.get_brightness_adjusted_trust(
                     self._last_brightness, base_trust
@@ -1423,9 +1426,9 @@ class AdaptiveTimelapse:
 
                 logger.debug(
                     f"[ML-First] trust={adjusted_trust:.2f} (base={base_trust:.2f}, "
-                    f"lux_stab={lux_stability_trust:.2f}), ML={ml_exposure:.4f}s, "
-                    f"formula={formula_exposure:.4f}s, drift={drift_correction:.2f} "
-                    f"→ target={target_exposure:.4f}s"
+                    f"conf={ml_confidence:.2f}, lux_stab={lux_stability_trust:.2f}), "
+                    f"ML={ml_exposure:.4f}s, formula={formula_exposure:.4f}s, "
+                    f"drift={drift_correction:.2f} → target={target_exposure:.4f}s"
                 )
 
                 # Update lux tracking for next frame

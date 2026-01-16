@@ -871,6 +871,360 @@ def create_overview_graph(data: Dict, output_dir: Path, time_desc: str):
     print(f"    Saved: {output_path}")
 
 
+def create_ml_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
+    """
+    Create ML diagnostics graph for monitoring ML-first exposure system.
+
+    Shows:
+    - Brightness error from target (120)
+    - Brightness stability (rolling std dev - detects oscillation)
+    - Lux rate of change (detects rapid transitions)
+    """
+    print("  Creating ml_diagnostics.png...")
+
+    # Filter out None values for brightness
+    valid_indices = [i for i, v in enumerate(data["brightness_mean"]) if v is not None]
+
+    if len(valid_indices) < 10:
+        print("    Skipped: Not enough brightness data")
+        return
+
+    timestamps = [data["timestamps"][i] for i in valid_indices]
+    brightness = [data["brightness_mean"][i] for i in valid_indices]
+    lux_values = [data["lux"][i] for i in valid_indices]
+
+    # Calculate derived metrics
+    target_brightness = 120
+
+    # 1. Brightness error from target
+    brightness_error = [b - target_brightness for b in brightness]
+    brightness_error_smooth = smooth_data(brightness_error)
+
+    # 2. Rolling standard deviation (stability metric)
+    window_size = min(15, len(brightness) // 4) if len(brightness) > 20 else 3
+    brightness_std = []
+    for i in range(len(brightness)):
+        start = max(0, i - window_size)
+        end = i + 1
+        window = brightness[start:end]
+        if len(window) > 1:
+            std = np.std(window)
+        else:
+            std = 0
+        brightness_std.append(std)
+    brightness_std_smooth = smooth_data(brightness_std)
+
+    # 3. Lux rate of change (log-space, per minute)
+    lux_rate = [0]  # First point has no rate
+    for i in range(1, len(lux_values)):
+        if lux_values[i] > 0 and lux_values[i - 1] > 0:
+            time_diff = (timestamps[i] - timestamps[i - 1]).total_seconds()
+            if time_diff > 0:
+                log_change = abs(np.log10(lux_values[i]) - np.log10(lux_values[i - 1]))
+                rate_per_min = (log_change / time_diff) * 60
+                lux_rate.append(rate_per_min)
+            else:
+                lux_rate.append(0)
+        else:
+            lux_rate.append(0)
+    lux_rate_smooth = smooth_data(lux_rate)
+
+    # Create 3-panel figure
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(FIG_WIDTH, FIG_HEIGHT * 1.5))
+    fig.patch.set_facecolor(DARK_BG)
+
+    # === Panel 1: Brightness Error ===
+    ax1.set_facecolor(AXES_BG)
+
+    # Color gradient: green near 0, yellow for warning, red for severe
+    ax1.fill_between(
+        timestamps,
+        brightness_error_smooth,
+        0,
+        where=[e >= 0 for e in brightness_error_smooth],
+        alpha=0.4,
+        color="#ff8866",
+        label="Overexposed",
+    )
+    ax1.fill_between(
+        timestamps,
+        brightness_error_smooth,
+        0,
+        where=[e < 0 for e in brightness_error_smooth],
+        alpha=0.4,
+        color="#6688ff",
+        label="Underexposed",
+    )
+    ax1.plot(timestamps, brightness_error_smooth, color="#ffffff", linewidth=1.5, alpha=0.8)
+
+    # Zone lines
+    ax1.axhline(y=0, color="#66ff66", linestyle="-", linewidth=2, alpha=0.8, label="Target (120)")
+    ax1.axhline(
+        y=50, color="#ffaa00", linestyle="--", linewidth=1.5, alpha=0.6, label="Warning (±50)"
+    )
+    ax1.axhline(y=-50, color="#ffaa00", linestyle="--", linewidth=1.5, alpha=0.6)
+    ax1.axhline(
+        y=80, color="#ff4444", linestyle=":", linewidth=1.5, alpha=0.6, label="Severe (±80)"
+    )
+    ax1.axhline(y=-80, color="#ff4444", linestyle=":", linewidth=1.5, alpha=0.6)
+
+    ax1.set_ylabel("Brightness Error", fontsize=11, color=TEXT_COLOR)
+    ax1.set_title("Brightness Error from Target", fontsize=12, fontweight="bold", color=TEXT_COLOR)
+    ax1.set_ylim(-100, 100)
+    ax1.tick_params(colors=TEXT_COLOR)
+    ax1.grid(True, alpha=0.2, linestyle="--", color=GRID_COLOR)
+    format_x_axis(ax1, timestamps)
+
+    legend = ax1.legend(
+        loc="upper right", fontsize=8, facecolor=AXES_BG, edgecolor=GRID_COLOR, ncol=2
+    )
+    plt.setp(legend.get_texts(), color=TEXT_COLOR)
+
+    for spine in ax1.spines.values():
+        spine.set_edgecolor(GRID_COLOR)
+
+    # === Panel 2: Brightness Stability (Rolling Std Dev) ===
+    ax2.set_facecolor(AXES_BG)
+
+    # Color by stability: green = stable, red = oscillating
+    ax2.fill_between(timestamps, brightness_std_smooth, alpha=0.4, color="#cc88ff")
+    ax2.plot(
+        timestamps, brightness_std_smooth, color="#cc88ff", linewidth=2, label="Rolling Std Dev"
+    )
+
+    # Threshold lines
+    ax2.axhline(y=10, color="#66ff66", linestyle="--", linewidth=1.5, alpha=0.7, label="Good (<10)")
+    ax2.axhline(
+        y=20, color="#ffaa00", linestyle="--", linewidth=1.5, alpha=0.7, label="Warning (>20)"
+    )
+    ax2.axhline(
+        y=30, color="#ff4444", linestyle=":", linewidth=1.5, alpha=0.7, label="Oscillating (>30)"
+    )
+
+    ax2.set_ylabel("Std Dev", fontsize=11, color=TEXT_COLOR)
+    ax2.set_title(
+        "Brightness Stability (lower = smoother)", fontsize=12, fontweight="bold", color=TEXT_COLOR
+    )
+    ax2.set_ylim(0, max(50, max(brightness_std_smooth) * 1.1))
+    ax2.tick_params(colors=TEXT_COLOR)
+    ax2.grid(True, alpha=0.2, linestyle="--", color=GRID_COLOR)
+    format_x_axis(ax2, timestamps)
+
+    legend = ax2.legend(loc="upper right", fontsize=8, facecolor=AXES_BG, edgecolor=GRID_COLOR)
+    plt.setp(legend.get_texts(), color=TEXT_COLOR)
+
+    for spine in ax2.spines.values():
+        spine.set_edgecolor(GRID_COLOR)
+
+    # === Panel 3: Lux Rate of Change ===
+    ax3.set_facecolor(AXES_BG)
+
+    ax3.fill_between(timestamps, lux_rate_smooth, alpha=0.4, color="#ffaa66")
+    ax3.plot(timestamps, lux_rate_smooth, color="#ffaa66", linewidth=2, label="Lux change rate")
+
+    # ML trust reduction threshold
+    ax3.axhline(
+        y=0.3,
+        color="#ffaa00",
+        linestyle="--",
+        linewidth=1.5,
+        alpha=0.7,
+        label="Trust reduction starts (0.3)",
+    )
+    ax3.axhline(
+        y=1.0,
+        color="#ff4444",
+        linestyle=":",
+        linewidth=1.5,
+        alpha=0.7,
+        label="Rapid transition (1.0)",
+    )
+
+    ax3.set_xlabel("Time", fontsize=11, color=TEXT_COLOR)
+    ax3.set_ylabel("Log-lux/min", fontsize=11, color=TEXT_COLOR)
+    ax3.set_title(
+        "Lux Rate of Change (high = rapid light transition)",
+        fontsize=12,
+        fontweight="bold",
+        color=TEXT_COLOR,
+    )
+    ax3.set_ylim(0, max(1.5, max(lux_rate_smooth) * 1.1))
+    ax3.tick_params(colors=TEXT_COLOR)
+    ax3.grid(True, alpha=0.2, linestyle="--", color=GRID_COLOR)
+    format_x_axis(ax3, timestamps)
+
+    legend = ax3.legend(loc="upper right", fontsize=8, facecolor=AXES_BG, edgecolor=GRID_COLOR)
+    plt.setp(legend.get_texts(), color=TEXT_COLOR)
+
+    for spine in ax3.spines.values():
+        spine.set_edgecolor(GRID_COLOR)
+
+    fig.suptitle(
+        f"ML Exposure Diagnostics - {time_desc}", fontsize=14, fontweight="bold", color=TEXT_COLOR
+    )
+    fig.tight_layout()
+
+    output_path = output_dir / "ml_diagnostics.png"
+    plt.savefig(output_path, dpi=DPI, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"    Saved: {output_path}")
+
+
+def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: str):
+    """
+    Compare actual exposure to formula-predicted exposure.
+
+    Shows how much ML is deviating from the simple formula.
+    Positive = ML using more exposure, Negative = ML using less.
+    """
+    print("  Creating exposure_efficiency.png...")
+
+    timestamps = data["timestamps"]
+    lux_values = data["lux"]
+    exposure_values = data["exposure_time"]
+
+    if not timestamps or len(timestamps) < 10:
+        print("    Skipped: Not enough data")
+        return
+
+    # Calculate formula-based exposure for comparison
+    # Formula: exposure = (night_exposure * reference_lux) / lux
+    # Using defaults: night_exposure=20s, reference_lux=3.8
+    night_exposure = 20.0
+    reference_lux = 3.8
+
+    formula_exposure = []
+    actual_exposure = []
+    valid_timestamps = []
+    exposure_ratio = []
+
+    for i, (ts, lux, exp) in enumerate(zip(timestamps, lux_values, exposure_values)):
+        if lux > 0 and exp > 0:
+            formula_exp = (night_exposure * reference_lux) / lux
+            # Clamp to reasonable range
+            formula_exp = max(0.001, min(night_exposure, formula_exp))
+            formula_exposure.append(formula_exp)
+            actual_exposure.append(exp)
+            valid_timestamps.append(ts)
+            # Ratio: >1 means ML using more exposure than formula
+            ratio = exp / formula_exp
+            exposure_ratio.append(ratio)
+
+    if len(valid_timestamps) < 10:
+        print("    Skipped: Not enough valid data points")
+        return
+
+    # Smooth the data
+    formula_smooth = smooth_data(formula_exposure)
+    actual_smooth = smooth_data(actual_exposure)
+    ratio_smooth = smooth_data(exposure_ratio)
+
+    # Create 2-panel figure
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(FIG_WIDTH, FIG_HEIGHT * 1.2))
+    fig.patch.set_facecolor(DARK_BG)
+
+    # === Panel 1: Actual vs Formula Exposure ===
+    ax1.set_facecolor(AXES_BG)
+
+    ax1.semilogy(
+        valid_timestamps,
+        formula_smooth,
+        color="#888888",
+        linewidth=2,
+        linestyle="--",
+        label="Formula",
+        alpha=0.8,
+    )
+    ax1.semilogy(
+        valid_timestamps,
+        actual_smooth,
+        color=COLORS["exposure"],
+        linewidth=2,
+        label="Actual (ML-blended)",
+    )
+
+    ax1.set_ylabel("Exposure (s)", fontsize=11, color=TEXT_COLOR)
+    ax1.set_title("Actual vs Formula Exposure", fontsize=12, fontweight="bold", color=TEXT_COLOR)
+    ax1.tick_params(colors=TEXT_COLOR)
+    ax1.grid(True, alpha=0.2, linestyle="--", color=GRID_COLOR)
+    format_x_axis(ax1, valid_timestamps)
+
+    # Plain number formatter
+    from matplotlib.ticker import FuncFormatter
+
+    def exp_formatter(x, pos):
+        if x >= 1:
+            return f"{x:.1f}s"
+        elif x >= 0.001:
+            return f"{x*1000:.0f}ms"
+        else:
+            return f"{x*1000:.2f}ms"
+
+    ax1.yaxis.set_major_formatter(FuncFormatter(exp_formatter))
+
+    legend = ax1.legend(loc="upper right", fontsize=9, facecolor=AXES_BG, edgecolor=GRID_COLOR)
+    plt.setp(legend.get_texts(), color=TEXT_COLOR)
+
+    for spine in ax1.spines.values():
+        spine.set_edgecolor(GRID_COLOR)
+
+    # === Panel 2: Exposure Ratio (ML deviation from formula) ===
+    ax2.set_facecolor(AXES_BG)
+
+    # Color by ratio: green near 1.0, red for large deviations
+    ax2.fill_between(
+        valid_timestamps,
+        ratio_smooth,
+        1.0,
+        where=[r >= 1.0 for r in ratio_smooth],
+        alpha=0.4,
+        color="#88ff88",
+        label="ML > Formula",
+    )
+    ax2.fill_between(
+        valid_timestamps,
+        ratio_smooth,
+        1.0,
+        where=[r < 1.0 for r in ratio_smooth],
+        alpha=0.4,
+        color="#ff8888",
+        label="ML < Formula",
+    )
+    ax2.plot(valid_timestamps, ratio_smooth, color="#ffffff", linewidth=1.5, alpha=0.8)
+
+    # Reference line at 1.0
+    ax2.axhline(y=1.0, color="#66ff66", linestyle="-", linewidth=2, alpha=0.8, label="Equal (1.0)")
+    ax2.axhline(y=1.5, color="#ffaa00", linestyle="--", linewidth=1, alpha=0.5)
+    ax2.axhline(y=0.67, color="#ffaa00", linestyle="--", linewidth=1, alpha=0.5)
+
+    ax2.set_xlabel("Time", fontsize=11, color=TEXT_COLOR)
+    ax2.set_ylabel("Ratio (Actual/Formula)", fontsize=11, color=TEXT_COLOR)
+    ax2.set_title(
+        "ML Exposure Deviation from Formula", fontsize=12, fontweight="bold", color=TEXT_COLOR
+    )
+    ax2.set_ylim(0.3, 3.0)
+    ax2.set_yscale("log")
+    ax2.tick_params(colors=TEXT_COLOR)
+    ax2.grid(True, alpha=0.2, linestyle="--", color=GRID_COLOR)
+    format_x_axis(ax2, valid_timestamps)
+
+    legend = ax2.legend(loc="upper right", fontsize=8, facecolor=AXES_BG, edgecolor=GRID_COLOR)
+    plt.setp(legend.get_texts(), color=TEXT_COLOR)
+
+    for spine in ax2.spines.values():
+        spine.set_edgecolor(GRID_COLOR)
+
+    fig.suptitle(
+        f"Exposure Efficiency - {time_desc}", fontsize=14, fontweight="bold", color=TEXT_COLOR
+    )
+    fig.tight_layout()
+
+    output_path = output_dir / "exposure_efficiency.png"
+    plt.savefig(output_path, dpi=DPI, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"    Saved: {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate graphs from Raspilapse database",
@@ -946,6 +1300,10 @@ Examples:
     create_weather_graph(data, output_dir, time_desc)
     create_system_graph(data, output_dir, time_desc)
     create_overview_graph(data, output_dir, time_desc)
+
+    # ML diagnostics graphs (for monitoring ML-first exposure system)
+    create_ml_diagnostics_graph(data, output_dir, time_desc)
+    create_exposure_efficiency_graph(data, output_dir, time_desc)
 
     # Generate daily solar patterns graph from database
     if HAS_SOLAR_GRAPH:

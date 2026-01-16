@@ -77,16 +77,16 @@ class MLExposurePredictorV2:
         self.state_dir = state_dir
         self.state_file = os.path.join(state_dir, config.get("state_file_v2", "ml_state_v2.json"))
 
-        # Brightness range for "good" frames
-        self.good_brightness_min = config.get("good_brightness_min", 100)
-        self.good_brightness_max = config.get("good_brightness_max", 140)
+        # Brightness range for "good" frames (tighter range for quality predictions)
+        self.good_brightness_min = config.get("good_brightness_min", 105)
+        self.good_brightness_max = config.get("good_brightness_max", 135)
 
         # Minimum samples required per bucket
         self.min_samples = config.get("min_samples", 10)
 
         # Trust level (v2 starts with higher trust since it's trained on good data)
-        self.initial_trust = config.get("initial_trust_v2", 0.5)
-        self.max_trust = config.get("max_trust", 0.8)
+        self.initial_trust = config.get("initial_trust_v2", 0.70)
+        self.max_trust = config.get("max_trust", 0.90)
 
         # State
         self.state = {

@@ -199,7 +199,7 @@ The goal is:
 
 ML v2 now fills data gaps by interpolating between adjacent buckets:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │  Problem: Data gaps in certain lux ranges                    │
 │  - 0.0-0.5 lux: Deep night (rare training data)             │
@@ -246,7 +246,7 @@ ML trust is dynamically reduced when brightness deviates from target:
 
 During sunrise/sunset when lux changes rapidly:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │  Lux change rate (log-space per minute):                     │
 │                                                              │
