@@ -331,7 +331,7 @@ class AdaptiveTimelapse:
         """Initialize ML v2 exposure predictor if enabled.
 
         ML v2 is database-driven and Arctic-aware:
-        - Trains only on good frames (brightness 100-140) from database
+        - Trains only on good frames (brightness 105-135) from database
         - Uses sun elevation for time periods (not clock hours)
         - Doesn't learn from bad frames, avoiding reinforced mistakes
         """

@@ -260,12 +260,19 @@ During sunrise/sunset when lux changes rapidly:
 
 #### 5. Simplified Safety Clamps
 
-Removed intermediate zones (WARNING_HIGH, WARNING_LOW, etc.). Now only extreme cases trigger hard corrections:
+The final safety clamp in `_calculate_target_exposure_from_lux()` now only triggers hard corrections for extreme brightness values:
 
 | Brightness | Action |
 |------------|--------|
 | > 220      | Force 30% exposure reduction |
 | < 35       | Force 80% exposure increase |
+
+**Note:** The intermediate brightness zones (`WARNING_HIGH`, `WARNING_LOW`, `EMERGENCY_HIGH`, `EMERGENCY_LOW`, etc. in `BrightnessZones`) and their associated logic still exist in the codebase and are actively used:
+- `_get_emergency_brightness_factor()` - Smoothed emergency factor based on brightness zones
+- `_check_overexposure()` / `_check_underexposure()` - Fast ramp detection
+- Hybrid mode override logic for extreme cases
+
+The "simplified" aspect refers specifically to the final safety clamp, not the removal of these other mechanisms.
 
 ### Configuration (ML v2)
 
