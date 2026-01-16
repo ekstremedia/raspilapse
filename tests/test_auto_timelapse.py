@@ -2063,18 +2063,27 @@ class TestSmoothedEmergencyFactor:
         # Correction should be faster (larger change) than relaxation
         assert correction_amount > relaxation_amount * 0.5
 
-    def test_emergency_factor_none_brightness_returns_current(self, test_config_file):
-        """Test that None brightness returns current smoothed factor."""
+    def test_emergency_factor_none_brightness_decays_towards_1(self, test_config_file):
+        """Test that None brightness decays factor towards 1.0."""
         timelapse = AdaptiveTimelapse(test_config_file)
 
-        # Set a non-default factor
+        # Set a non-default factor (below 1.0)
         timelapse._smoothed_emergency_factor = 0.85
 
         # Call with None brightness
         factor = timelapse._get_emergency_brightness_factor(None)
 
-        # Should return current factor unchanged
-        assert factor == 0.85
+        # Should decay towards 1.0 (factor should increase from 0.85)
+        assert factor > 0.85
+        assert factor < 1.0  # But not reach 1.0 in one step
+
+        # Test decay from above 1.0
+        timelapse._smoothed_emergency_factor = 1.5
+        factor = timelapse._get_emergency_brightness_factor(None)
+
+        # Should decay towards 1.0 (factor should decrease from 1.5)
+        assert factor < 1.5
+        assert factor > 1.0  # But not reach 1.0 in one step
 
 
 class TestSustainedDriftCorrector:

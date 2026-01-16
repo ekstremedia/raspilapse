@@ -1036,6 +1036,14 @@ class AdaptiveTimelapse:
             Smoothed correction factor (1.0 = no change, <1.0 = reduce, >1.0 = increase)
         """
         if brightness is None:
+            # Decay towards 1.0 when no brightness data available
+            # Use slower speed since we're relaxing without new data
+            target_factor = 1.0
+            speed = self._emergency_factor_speed * 0.5
+            self._smoothed_emergency_factor += speed * (
+                target_factor - self._smoothed_emergency_factor
+            )
+            self._smoothed_emergency_factor = max(0.5, min(4.0, self._smoothed_emergency_factor))
             return self._smoothed_emergency_factor
 
         # Calculate the ideal (target) factor based on current brightness

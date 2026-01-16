@@ -4,7 +4,7 @@ ML-based Adaptive Exposure Prediction System v2 - Database-Driven (Arctic-Aware)
 This is an enhanced version that trains from the SQLite database instead of
 learning frame-by-frame. Key improvements:
 
-1. Train from historical "good" frames (brightness 100-140) AND aurora frames
+1. Train from historical "good" frames (brightness 105-135) AND aurora frames
 2. Solar elevation-based predictions (season-agnostic, works at 68°N)
 3. Use percentile data for early detection of clipping
 4. Separate models for night/twilight/day conditions based on sun position

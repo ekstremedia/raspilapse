@@ -320,7 +320,7 @@ This is especially useful for:
 ### Verification
 
 1. Run timelapse for full day/night cycle
-2. Generate graphs: `python src/generate_database_graph.py --period 1d`
+2. Generate graphs: `python scripts/db_graphs.py 1d`
 3. Check brightness graph - curve should be smooth without oscillation
 4. Check that brightness stays mostly in 70-170 range
 5. Generate slitscan - should show no vertical banding
