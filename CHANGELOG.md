@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-01-16
+
+### Changed
+
+#### ML-First Exposure with Smart Safety
+- **Philosophy change**: Trust ML predictions for smooth transitions, with graduated safety mechanisms
+- **Higher ML trust**: Initial trust increased from 0.5 to 0.70, max trust from 0.8 to 0.90
+- **Tighter training range**: Good brightness range narrowed from 100-140 to 105-135 for higher quality ML data
+
+#### Bucket Interpolation for ML Data Gaps
+- **New**: ML v2 now interpolates between adjacent buckets when exact match unavailable
+- **Fills data gaps**: Addresses missing data in 0.0-0.5 lux (deep night) and 5-20 lux (transition zone)
+- Uses logarithmic interpolation in both lux and exposure space
+- Reduced confidence (70%) for interpolated predictions
+
+#### Sustained Drift Correction (Replaces Per-Frame Feedback)
+- **New**: `SustainedDriftCorrector` class only corrects after 3+ consecutive frames of consistent error
+- Prevents frame-to-frame oscillation that caused brightness flickering
+- Gradual decay back to neutral when error pattern breaks
+- Max 30% correction per update, capped at 0.5x-2.0x range
+
+#### Graduated Trust Reduction
+- **New**: `get_brightness_adjusted_trust()` method reduces ML trust as brightness deviates from target
+- Severe cases (brightness < 50 or > 200): Force formula (trust = 0)
+- Warning zones: Graduated reduction (50-70 brightness ramps from 0% to 100% trust)
+
+#### Rapid Light Change Detection
+- **New**: `get_lux_stability_trust()` method reduces trust during sunrise/sunset transitions
+- Detects rate of change in log-lux space
+- Above 0.3 log-lux/minute: Up to 50% trust reduction
+- Helps formula adapt faster during rapid Arctic light changes
+
+#### Simplified Safety Clamps
+- Removed intermediate emergency zones (WARNING_HIGH, WARNING_LOW, etc.)
+- Now only applies hard corrections for extreme cases:
+  - Brightness > 220: Force 30% exposure reduction
+  - Brightness < 35: Force 80% exposure increase
+- Philosophy: Small brightness variations (70-170) are acceptable if curve is smooth
+
+### Config Changes
+```yaml
+ml_exposure:
+  initial_trust_v2: 0.70    # Was 0.5
+  max_trust: 0.90           # Was 0.8
+  good_brightness_min: 105  # Was 100
+  good_brightness_max: 135  # Was 140
+
+transition_mode:
+  brightness_feedback_strength: 0.05  # Was 0.2 - very gentle
+  brightness_tolerance: 60            # Was 40 - wider tolerance
+  exposure_transition_speed: 0.08     # Was 0.10 - slower for smoothness
+  fast_rampdown_speed: 0.20           # Was 0.50 - much gentler
+  fast_rampup_speed: 0.20             # Was 0.50 - much gentler
+```
+
+### Technical Details
+- **Expected outcome**: Smooth transitions without oscillation
+- **Brightness target**: 70-170 range acceptable if curve is smooth (no banding in slitscan)
+- **Drift corrections should be rare**: Only for systematic ML prediction errors
+- **ML data gaps filled**: Interpolation provides predictions even for untrained lux zones
+
 ## [1.2.2] - 2026-01-15
 
 ### Fixed

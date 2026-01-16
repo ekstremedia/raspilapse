@@ -246,6 +246,9 @@ class MLExposurePredictorV2:
         making predictions season-agnostic. Falls back to clock-based periods
         if sun_elevation is not provided.
 
+        NEW: If exact bucket match unavailable, interpolates between adjacent
+        buckets to fill data gaps (e.g., 0.0-0.5 lux deep night, 5-20 lux transition).
+
         Args:
             lux: Current light level in lux
             timestamp: Unix timestamp (defaults to now, used for clock fallback)
@@ -279,6 +282,16 @@ class MLExposurePredictorV2:
             )
             return exp_seconds, confidence
 
+        # NEW: Try interpolation between adjacent buckets
+        interpolated = self._interpolate_between_buckets(lux, period)
+        if interpolated is not None:
+            exp_seconds, confidence = interpolated
+            logger.debug(
+                f"[ML v2] Interpolated prediction: lux={lux:.1f}, bucket={bucket}, "
+                f"period={period} → {exp_seconds:.4f}s (conf={confidence:.2f})"
+            )
+            return exp_seconds, confidence
+
         # Fall back to bucket-only match (any period)
         for fallback_period in ["day", "twilight", "night"]:
             fallback_key = f"{bucket}_{fallback_period}"
@@ -292,9 +305,141 @@ class MLExposurePredictorV2:
                 )
                 return exp_seconds, confidence
 
+        # Try interpolation across any period as last resort
+        for fallback_period in ["day", "twilight", "night"]:
+            if fallback_period == period:
+                continue
+            interpolated = self._interpolate_between_buckets(lux, fallback_period)
+            if interpolated is not None:
+                exp_seconds, confidence = interpolated
+                # Reduce confidence for cross-period interpolation
+                confidence *= 0.5
+                logger.debug(
+                    f"[ML v2] Cross-period interpolated: lux={lux:.1f}, "
+                    f"using {fallback_period} → {exp_seconds:.4f}s (conf={confidence:.2f})"
+                )
+                return exp_seconds, confidence
+
         # No prediction available
         logger.debug(f"[ML v2] No prediction for lux={lux:.1f}, bucket={bucket}")
         return None, 0.0
+
+    def _find_adjacent_buckets(
+        self, lux: float, period: str
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Find the nearest lower and upper buckets that have data for this period.
+
+        Args:
+            lux: Current light level in lux
+            period: Time period ("night", "twilight", or "day")
+
+        Returns:
+            Tuple of (lower_bucket_index, upper_bucket_index)
+            Either may be None if no adjacent bucket has data
+        """
+        current_bucket = self._get_lux_bucket(lux)
+
+        lower_bucket = None
+        upper_bucket = None
+
+        # Search downward for lower bucket with data
+        for b in range(current_bucket - 1, -1, -1):
+            key = f"{b}_{period}"
+            if key in self.state["lux_exposure_map"]:
+                lower_bucket = b
+                break
+
+        # Search upward for upper bucket with data
+        for b in range(current_bucket + 1, len(self.LUX_BUCKETS)):
+            key = f"{b}_{period}"
+            if key in self.state["lux_exposure_map"]:
+                upper_bucket = b
+                break
+
+        return lower_bucket, upper_bucket
+
+    def _interpolate_between_buckets(
+        self, lux: float, period: str
+    ) -> Optional[Tuple[float, float]]:
+        """
+        Interpolate exposure prediction between adjacent buckets.
+
+        Uses logarithmic interpolation in both lux and exposure space
+        since both follow logarithmic relationships.
+
+        Args:
+            lux: Current light level in lux
+            period: Time period ("night", "twilight", or "day")
+
+        Returns:
+            Tuple of (exposure_seconds, confidence) or None if interpolation not possible
+        """
+        lower_bucket, upper_bucket = self._find_adjacent_buckets(lux, period)
+
+        # Get lux threshold for bucket boundary
+        def bucket_lux(bucket_idx: int) -> float:
+            if bucket_idx < 0:
+                return 0.01
+            if bucket_idx >= len(self.LUX_BUCKETS):
+                return self.LUX_BUCKETS[-1] * 2
+            return self.LUX_BUCKETS[bucket_idx]
+
+        # Case 1: Both adjacent buckets have data - interpolate between them
+        if lower_bucket is not None and upper_bucket is not None:
+            lower_key = f"{lower_bucket}_{period}"
+            upper_key = f"{upper_bucket}_{period}"
+
+            lower_exp_us, lower_count = self.state["lux_exposure_map"][lower_key]
+            upper_exp_us, upper_count = self.state["lux_exposure_map"][upper_key]
+
+            # Get representative lux values for each bucket
+            lower_lux = bucket_lux(lower_bucket)
+            upper_lux = bucket_lux(upper_bucket)
+
+            # Interpolate in log space
+            if lower_lux > 0 and upper_lux > 0 and lower_exp_us > 0 and upper_exp_us > 0:
+                log_lux = math.log10(max(0.01, lux))
+                log_lower = math.log10(lower_lux)
+                log_upper = math.log10(upper_lux)
+
+                # Calculate interpolation factor (0 = lower, 1 = upper)
+                if log_upper != log_lower:
+                    t = (log_lux - log_lower) / (log_upper - log_lower)
+                    t = max(0.0, min(1.0, t))
+                else:
+                    t = 0.5
+
+                # Interpolate exposure in log space
+                log_exp_lower = math.log10(lower_exp_us)
+                log_exp_upper = math.log10(upper_exp_us)
+                log_exp = log_exp_lower + t * (log_exp_upper - log_exp_lower)
+                exp_us = 10**log_exp
+
+                exp_seconds = exp_us / 1_000_000
+
+                # Confidence based on both buckets, reduced for interpolation
+                base_conf = min(lower_count, upper_count) / 100
+                confidence = min(0.8, base_conf) * 0.7  # 70% of base for interpolation
+
+                return exp_seconds, confidence
+
+        # Case 2: Only one adjacent bucket has data - use nearest with reduced confidence
+        nearest_bucket = lower_bucket if lower_bucket is not None else upper_bucket
+        if nearest_bucket is not None:
+            key = f"{nearest_bucket}_{period}"
+            exp_us, count = self.state["lux_exposure_map"][key]
+            exp_seconds = exp_us / 1_000_000
+            # 50% confidence for nearest-only extrapolation
+            confidence = min(0.5, count / 100) * 0.5
+
+            logger.debug(
+                f"[ML v2] Nearest bucket extrapolation: bucket={nearest_bucket}, "
+                f"exp={exp_seconds:.4f}s, conf={confidence:.2f}"
+            )
+            return exp_seconds, confidence
+
+        return None
 
     def predict_optimal_gain(self, lux: float) -> Optional[float]:
         """Predict optimal gain (not implemented in v2 yet)."""

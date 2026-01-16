@@ -181,3 +181,123 @@ At 0.1% per good frame:
 - After 800 good frames: 80% trust (maximum)
 
 With ~2880 frames per day, trust can reach maximum within a day or two of good captures.
+
+## ML v2: ML-First with Smart Safety (v1.3.0+)
+
+### Philosophy Change
+
+ML v2 takes a fundamentally different approach: **trust ML predictions for smooth transitions**, with graduated safety mechanisms that only intervene when necessary.
+
+The goal is:
+- Smooth predictable exposure curves from ML > reactive corrections
+- Small brightness variations (70-170) are acceptable if the curve is smooth
+- No vertical banding in slitscan images
+
+### New Features
+
+#### 1. Bucket Interpolation
+
+ML v2 now fills data gaps by interpolating between adjacent buckets:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Problem: Data gaps in certain lux ranges                    │
+│  - 0.0-0.5 lux: Deep night (rare training data)             │
+│  - 5-20 lux: Transition zone (fast-changing, hard to train) │
+│                                                              │
+│  Solution: Logarithmic interpolation between known buckets   │
+│  - Uses both lower and upper adjacent buckets if available   │
+│  - Reduced confidence (70%) for interpolated predictions     │
+│  - Falls back to nearest bucket with 50% confidence         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 2. Sustained Drift Correction
+
+Instead of reactive per-frame brightness feedback (which caused oscillation), ML v2 uses sustained drift detection:
+
+```python
+class SustainedDriftCorrector:
+    """Only correct after 3+ consecutive frames of consistent error."""
+
+    # Triggers when:
+    # - 3+ frames all too dark (error < -20)
+    # - OR 3+ frames all too bright (error > +20)
+
+    # Correction:
+    # - Max 30% adjustment per update
+    # - Capped at 0.5x to 2.0x total
+    # - Gradually decays back to 1.0 when pattern breaks
+```
+
+#### 3. Graduated Trust Reduction
+
+ML trust is dynamically reduced when brightness deviates from target:
+
+| Brightness | Trust Multiplier |
+|------------|------------------|
+| < 50       | 0.0 (force formula) |
+| 50-70      | 0% → 100% ramp |
+| 70-170     | 100% (full trust) |
+| 170-200    | 100% → 0% ramp |
+| > 200      | 0.0 (force formula) |
+
+#### 4. Rapid Light Change Detection
+
+During sunrise/sunset when lux changes rapidly:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Lux change rate (log-space per minute):                     │
+│                                                              │
+│  < 0.3 log-lux/min → Full ML trust                          │
+│  0.3 - 1.0 log-lux/min → Reduced trust (up to 50%)          │
+│  > 1.0 log-lux/min → Minimum trust (formula leads)          │
+│                                                              │
+│  This helps formula adapt faster during Arctic transitions   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 5. Simplified Safety Clamps
+
+Removed intermediate zones (WARNING_HIGH, WARNING_LOW, etc.). Now only extreme cases trigger hard corrections:
+
+| Brightness | Action |
+|------------|--------|
+| > 220      | Force 30% exposure reduction |
+| < 35       | Force 80% exposure increase |
+
+### Configuration (ML v2)
+
+```yaml
+ml_exposure:
+  enabled: true
+  initial_trust_v2: 0.70      # Higher baseline trust
+  max_trust: 0.90             # Allow higher trust when confident
+  good_brightness_min: 105    # Tighter training range
+  good_brightness_max: 135    # Tighter training range
+
+transition_mode:
+  brightness_feedback_strength: 0.05  # Very gentle
+  brightness_tolerance: 60            # Wider tolerance
+  exposure_transition_speed: 0.08     # Slower for smoothness
+  fast_rampdown_speed: 0.20           # Much gentler
+  fast_rampup_speed: 0.20             # Much gentler
+```
+
+### Expected Outcomes
+
+1. **Smooth transitions**: ML predicts based on learned daily patterns
+2. **No oscillation**: Sustained drift correction prevents frame-to-frame fighting
+3. **Graceful degradation**: Trust reduces when brightness deviates or light changes rapidly
+4. **Safety rails only for severe cases**: Not constant intervention
+5. **Small variations acceptable**: 70-170 range is fine if curve is smooth
+
+### Verification
+
+1. Run timelapse for full day/night cycle
+2. Generate graphs: `python src/generate_database_graph.py --period 1d`
+3. Check brightness graph - curve should be smooth without oscillation
+4. Check that brightness stays mostly in 70-170 range
+5. Generate slitscan - should show no vertical banding
+6. Monitor logs for sustained drift corrections (should be rare)

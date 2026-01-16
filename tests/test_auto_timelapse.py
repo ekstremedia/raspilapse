@@ -2077,5 +2077,270 @@ class TestSmoothedEmergencyFactor:
         assert factor == 0.85
 
 
+class TestSustainedDriftCorrector:
+    """Tests for SustainedDriftCorrector class."""
+
+    def test_drift_corrector_init(self):
+        """Test drift corrector initialization."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+        assert corrector._threshold_frames == 3
+        assert corrector._min_error == 20.0
+        assert corrector._last_correction == 1.0
+
+    def test_drift_corrector_no_correction_initially(self):
+        """Test no correction when not enough frames."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # Only 1-2 frames
+        assert corrector.update(80.0) == 1.0
+        assert corrector.update(75.0) == 1.0  # Still only 2 frames
+
+    def test_drift_corrector_triggers_on_sustained_low(self):
+        """Test correction triggers after sustained underexposure."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # 3 consecutive frames all too dark (error < -20)
+        corrector.update(70.0)  # error = -50
+        corrector.update(65.0)  # error = -55
+        correction = corrector.update(60.0)  # error = -60
+
+        # Should trigger correction > 1.0 (increase exposure)
+        assert correction > 1.0
+
+    def test_drift_corrector_triggers_on_sustained_high(self):
+        """Test correction triggers after sustained overexposure."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # 3 consecutive frames all too bright (error > +20)
+        corrector.update(160.0)  # error = +40
+        corrector.update(170.0)  # error = +50
+        correction = corrector.update(180.0)  # error = +60
+
+        # Should trigger correction < 1.0 (decrease exposure)
+        assert correction < 1.0
+
+    def test_drift_corrector_no_trigger_on_mixed_errors(self):
+        """Test no correction when errors are mixed direction."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # Mixed: dark, bright, dark
+        corrector.update(70.0)  # error = -50
+        corrector.update(160.0)  # error = +40
+        correction = corrector.update(70.0)  # error = -50
+
+        # Should NOT trigger - not sustained in one direction
+        assert abs(correction - 1.0) < 0.1
+
+    def test_drift_corrector_decays_towards_neutral(self):
+        """Test correction decays when pattern breaks."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # Trigger a correction
+        corrector.update(60.0)
+        corrector.update(60.0)
+        corrector.update(60.0)
+        first_correction = corrector._last_correction
+
+        # Now provide normal brightness
+        corrector.update(120.0)
+        corrector.update(120.0)
+        later_correction = corrector._last_correction
+
+        # Should have decayed closer to 1.0
+        assert abs(later_correction - 1.0) < abs(first_correction - 1.0)
+
+    def test_drift_corrector_reset(self):
+        """Test reset clears history."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # Build up some history
+        corrector.update(60.0)
+        corrector.update(60.0)
+        corrector.update(60.0)
+
+        # Reset
+        corrector.reset()
+
+        assert len(corrector._error_history) == 0
+        assert corrector._last_correction == 1.0
+
+    def test_drift_corrector_clamped_range(self):
+        """Test correction is clamped to 0.5-2.0 range."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # Extreme underexposure
+        for _ in range(10):
+            correction = corrector.update(10.0)
+
+        assert correction <= 2.0
+
+        # Extreme overexposure
+        corrector.reset()
+        for _ in range(10):
+            correction = corrector.update(250.0)
+
+        assert correction >= 0.5
+
+
+class TestBrightnessAdjustedTrust:
+    """Tests for get_brightness_adjusted_trust method."""
+
+    def test_brightness_adjusted_trust_normal_range(self, test_config_file):
+        """Test full trust in normal brightness range."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Normal brightness (70-170) should return full base trust
+        trust = timelapse.get_brightness_adjusted_trust(120.0, 0.7)
+        assert trust == 0.7
+
+        trust = timelapse.get_brightness_adjusted_trust(100.0, 0.8)
+        assert trust == 0.8
+
+        trust = timelapse.get_brightness_adjusted_trust(150.0, 0.9)
+        assert trust == 0.9
+
+    def test_brightness_adjusted_trust_severe_low(self, test_config_file):
+        """Test zero trust for severe underexposure."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Below 50: force formula (trust = 0)
+        trust = timelapse.get_brightness_adjusted_trust(40.0, 0.7)
+        assert trust == 0.0
+
+        trust = timelapse.get_brightness_adjusted_trust(20.0, 0.9)
+        assert trust == 0.0
+
+    def test_brightness_adjusted_trust_severe_high(self, test_config_file):
+        """Test zero trust for severe overexposure."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Above 200: force formula (trust = 0)
+        trust = timelapse.get_brightness_adjusted_trust(210.0, 0.7)
+        assert trust == 0.0
+
+        trust = timelapse.get_brightness_adjusted_trust(250.0, 0.9)
+        assert trust == 0.0
+
+    def test_brightness_adjusted_trust_warning_low_ramp(self, test_config_file):
+        """Test graduated reduction in low warning zone."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Between 50-70: ramp from 0% to 100%
+        trust_at_50 = timelapse.get_brightness_adjusted_trust(50.0, 0.8)
+        trust_at_60 = timelapse.get_brightness_adjusted_trust(60.0, 0.8)
+        trust_at_70 = timelapse.get_brightness_adjusted_trust(70.0, 0.8)
+
+        # Should ramp up
+        assert trust_at_50 < trust_at_60 < trust_at_70
+        # At 70, should be full trust
+        assert abs(trust_at_70 - 0.8) < 0.01
+
+    def test_brightness_adjusted_trust_warning_high_ramp(self, test_config_file):
+        """Test graduated reduction in high warning zone."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Between 170-200: ramp from 100% to 0%
+        trust_at_170 = timelapse.get_brightness_adjusted_trust(170.0, 0.8)
+        trust_at_185 = timelapse.get_brightness_adjusted_trust(185.0, 0.8)
+        trust_at_200 = timelapse.get_brightness_adjusted_trust(200.0, 0.8)
+
+        # At 170, should be full trust
+        assert abs(trust_at_170 - 0.8) < 0.01
+        # Should ramp down
+        assert trust_at_170 > trust_at_185 > trust_at_200
+        # At 200, should be zero
+        assert trust_at_200 == 0.0
+
+    def test_brightness_adjusted_trust_none_brightness(self, test_config_file):
+        """Test None brightness returns base trust unchanged."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        trust = timelapse.get_brightness_adjusted_trust(None, 0.7)
+        assert trust == 0.7
+
+
+class TestLuxStabilityTrust:
+    """Tests for get_lux_stability_trust method."""
+
+    def test_lux_stability_stable_light(self, test_config_file):
+        """Test full trust when light is stable."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Small lux change over 30 seconds - stable
+        trust = timelapse.get_lux_stability_trust(100.0, 95.0, 30.0)
+        assert trust == 1.0
+
+    def test_lux_stability_rapid_change(self, test_config_file):
+        """Test reduced trust during rapid light changes."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Large lux change (10x) over 30 seconds - rapid
+        trust = timelapse.get_lux_stability_trust(1000.0, 100.0, 30.0)
+        assert trust < 1.0
+
+    def test_lux_stability_no_previous_lux(self, test_config_file):
+        """Test full trust when no previous lux available."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        trust = timelapse.get_lux_stability_trust(100.0, None, 30.0)
+        assert trust == 1.0
+
+    def test_lux_stability_zero_previous_lux(self, test_config_file):
+        """Test full trust when previous lux is zero."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        trust = timelapse.get_lux_stability_trust(100.0, 0.0, 30.0)
+        assert trust == 1.0
+
+    def test_lux_stability_zero_elapsed(self, test_config_file):
+        """Test full trust when elapsed time is zero."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        trust = timelapse.get_lux_stability_trust(100.0, 50.0, 0.0)
+        assert trust == 1.0
+
+    def test_lux_stability_never_below_half(self, test_config_file):
+        """Test trust never goes below 0.5 even for extreme changes."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Extremely rapid change - 100x in 10 seconds
+        trust = timelapse.get_lux_stability_trust(10000.0, 100.0, 10.0)
+        assert trust >= 0.5
+
+
+class TestDriftCorrectorIntegration:
+    """Tests for drift corrector integration in AdaptiveTimelapse."""
+
+    def test_drift_corrector_initialized(self, test_config_file):
+        """Test drift corrector is initialized on startup."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        assert hasattr(timelapse, "_drift_corrector")
+        assert timelapse._drift_corrector is not None
+
+    def test_lux_tracking_initialized(self, test_config_file):
+        """Test lux tracking variables are initialized."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        assert hasattr(timelapse, "_previous_lux_for_stability")
+        assert hasattr(timelapse, "_last_lux_timestamp")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -625,3 +625,152 @@ class TestMLExposurePredictorV2Persistence:
 
             assert "5_day" in predictor.state["lux_exposure_map"]
             assert predictor.state["training_stats"]["total_good_frames"] == 50
+
+
+class TestMLExposurePredictorV2BucketInterpolation:
+    """Tests for bucket interpolation to fill data gaps."""
+
+    def test_find_adjacent_buckets_both_sides(self):
+        """Test finding adjacent buckets with data on both sides."""
+        from src.ml_exposure_v2 import MLExposurePredictorV2
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
+            )
+            conn.close()
+
+            predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
+            # Manually add buckets at positions 3 and 7
+            predictor.state["lux_exposure_map"]["3_day"] = [500000, 50]
+            predictor.state["lux_exposure_map"]["7_day"] = [50000, 50]
+
+            # Query for bucket 5 (between 3 and 7)
+            lower, upper = predictor._find_adjacent_buckets(15.0, "day")  # ~bucket 5
+
+            assert lower == 3
+            assert upper == 7
+
+    def test_find_adjacent_buckets_only_lower(self):
+        """Test finding adjacent buckets with only lower bucket available."""
+        from src.ml_exposure_v2 import MLExposurePredictorV2
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
+            )
+            conn.close()
+
+            predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
+            # Only add bucket at position 3
+            predictor.state["lux_exposure_map"]["3_day"] = [500000, 50]
+
+            # Query for bucket 5
+            lower, upper = predictor._find_adjacent_buckets(15.0, "day")
+
+            assert lower == 3
+            assert upper is None
+
+    def test_interpolate_between_buckets_returns_interpolated_value(self):
+        """Test that interpolation returns value between adjacent buckets."""
+        from src.ml_exposure_v2 import MLExposurePredictorV2
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
+            )
+            conn.close()
+
+            predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
+            # Add buckets with known exposures
+            # Bucket 3: lux ~2.0, exposure 1s
+            # Bucket 7: lux ~50.0, exposure 0.1s
+            predictor.state["lux_exposure_map"]["3_day"] = [1000000, 100]  # 1s
+            predictor.state["lux_exposure_map"]["7_day"] = [100000, 100]  # 0.1s
+
+            # Query for lux 10 (between bucket 3 and 7)
+            result = predictor._interpolate_between_buckets(10.0, "day")
+
+            assert result is not None
+            exp_seconds, confidence = result
+            # Interpolated exposure should be between 0.1s and 1s
+            assert 0.1 < exp_seconds < 1.0
+            # Confidence should be reduced for interpolation
+            assert confidence < 0.8
+
+    def test_interpolate_returns_none_without_adjacent_data(self):
+        """Test that interpolation returns None when no adjacent buckets."""
+        from src.ml_exposure_v2 import MLExposurePredictorV2
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
+            )
+            conn.close()
+
+            predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
+            # No buckets at all
+
+            result = predictor._interpolate_between_buckets(10.0, "day")
+
+            assert result is None
+
+    def test_predict_uses_interpolation_when_exact_missing(self):
+        """Test that predict_optimal_exposure uses interpolation for missing buckets."""
+        from src.ml_exposure_v2 import MLExposurePredictorV2
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
+            )
+            conn.close()
+
+            predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
+            # Add surrounding buckets but not the exact one
+            predictor.state["lux_exposure_map"]["3_day"] = [1000000, 100]  # 1s at ~2 lux
+            predictor.state["lux_exposure_map"]["7_day"] = [100000, 100]  # 0.1s at ~50 lux
+
+            # Query for lux=10 (bucket 5, which is missing)
+            exp_seconds, confidence = predictor.predict_optimal_exposure(
+                10.0, sun_elevation=30.0  # Day period
+            )
+
+            # Should get interpolated result
+            assert exp_seconds is not None
+            assert 0.1 < exp_seconds < 1.0
+            assert confidence > 0  # Should have some confidence
+
+    def test_interpolation_extrapolates_with_single_adjacent_bucket(self):
+        """Test that single adjacent bucket provides reduced confidence prediction."""
+        from src.ml_exposure_v2 import MLExposurePredictorV2
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE captures (id INTEGER PRIMARY KEY, timestamp TEXT, lux REAL, exposure_time_us INTEGER, brightness_mean REAL, brightness_p5 REAL, brightness_p95 REAL, sun_elevation REAL)"
+            )
+            conn.close()
+
+            predictor = MLExposurePredictorV2(db_path, {}, state_dir=tmpdir)
+            # Only add one nearby bucket
+            predictor.state["lux_exposure_map"]["3_day"] = [1000000, 100]  # 1s
+
+            result = predictor._interpolate_between_buckets(10.0, "day")
+
+            assert result is not None
+            exp_seconds, confidence = result
+            # Should use nearest bucket value
+            assert exp_seconds == pytest.approx(1.0, rel=0.01)
+            # Confidence should be heavily reduced for extrapolation
+            assert confidence < 0.5

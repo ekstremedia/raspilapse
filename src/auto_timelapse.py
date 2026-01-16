@@ -11,7 +11,7 @@ import time
 import signal
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import yaml
 
 # Optional: Sun position calculation for polar regions
@@ -79,6 +79,90 @@ class BrightnessZones:
     WARNING_LOW_FACTOR = 1.2  # Increase by 20%
     EMERGENCY_LOW_FACTOR = 2.0  # Increase by 100%
     CRITICAL_LOW_FACTOR = 4.0  # Increase by 300% for Arctic winter twilight
+
+
+class SustainedDriftCorrector:
+    """
+    Sustained drift correction for ML-first exposure.
+
+    Only applies correction after 3+ consecutive frames show consistent
+    brightness error in the same direction. This prevents frame-to-frame
+    oscillation while still correcting systematic drift.
+
+    Philosophy: Trust ML predictions for smooth transitions, but correct
+    when brightness consistently deviates from target.
+    """
+
+    def __init__(self, threshold_frames: int = 3, min_error: float = 20.0):
+        """
+        Initialize drift corrector.
+
+        Args:
+            threshold_frames: Number of consecutive frames needed to trigger correction
+            min_error: Minimum brightness error to consider (0-255 scale)
+        """
+        self._error_history: List[float] = []
+        self._threshold_frames = threshold_frames
+        self._min_error = min_error
+        self._last_correction = 1.0
+
+    def update(self, brightness: float, target: float = 120.0) -> float:
+        """
+        Update with new brightness reading and return correction factor.
+
+        Args:
+            brightness: Current mean brightness (0-255)
+            target: Target brightness (default 120)
+
+        Returns:
+            Correction factor (1.0 = no correction, <1.0 = reduce exposure,
+            >1.0 = increase exposure)
+        """
+        if brightness is None:
+            return self._last_correction
+
+        error = brightness - target
+        self._error_history.append(error)
+
+        # Keep recent history only (2x threshold for smoothing)
+        max_history = self._threshold_frames * 2
+        if len(self._error_history) > max_history:
+            self._error_history = self._error_history[-max_history:]
+
+        # Check for sustained drift (threshold_frames consecutive errors same direction)
+        if len(self._error_history) >= self._threshold_frames:
+            recent = self._error_history[-self._threshold_frames :]
+
+            all_low = all(e < -self._min_error for e in recent)
+            all_high = all(e > self._min_error for e in recent)
+
+            if all_low or all_high:
+                avg_error = sum(recent) / len(recent)
+                # Gentler correction: max 30% change per update
+                # Negative error (too dark) -> correction > 1.0 (increase exposure)
+                # Positive error (too bright) -> correction < 1.0 (decrease exposure)
+                correction = 1.0 - (avg_error / target) * 0.3
+                correction = max(0.5, min(2.0, correction))
+                self._last_correction = correction
+                logger.info(
+                    f"[Drift] Sustained error {avg_error:.1f} over {self._threshold_frames} frames "
+                    f"→ correction {correction:.2f}"
+                )
+                return correction
+
+        # No sustained drift - gradually return to 1.0
+        if self._last_correction != 1.0:
+            # Decay towards 1.0 at 10% per frame
+            self._last_correction += (1.0 - self._last_correction) * 0.1
+            if abs(self._last_correction - 1.0) < 0.01:
+                self._last_correction = 1.0
+
+        return self._last_correction
+
+    def reset(self):
+        """Reset drift history (e.g., after mode change)."""
+        self._error_history = []
+        self._last_correction = 1.0
 
 
 class AdaptiveTimelapse:
@@ -177,6 +261,17 @@ class AdaptiveTimelapse:
         self._ml_predictor = None
         self._ml_enabled = False
         self._init_ml_predictor()
+
+        # ML-first sustained drift corrector (replaces reactive per-frame feedback)
+        self._drift_corrector = SustainedDriftCorrector(
+            threshold_frames=3,
+            min_error=transition_config.get("brightness_tolerance", 40) / 2,  # Half of tolerance
+        )
+
+        # Lux stability tracking for trust reduction during rapid changes
+        self._previous_lux_for_stability: float = None
+        self._last_lux_timestamp: float = None
+        self._frame_interval = self.config.get("adaptive_timelapse", {}).get("interval", 30)
 
         # Database storage for capture history
         self._database = None
@@ -997,6 +1092,99 @@ class AdaptiveTimelapse:
 
         return self._smoothed_emergency_factor
 
+    def get_brightness_adjusted_trust(self, brightness: float, base_trust: float) -> float:
+        """
+        Reduce ML trust as brightness deviates from target.
+
+        Philosophy: Trust ML predictions when they're working (brightness in normal range),
+        but gradually fall back to formula when brightness is off.
+
+        Args:
+            brightness: Current mean brightness (0-255) or None
+            base_trust: Base ML trust level (0.0-1.0)
+
+        Returns:
+            Adjusted trust level (0.0-1.0)
+        """
+        if brightness is None:
+            return base_trust
+
+        # Severe cases: force formula (trust = 0)
+        if brightness < 50 or brightness > 200:
+            logger.info(f"[ML-Trust] Severe deviation ({brightness:.0f}) - forcing formula")
+            return 0.0
+
+        # Warning zones: graduated reduction
+        if brightness < 70:
+            # Ramp from 0% trust at 50 to 100% trust at 70
+            factor = (brightness - 50) / 20
+            adjusted = base_trust * factor
+            logger.debug(
+                f"[ML-Trust] Low brightness ({brightness:.0f}) - reduced trust: "
+                f"{base_trust:.2f} → {adjusted:.2f}"
+            )
+            return adjusted
+
+        if brightness > 170:
+            # Ramp from 100% trust at 170 to 0% trust at 200
+            factor = (200 - brightness) / 30
+            adjusted = base_trust * factor
+            logger.debug(
+                f"[ML-Trust] High brightness ({brightness:.0f}) - reduced trust: "
+                f"{base_trust:.2f} → {adjusted:.2f}"
+            )
+            return adjusted
+
+        return base_trust
+
+    def get_lux_stability_trust(
+        self, current_lux: float, previous_lux: float, elapsed_seconds: float
+    ) -> float:
+        """
+        Reduce trust during rapid light changes.
+
+        During sunrise/sunset when lux changes rapidly, ML predictions may lag
+        behind actual conditions. Reduce trust to let formula adapt faster.
+
+        Args:
+            current_lux: Current lux reading
+            previous_lux: Previous lux reading (or None)
+            elapsed_seconds: Time between readings
+
+        Returns:
+            Trust multiplier (0.5-1.0)
+        """
+        if previous_lux is None or previous_lux <= 0 or elapsed_seconds <= 0:
+            return 1.0
+
+        if current_lux <= 0:
+            return 1.0
+
+        # Calculate rate of change in log space (lux is logarithmic)
+        try:
+            import math
+
+            lux_ratio = current_lux / previous_lux
+            log_change = abs(math.log10(lux_ratio))
+            change_per_minute = (log_change / elapsed_seconds) * 60
+
+            # Above 0.3 log-lux/minute = rapid transition (sunrise/sunset)
+            if change_per_minute > 0.3:
+                # Trust reduction: 0.3→0%, 0.6→25%, 1.0+→50%
+                trust_reduction = min(0.5, (change_per_minute - 0.3) * 0.7)
+                trust = 1.0 - trust_reduction
+
+                logger.debug(
+                    f"[ML-Trust] Rapid lux change: {previous_lux:.1f}→{current_lux:.1f} "
+                    f"({change_per_minute:.2f} log-lux/min) - trust reduced to {trust:.0%}"
+                )
+                return trust
+
+        except (ValueError, ZeroDivisionError):
+            pass
+
+        return 1.0
+
     def _calculate_target_gain_from_lux(self, lux: float) -> float:
         """
         Calculate target analogue gain based on current lux level.
@@ -1159,23 +1347,23 @@ class AdaptiveTimelapse:
         """
         Calculate target exposure time based on current lux level.
 
-        Uses a continuous logarithmic relationship across the entire lux range,
-        not just thresholds. This ensures exposure adjusts smoothly even within
-        "day mode" as clouds pass or light changes.
+        ML-FIRST APPROACH (v2):
+        1. Trust ML predictions from learned patterns
+        2. Adjust trust based on brightness deviation and lux stability
+        3. Apply sustained drift correction (not reactive per-frame)
+        4. Only apply severe safety clamps for extreme cases
 
-        The formula: exposure = k / lux (inverse relationship)
-        In log space: log(exposure) = log(k) - log(lux)
-
-        Additionally applies brightness feedback correction to compensate for
-        any consistent over/under exposure detected in previous frames.
+        Philosophy: Smooth predictable curves from ML > reactive corrections
+        that cause oscillation.
 
         Args:
             lux: Current light level in lux
 
         Returns:
-            Target exposure time in seconds (with brightness correction applied)
+            Target exposure time in seconds
         """
         import math
+        import time as time_module
 
         adaptive_config = self.config["adaptive_timelapse"]
 
@@ -1186,56 +1374,80 @@ class AdaptiveTimelapse:
         # Clamp lux to reasonable range to avoid extreme values
         lux = max(0.01, min(10000, lux))
 
-        # Use inverse relationship: exposure = calibration_constant / lux
-        # Calibrate so that:
-        #   - At low lux, exposure approaches night_exposure (20s)
-        #   - At high lux, exposure gives mid-tone brightness (~120)
-        #
-        # Formula: exposure = (night_exposure * reference_lux) / lux
-        # where reference_lux controls the overall brightness level
-        #
-        # Reference lux controls overall image brightness
-        # Higher = brighter images, Lower = darker images
-        # Can be configured per-camera in config.yml under adaptive_timelapse.reference_lux
-        # Default 3.8 - slightly brighter than 3.5 which was "good but could be a bit brighter"
+        # Calculate formula-based exposure (fallback)
         reference_lux = adaptive_config.get("reference_lux", 3.8)
-
-        # Calculate base target exposure using inverse relationship
         base_exposure = (night_exposure * reference_lux) / lux
 
-        # Apply brightness feedback correction
-        # This gradually adjusts exposure based on actual image brightness
-        # to maintain consistent brightness even when lux formula is imperfect
+        # Apply existing brightness feedback correction (gradual)
         formula_exposure = base_exposure * self._brightness_correction_factor
 
-        # === ML v2 EXPOSURE PREDICTION ===
-        # If ML v2 is enabled, blend ML prediction with formula-based exposure
-        # ML v2 uses sun_elevation for Arctic-aware predictions
         target_exposure = formula_exposure
+
+        # === ML v2 PREDICTIVE EXPOSURE (ML-FIRST) ===
         if self._ml_enabled and self._ml_predictor is not None:
             ml_exposure, ml_confidence = self._ml_predictor.predict_optimal_exposure(
-                lux=lux, timestamp=time.time(), sun_elevation=self._sun_elevation
+                lux=lux, timestamp=time_module.time(), sun_elevation=self._sun_elevation
             )
+
             if ml_exposure is not None:
-                target_exposure = self._ml_predictor.blend_with_formula(
-                    ml_exposure, formula_exposure
-                )
-                logger.debug(
-                    f"[ML v2] Blending: formula={formula_exposure:.4f}s, "
-                    f"ML={ml_exposure:.4f}s (conf={ml_confidence:.2f}) "
-                    f"→ blended={target_exposure:.4f}s"
+                # Get base trust from ML predictor (0.65-0.90)
+                base_trust = self._ml_predictor.get_trust_level()
+
+                # Adjust trust based on brightness deviation
+                adjusted_trust = self.get_brightness_adjusted_trust(
+                    self._last_brightness, base_trust
                 )
 
-        # === EMERGENCY BRIGHTNESS CORRECTION ===
-        # Apply immediate correction when brightness is severely off-target
-        # This bypasses the slow gradual correction to catch up during rapid transitions
-        emergency_factor = self._get_emergency_brightness_factor(self._last_brightness)
-        if emergency_factor != 1.0:
-            target_exposure *= emergency_factor
-            logger.debug(
-                f"[Emergency] Applied factor {emergency_factor:.2f} → "
-                f"exposure now {target_exposure:.4f}s"
-            )
+                # Further adjust for rapid light changes
+                current_time = time_module.time()
+                elapsed = self._frame_interval
+                if self._last_lux_timestamp is not None:
+                    elapsed = current_time - self._last_lux_timestamp
+                lux_stability_trust = self.get_lux_stability_trust(
+                    lux, self._previous_lux_for_stability, elapsed
+                )
+                adjusted_trust *= lux_stability_trust
+
+                # Apply sustained drift correction
+                drift_correction = self._drift_corrector.update(
+                    self._last_brightness, self._target_brightness
+                )
+
+                # Blend ML with formula using adjusted trust
+                target_exposure = (
+                    adjusted_trust * ml_exposure + (1 - adjusted_trust) * formula_exposure
+                )
+
+                # Apply drift correction
+                target_exposure *= drift_correction
+
+                logger.debug(
+                    f"[ML-First] trust={adjusted_trust:.2f} (base={base_trust:.2f}, "
+                    f"lux_stab={lux_stability_trust:.2f}), ML={ml_exposure:.4f}s, "
+                    f"formula={formula_exposure:.4f}s, drift={drift_correction:.2f} "
+                    f"→ target={target_exposure:.4f}s"
+                )
+
+                # Update lux tracking for next frame
+                self._previous_lux_for_stability = lux
+                self._last_lux_timestamp = current_time
+
+        # === SEVERE-ONLY SAFETY CLAMPS ===
+        # Only apply hard corrections for extreme cases (after all adjustments)
+        # Philosophy: Small variations (70-170) are OK if curve is smooth
+        if self._last_brightness is not None:
+            if self._last_brightness > 220:  # Very severe overexposure only
+                target_exposure *= 0.7
+                logger.warning(
+                    f"[Safety] Severe overexposure ({self._last_brightness:.0f}) "
+                    f"- forcing 30% reduction"
+                )
+            elif self._last_brightness < 35:  # Very severe underexposure only
+                target_exposure *= 1.8
+                logger.warning(
+                    f"[Safety] Severe underexposure ({self._last_brightness:.0f}) "
+                    f"- forcing 80% increase"
+                )
 
         # Clamp to valid range
         target_exposure = max(min_exposure, min(night_exposure, target_exposure))
@@ -1243,7 +1455,7 @@ class AdaptiveTimelapse:
         logger.debug(
             f"Lux-based exposure: lux={lux:.2f} -> base={base_exposure:.4f}s "
             f"x correction={self._brightness_correction_factor:.3f} "
-            f"x emergency={emergency_factor:.2f} -> target={target_exposure:.4f}s"
+            f"-> target={target_exposure:.4f}s"
         )
 
         return target_exposure
