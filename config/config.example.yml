@@ -624,3 +624,12 @@ database:
 
   # Automatically create directories if they don't exist
   create_directories: true
+
+# Barentswatch Ship Tracking Overlay
+# Shows ships in the camera's field of view (from pi-overlay-data service)
+barentswatch:
+  # Enable/disable ship overlay
+  enabled: false
+
+  # Path to ships_current.json from pi-overlay-data service
+  ships_file: "/www/pi-overlay-data/data/ships_current.json"

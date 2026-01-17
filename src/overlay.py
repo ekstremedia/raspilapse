@@ -61,7 +61,47 @@ class ImageOverlay:
         # Initialize system monitor
         self.system_monitor = SystemMonitor()
 
+        # Initialize barentswatch ship tracking
+        self.barentswatch_config = config.get("barentswatch", {})
+        self.barentswatch_enabled = self.barentswatch_config.get("enabled", False)
+        self.ships_file = self.barentswatch_config.get(
+            "ships_file", "/www/pi-overlay-data/data/ships_current.json"
+        )
+
+        if self.barentswatch_enabled:
+            logger.info(f"Barentswatch ship overlay enabled, file: {self.ships_file}")
+
         logger.info("Overlay initialized")
+
+    def _load_ships(self) -> List[Dict]:
+        """
+        Load ships from pi-overlay-data ships_current.json file.
+
+        Returns:
+            List of ship dictionaries with display info
+        """
+        if not self.barentswatch_enabled:
+            return []
+
+        try:
+            ships_path = Path(self.ships_file)
+            if not ships_path.exists():
+                logger.debug(f"Ships file not found: {self.ships_file}")
+                return []
+
+            with open(ships_path, "r") as f:
+                data = json.load(f)
+
+            ships = data.get("items", [])
+            logger.debug(f"Loaded {len(ships)} ships from {self.ships_file}")
+            return ships
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid JSON in ships file: {e}")
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to load ships: {e}")
+            return []
 
     def _load_font(self) -> Optional[ImageFont.FreeTypeFont]:
         """
@@ -617,8 +657,13 @@ class ImageOverlay:
                 layout_config = self.overlay_config.get("layout", {})
                 bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
 
-                # Fixed 2 lines for compact bar
+                # Load ships for barentswatch overlay
+                ships = self._load_ships()
+
+                # Base 2 lines, plus 1 more if ships exist
                 num_lines = 2
+                if ships:
+                    num_lines = 3
 
                 # Total bar height with extra bottom spacing
                 bar_height = (
@@ -712,6 +757,66 @@ class ImageOverlay:
                         fill=font_color,
                         font=font_regular,
                     )
+
+                # Line 3 - Ships (if barentswatch enabled and ships exist)
+                if ships:
+                    y3 = y2 + line_height
+                    ship_x = left_x
+
+                    # Draw "Ships:" label
+                    ships_label = "Ships:"
+                    draw.text((ship_x, y3), ships_label, fill=font_color, font=font_bold)
+
+                    try:
+                        label_bbox = draw.textbbox((0, 0), ships_label, font=font_bold)
+                        label_width = label_bbox[2] - label_bbox[0]
+                    except Exception:
+                        label_width = len(ships_label) * font_size * 0.6
+
+                    ship_x += label_width + int(font_size * 0.5)
+
+                    # Draw each ship as a box
+                    box_padding = int(font_size * 0.3)
+                    box_spacing = int(font_size * 0.4)
+                    box_bg_color = (0, 0, 0, 100)  # Semi-transparent black
+
+                    for ship in ships:
+                        # Get display text from ship data
+                        ship_text = ship.get("display", ship.get("name", "Unknown"))
+
+                        # Calculate text dimensions
+                        try:
+                            text_bbox = draw.textbbox((0, 0), ship_text, font=font_regular)
+                            ship_text_width = text_bbox[2] - text_bbox[0]
+                            ship_text_height = text_bbox[3] - text_bbox[1]
+                        except Exception:
+                            ship_text_width = int(len(ship_text) * font_size * 0.6)
+                            ship_text_height = font_size
+
+                        # Check if ship fits on current line
+                        box_width = ship_text_width + (box_padding * 2)
+                        if ship_x + box_width > img_width - margin - padding:
+                            # Would overflow, stop drawing more ships
+                            break
+
+                        # Draw box background
+                        box_coords = [
+                            ship_x,
+                            y3,
+                            ship_x + box_width,
+                            y3 + ship_text_height + (box_padding * 2),
+                        ]
+                        draw.rectangle(box_coords, fill=box_bg_color)
+
+                        # Draw ship text
+                        text_x = ship_x + box_padding
+                        text_y = y3 + box_padding
+                        draw.text(
+                            (text_x, text_y), ship_text, fill=font_color, font=font_regular
+                        )
+
+                        # Move to next ship position
+                        ship_x += box_width + box_spacing
 
             else:
                 # Original box layout for non-bar modes

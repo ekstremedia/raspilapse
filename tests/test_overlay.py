@@ -1054,3 +1054,240 @@ class TestLocaleDatetimeEdgeCases:
         result = overlay._format_localized_datetime(dt)
         assert isinstance(result, str)
         assert len(result) > 0
+
+
+class TestBarentswatchShipOverlay:
+    """Test Barentswatch ship overlay functionality."""
+
+    def test_load_ships_disabled(self, test_overlay_config):
+        """Test _load_ships returns empty list when barentswatch disabled."""
+        test_overlay_config["barentswatch"] = {"enabled": False}
+        overlay = ImageOverlay(test_overlay_config)
+
+        ships = overlay._load_ships()
+        assert ships == []
+
+    def test_load_ships_no_config(self, test_overlay_config):
+        """Test _load_ships returns empty list when no barentswatch config."""
+        # No barentswatch config at all
+        overlay = ImageOverlay(test_overlay_config)
+
+        ships = overlay._load_ships()
+        assert ships == []
+
+    def test_load_ships_file_not_found(self, test_overlay_config):
+        """Test _load_ships returns empty list when file doesn't exist."""
+        test_overlay_config["barentswatch"] = {
+            "enabled": True,
+            "ships_file": "/nonexistent/ships.json",
+        }
+        overlay = ImageOverlay(test_overlay_config)
+
+        ships = overlay._load_ships()
+        assert ships == []
+
+    def test_load_ships_valid_json(self, test_overlay_config):
+        """Test _load_ships correctly parses valid JSON."""
+        # Create temp ships file
+        ships_data = {
+            "provider": "ships",
+            "updated_at": "2026-01-17T14:00:00+00:00",
+            "count": 2,
+            "items": [
+                {
+                    "mmsi": 259139000,
+                    "name": "NORDLYS",
+                    "speed": 12.5,
+                    "heading": 344,
+                    "direction": "north-west",
+                    "display": "NORDLYS (259139000) 12.5 kts, north-west",
+                    "still_in_zone": True,
+                },
+                {
+                    "mmsi": 258201000,
+                    "name": "HAVDONN",
+                    "speed": 0,
+                    "heading": None,
+                    "direction": "stationary",
+                    "display": "HAVDONN (258201000) stationary",
+                    "still_in_zone": True,
+                },
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(ships_data, f)
+            ships_file = f.name
+
+        try:
+            test_overlay_config["barentswatch"] = {
+                "enabled": True,
+                "ships_file": ships_file,
+            }
+            overlay = ImageOverlay(test_overlay_config)
+
+            ships = overlay._load_ships()
+            assert len(ships) == 2
+            assert ships[0]["name"] == "NORDLYS"
+            assert ships[1]["name"] == "HAVDONN"
+        finally:
+            os.unlink(ships_file)
+
+    def test_load_ships_invalid_json(self, test_overlay_config):
+        """Test _load_ships handles invalid JSON gracefully."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("not valid json {{{")
+            ships_file = f.name
+
+        try:
+            test_overlay_config["barentswatch"] = {
+                "enabled": True,
+                "ships_file": ships_file,
+            }
+            overlay = ImageOverlay(test_overlay_config)
+
+            ships = overlay._load_ships()
+            assert ships == []
+        finally:
+            os.unlink(ships_file)
+
+    def test_load_ships_empty_items(self, test_overlay_config):
+        """Test _load_ships handles JSON with empty items list."""
+        ships_data = {"provider": "ships", "count": 0, "items": []}
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(ships_data, f)
+            ships_file = f.name
+
+        try:
+            test_overlay_config["barentswatch"] = {
+                "enabled": True,
+                "ships_file": ships_file,
+            }
+            overlay = ImageOverlay(test_overlay_config)
+
+            ships = overlay._load_ships()
+            assert ships == []
+        finally:
+            os.unlink(ships_file)
+
+    def test_topbar_with_ships(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar overlay with ships displayed."""
+        # Create temp ships file
+        ships_data = {
+            "items": [
+                {"name": "TESTSHIP", "display": "TESTSHIP (123) 5.0 kts, north"},
+            ]
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(ships_data, f)
+            ships_file = f.name
+
+        try:
+            test_overlay_config["overlay"]["position"] = "top-bar"
+            test_overlay_config["barentswatch"] = {
+                "enabled": True,
+                "ships_file": ships_file,
+            }
+            overlay = ImageOverlay(test_overlay_config)
+
+            output_path = test_image.replace(".jpg", "_ships.jpg")
+            result = overlay.apply_overlay(
+                test_image, test_metadata, mode="day", output_path=output_path
+            )
+
+            assert os.path.exists(result)
+            os.unlink(output_path)
+        finally:
+            os.unlink(ships_file)
+
+    def test_topbar_without_ships(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar overlay works when barentswatch enabled but no ships."""
+        ships_data = {"items": []}
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(ships_data, f)
+            ships_file = f.name
+
+        try:
+            test_overlay_config["overlay"]["position"] = "top-bar"
+            test_overlay_config["barentswatch"] = {
+                "enabled": True,
+                "ships_file": ships_file,
+            }
+            overlay = ImageOverlay(test_overlay_config)
+
+            output_path = test_image.replace(".jpg", "_noships.jpg")
+            result = overlay.apply_overlay(
+                test_image, test_metadata, mode="day", output_path=output_path
+            )
+
+            assert os.path.exists(result)
+            os.unlink(output_path)
+        finally:
+            os.unlink(ships_file)
+
+    def test_topbar_many_ships_overflow(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar overlay handles many ships that would overflow."""
+        # Create many ships that would overflow the image width
+        ships_data = {
+            "items": [
+                {"name": f"SHIP{i}", "display": f"VERYLONGSHIPNAME{i} (12345678{i}) 10.0 kts, north-west"}
+                for i in range(20)
+            ]
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(ships_data, f)
+            ships_file = f.name
+
+        try:
+            test_overlay_config["overlay"]["position"] = "top-bar"
+            test_overlay_config["barentswatch"] = {
+                "enabled": True,
+                "ships_file": ships_file,
+            }
+            overlay = ImageOverlay(test_overlay_config)
+
+            output_path = test_image.replace(".jpg", "_manyships.jpg")
+            # Should not crash when ships overflow
+            result = overlay.apply_overlay(
+                test_image, test_metadata, mode="day", output_path=output_path
+            )
+
+            assert os.path.exists(result)
+            os.unlink(output_path)
+        finally:
+            os.unlink(ships_file)
+
+    def test_non_topbar_mode_ignores_ships(self, test_overlay_config, test_image, test_metadata):
+        """Test that non-top-bar modes don't crash with barentswatch enabled."""
+        ships_data = {
+            "items": [
+                {"name": "TESTSHIP", "display": "TESTSHIP (123) 5.0 kts, north"},
+            ]
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(ships_data, f)
+            ships_file = f.name
+
+        try:
+            test_overlay_config["overlay"]["position"] = "bottom-left"
+            test_overlay_config["barentswatch"] = {
+                "enabled": True,
+                "ships_file": ships_file,
+            }
+            overlay = ImageOverlay(test_overlay_config)
+
+            output_path = test_image.replace(".jpg", "_bottomleft_ships.jpg")
+            # Should work without crashing (ships only shown in top-bar mode)
+            result = overlay.apply_overlay(
+                test_image, test_metadata, mode="day", output_path=output_path
+            )
+
+            assert os.path.exists(result)
+            os.unlink(output_path)
+        finally:
+            os.unlink(ships_file)
