@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-01-17
+
+### Fixed
+- **Day mode brightness oscillation**: Brightness was ranging 77-163 instead of target 105-135
+  - Root cause: Config too loose + ML trained on bad data (only 21% of captures in good range)
+  - Tightened `brightness_tolerance` from 60 to 25 (triggers feedback at 95-145)
+  - Increased `brightness_feedback_strength` from 0.05 to 0.15 (3x faster corrections)
+  - Increased `exposure_transition_speed` from 0.08 to 0.15 (~2x faster)
+  - Increased `fast_rampup_speed` from 0.20 to 0.40 (faster underexposure recovery)
+  - Increased `fast_rampdown_speed` from 0.20 to 0.35 (faster overexposure correction)
+
+### Changed
+- **ML state reset procedure documented**: When ML is trained on bad data, delete `ml_state/ml_state_v2.json` and restart
+  - ML automatically retrains from only good samples (brightness 105-135) in database
+  - Database is never deleted - all historical data preserved
+  - Added troubleshooting section to `docs/ML_EXPOSURE_SYSTEM.md` and `docs/CLAUDE.md`
+
+### Documentation
+- Added "Day Mode Brightness Oscillation" troubleshooting to `docs/CLAUDE.md`
+- Added "ML Trained on Bad Data" troubleshooting to `docs/ML_EXPOSURE_SYSTEM.md`
+- Updated `docs/NEXT_SESSION_CONTEXT.md` with fix details
+
 ## [1.3.0] - 2026-01-16
 
 ### Changed
@@ -54,7 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - p95 > 240: Aggressive reduction (0.70-0.85x exposure)
 - Especially useful for sunrise sky blowout, Aurora bright peaks, and high-contrast scenes
 
-### Config Changes
+### Config Changes (v1.3.0)
 ```yaml
 ml_exposure:
   initial_trust_v2: 0.70    # Was 0.5
@@ -69,6 +91,8 @@ transition_mode:
   fast_rampdown_speed: 0.20           # Was 0.50 - much gentler
   fast_rampup_speed: 0.20             # Was 0.50 - much gentler
 ```
+
+**Note**: These v1.3.0 values were further tuned in v1.3.1 - see above for current recommended values.
 
 ### Technical Details
 - **Expected outcome**: Smooth transitions without oscillation
