@@ -93,9 +93,9 @@ class ShipsData:
         speed = ship.get("speed", 0)
         direction = ship.get("direction", "")
 
-        # Show "stationary" for ships not moving (speed <= 0.5 kts)
+        # Show "(stationary)" for ships not moving (speed <= 0.5 kts)
         if speed <= 0.5:
-            return f"{name} stationary"
+            return f"{name} (stationary)"
 
         # Abbreviate direction
         dir_abbrev = {
@@ -112,9 +112,9 @@ class ShipsData:
         dir_short = dir_abbrev.get(direction, direction[:2].upper() if direction else "")
 
         if dir_short:
-            return f"{name} {speed:.1f} kts {dir_short}"
+            return f"{name} ({speed:.1f} kts {dir_short})"
         else:
-            return f"{name} {speed:.1f} kts"
+            return f"{name} ({speed:.1f} kts)"
 
     def get_moving_ships_list(self) -> List[Dict]:
         """Get list of moving ships sorted by speed descending."""
