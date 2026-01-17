@@ -34,6 +34,156 @@ except ImportError:
 logger = get_logger("overlay")
 
 
+class ShipsData:
+    """Handles loading and formatting ship data from pi-overlay-data."""
+
+    def __init__(self, config: Dict):
+        """
+        Initialize ships data handler.
+
+        Args:
+            config: Full configuration dictionary
+        """
+        self.config = config
+        self.barentswatch_config = config.get("barentswatch", {})
+        self.enabled = self.barentswatch_config.get("enabled", False)
+        self.ships_file = self.barentswatch_config.get("ships_file", "")
+        self._cache: Optional[Dict] = None
+        self._cache_time: Optional[datetime] = None
+        self._cache_duration = 60  # Cache for 60 seconds
+
+    def get_ships_data(self) -> Optional[Dict]:
+        """
+        Load ship data from JSON file with caching.
+
+        Returns:
+            Ships data dictionary or None if unavailable
+        """
+        if not self.enabled or not self.ships_file:
+            return None
+
+        # Check cache
+        now = datetime.now()
+        if self._cache is not None and self._cache_time is not None:
+            age = (now - self._cache_time).total_seconds()
+            if age < self._cache_duration:
+                return self._cache
+
+        # Load from file
+        try:
+            ships_path = Path(self.ships_file)
+            if not ships_path.exists():
+                logger.warning(f"Ships file not found: {self.ships_file}")
+                return self._cache  # Return stale cache if available
+
+            with open(ships_path, "r") as f:
+                data = json.load(f)
+
+            self._cache = data
+            self._cache_time = now
+            return data
+
+        except Exception as e:
+            logger.warning(f"Failed to load ships data: {e}")
+            return self._cache  # Return stale cache if available
+
+    def _format_ship(self, ship: Dict) -> str:
+        """Format a single ship compactly: NAME speed dir"""
+        name = ship.get("name", "Unknown")
+        speed = ship.get("speed", 0)
+        direction = ship.get("direction", "")
+
+        # Abbreviate direction
+        dir_abbrev = {
+            "north": "N",
+            "north-east": "NE",
+            "east": "E",
+            "south-east": "SE",
+            "south": "S",
+            "south-west": "SW",
+            "west": "W",
+            "north-west": "NW",
+            "unknown": "",
+        }
+        dir_short = dir_abbrev.get(direction, direction[:2].upper() if direction else "")
+
+        if dir_short:
+            return f"{name} {speed:.1f} kts {dir_short}"
+        else:
+            return f"{name} {speed:.1f} kts"
+
+    def get_moving_ships_list(self) -> List[Dict]:
+        """Get list of moving ships sorted by speed descending."""
+        data = self.get_ships_data()
+        if data is None:
+            return []
+
+        items = data.get("items", [])
+        # Filter to moving ships only (speed > 0.5 kts to ignore drift)
+        moving_ships = [s for s in items if s.get("speed", 0) > 0.5]
+        # Sort by speed descending (fastest first)
+        moving_ships.sort(key=lambda s: s.get("speed", 0), reverse=True)
+        return moving_ships
+
+    def format_ships_lines(self, ships_per_line: int = 4) -> List[str]:
+        """
+        Format ships data as multiple lines for overlay display.
+
+        Args:
+            ships_per_line: Number of ships per line
+
+        Returns:
+            List of formatted lines (first line includes count header)
+        """
+        moving_ships = self.get_moving_ships_list()
+        total_count = self.get_ships_count()
+
+        if not moving_ships:
+            return [f"{total_count} Ships" if total_count > 0 else "0 Ships"]
+
+        # Format all ships
+        ship_strings = [self._format_ship(ship) for ship in moving_ships]
+        moving_count = len(moving_ships)
+
+        # Split into chunks
+        lines = []
+        for i in range(0, len(ship_strings), ships_per_line):
+            chunk = ship_strings[i : i + ships_per_line]
+            if i == 0:
+                # First line includes count header
+                lines.append(f"{moving_count} Ships: " + ", ".join(chunk))
+            else:
+                # Continuation lines - no indent, align with left margin
+                lines.append(", ".join(chunk))
+
+        return lines
+
+    def format_ships_overlay(self) -> str:
+        """
+        Format ships data for overlay display (single line, all ships).
+
+        Returns:
+            Formatted string for overlay
+        """
+        lines = self.format_ships_lines(ships_per_line=100)  # Effectively no limit
+        return lines[0] if lines else ""
+
+    def get_ships_count(self) -> int:
+        """Get total number of ships in the area."""
+        data = self.get_ships_data()
+        if data is None:
+            return 0
+        return data.get("count", len(data.get("items", [])))
+
+    def get_moving_ships_count(self) -> int:
+        """Get number of moving ships (speed > 0.5 kts)."""
+        data = self.get_ships_data()
+        if data is None:
+            return 0
+        items = data.get("items", [])
+        return len([s for s in items if s.get("speed", 0) > 0.5])
+
+
 class ImageOverlay:
     """Handles adding text overlays to images."""
 
@@ -63,6 +213,9 @@ class ImageOverlay:
 
         # Initialize system monitor
         self.system_monitor = SystemMonitor()
+
+        # Initialize ships data fetcher
+        self.ships = ShipsData(config)
 
         logger.info("Overlay initialized")
 
@@ -416,6 +569,25 @@ class ImageOverlay:
                 }
             )
 
+        # Add ships data if available
+        if hasattr(self, "ships") and self.ships.enabled:
+            ships_lines = self.ships.format_ships_lines(ships_per_line=4)
+            data["ships"] = ships_lines[0] if ships_lines else ""
+            data["ships_count"] = str(self.ships.get_ships_count())
+            data["ships_moving"] = str(self.ships.get_moving_ships_count())
+            # Add individual line variables for multi-line display
+            for i, line in enumerate(ships_lines, 1):
+                data[f"ships_line_{i}"] = line
+            # Ensure at least 5 line variables exist (empty if not needed)
+            for i in range(len(ships_lines) + 1, 6):
+                data[f"ships_line_{i}"] = ""
+        else:
+            data["ships"] = ""
+            data["ships_count"] = "0"
+            data["ships_moving"] = "0"
+            for i in range(1, 6):
+                data[f"ships_line_{i}"] = ""
+
         return data
 
     def _get_text_lines(self, data: Dict[str, str]) -> List[str]:
@@ -629,8 +801,15 @@ class ImageOverlay:
                 layout_config = self.overlay_config.get("layout", {})
                 bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
 
-                # Fixed 2 lines for compact bar
+                # Determine number of lines dynamically (check line_3 through line_10)
                 num_lines = 2
+                for line_num in range(3, 11):
+                    if content_config.get(f"line_{line_num}_left") or content_config.get(
+                        f"line_{line_num}_center"
+                    ):
+                        num_lines = line_num
+                    else:
+                        break
 
                 # Total bar height with extra bottom spacing
                 bar_height = (
@@ -724,6 +903,47 @@ class ImageOverlay:
                         fill=font_color,
                         font=font_regular,
                     )
+
+                # ADDITIONAL LINES (3+) - for ships or other info
+                current_y = y2
+                for line_num in range(3, num_lines + 1):
+                    current_y += line_height
+
+                    # Check for left-aligned content first
+                    line_left_template = content_config.get(f"line_{line_num}_left", "")
+                    if line_left_template:
+                        try:
+                            line_text = line_left_template.format(**data)
+                        except KeyError as e:
+                            logger.warning(f"Unknown variable in line_{line_num}_left: {e}")
+                            line_text = line_left_template
+
+                        if line_text.strip():
+                            draw.text(
+                                (left_x, current_y), line_text, fill=font_color, font=font_regular
+                            )
+                        continue
+
+                    # Fall back to centered content
+                    line_center_template = content_config.get(f"line_{line_num}_center", "")
+                    if line_center_template:
+                        try:
+                            line_text = line_center_template.format(**data)
+                        except KeyError as e:
+                            logger.warning(f"Unknown variable in line_{line_num}_center: {e}")
+                            line_text = line_center_template
+
+                        if line_text.strip():
+                            try:
+                                bbox = draw.textbbox((0, 0), line_text, font=font_regular)
+                                text_width = bbox[2] - bbox[0]
+                            except Exception:
+                                text_width = len(line_text) * font_size * 0.6
+
+                            center_x = (img_width - text_width) // 2
+                            draw.text(
+                                (center_x, current_y), line_text, fill=font_color, font=font_regular
+                            )
 
             else:
                 # Original box layout for non-bar modes
