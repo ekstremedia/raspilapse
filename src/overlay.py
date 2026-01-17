@@ -571,7 +571,7 @@ class ImageOverlay:
 
         # Add ships data if available
         if hasattr(self, "ships") and self.ships.enabled:
-            ships_lines = self.ships.format_ships_lines(ships_per_line=4)
+            ships_lines = self.ships.format_ships_lines(ships_per_line=6)
             data["ships"] = ships_lines[0] if ships_lines else ""
             data["ships_count"] = str(self.ships.get_ships_count())
             data["ships_moving"] = str(self.ships.get_moving_ships_count())
@@ -801,13 +801,21 @@ class ImageOverlay:
                 layout_config = self.overlay_config.get("layout", {})
                 bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
 
-                # Determine number of lines dynamically (check line_3 through line_10)
+                # Determine number of lines dynamically based on actual content
                 num_lines = 2
                 for line_num in range(3, 11):
-                    if content_config.get(f"line_{line_num}_left") or content_config.get(
+                    template = content_config.get(f"line_{line_num}_left") or content_config.get(
                         f"line_{line_num}_center"
-                    ):
-                        num_lines = line_num
+                    )
+                    if template:
+                        try:
+                            formatted = template.format(**data)
+                            if formatted.strip():
+                                num_lines = line_num
+                            else:
+                                break  # Empty content, stop here
+                        except KeyError:
+                            break
                     else:
                         break
 
