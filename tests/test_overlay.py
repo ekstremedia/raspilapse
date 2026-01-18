@@ -1098,10 +1098,14 @@ class TestShipBoxesRendering:
 
     def test_draw_ship_boxes_with_ships_data(self, test_overlay_config, test_image, test_metadata):
         """Test top-bar mode with ship boxes when ships data is present."""
+        # Create temporary ships file
+        ships_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        ships_file_path = ships_file.name
+
         test_overlay_config["overlay"]["position"] = "top-bar"
         test_overlay_config["barentswatch"] = {
             "enabled": True,
-            "ships_file": "/tmp/test_ships.json",
+            "ships_file": ships_file_path,
         }
 
         # Create mock ships data file
@@ -1112,7 +1116,7 @@ class TestShipBoxesRendering:
             ],
             "stationary_ships": []
         }
-        with open("/tmp/test_ships.json", "w") as f:
+        with open(ships_file_path, "w") as f:
             json.dump(ships_data, f)
 
         try:
@@ -1127,15 +1131,18 @@ class TestShipBoxesRendering:
             assert os.path.exists(result)
             os.unlink(output_path)
         finally:
-            if os.path.exists("/tmp/test_ships.json"):
-                os.unlink("/tmp/test_ships.json")
+            if os.path.exists(ships_file_path):
+                os.unlink(ships_file_path)
 
     def test_draw_ship_boxes_without_ships_data(self, test_overlay_config, test_image, test_metadata):
         """Test top-bar mode when ships file is empty or missing."""
+        # Use a unique nonexistent path in temp directory
+        nonexistent_path = os.path.join(tempfile.gettempdir(), "nonexistent_ships_test.json")
+
         test_overlay_config["overlay"]["position"] = "top-bar"
         test_overlay_config["barentswatch"] = {
             "enabled": True,
-            "ships_file": "/tmp/nonexistent_ships.json",
+            "ships_file": nonexistent_path,
         }
 
         overlay = ImageOverlay(test_overlay_config)
