@@ -263,6 +263,36 @@ class ImageOverlay:
 
         logger.info("Overlay initialized")
 
+    def _load_ships(self) -> List[Dict]:
+        """
+        Load ships from pi-overlay-data ships_current.json file.
+
+        Returns:
+            List of ship dictionaries with display info
+        """
+        if not self.barentswatch_enabled:
+            return []
+
+        try:
+            ships_path = Path(self.ships_file)
+            if not ships_path.exists():
+                logger.debug(f"Ships file not found: {self.ships_file}")
+                return []
+
+            with open(ships_path, "r") as f:
+                data = json.load(f)
+
+            ships = data.get("items", [])
+            logger.debug(f"Loaded {len(ships)} ships from {self.ships_file}")
+            return ships
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid JSON in ships file: {e}")
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to load ships: {e}")
+            return []
+
     def _load_font(self) -> Optional[ImageFont.FreeTypeFont]:
         """
         Load font with fallback options.
