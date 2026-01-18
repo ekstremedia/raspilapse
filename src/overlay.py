@@ -741,7 +741,7 @@ class ImageOverlay:
         for font_path in font_paths:
             try:
                 # Try with a test size (will be resized later based on image)
-                test_font = ImageFont.truetype(font_path, 20)
+                ImageFont.truetype(font_path, 20)
                 logger.debug(f"Loaded font: {font_path}")
                 return font_path  # Return path, will load with proper size later
             except (OSError, IOError):
