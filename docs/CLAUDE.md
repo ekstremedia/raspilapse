@@ -914,3 +914,77 @@ print(db.get_statistics())
 - Save metadata with captures (timestamp, settings)
 - Implement graceful shutdown on interrupts
 - **For long exposures (>5s)**: Always set FrameDurationLimits and disable AWB
+
+---
+
+## Troubleshooting: Day Mode Brightness Oscillation
+
+### Symptoms
+- Day mode brightness oscillates wildly (e.g., 77-163 instead of target 105-135)
+- Images appear too dark or too bright compared to other cameras
+- Problem recurs even after config adjustments
+
+### Root Causes
+
+1. **Brightness Tolerance Too Wide**
+   - If `brightness_tolerance: 60` with `target_brightness: 120`, acceptable range is 60-180
+   - Actual brightness 77-163 falls "within tolerance" - no feedback triggered
+
+2. **Feedback Strength Too Weak**
+   - `brightness_feedback_strength: 0.05` means only 5% corrections
+   - System can't correct fast enough
+
+3. **Slow Ramp Speeds**
+   - `exposure_transition_speed: 0.08` = only 8% change per frame
+   - Takes 12+ frames to reach target exposure
+
+4. **ML Trained on Bad Data**
+   - If most historical captures have bad brightness, ML learns bad patterns
+   - Self-reinforcing problem: bad predictions → bad captures → bad training
+
+### Solution: Config Tuning + ML Reset
+
+#### Step 1: Tighten Config Parameters
+```yaml
+# config/config.yml - transition_mode section
+brightness_tolerance: 25          # Was 60 - triggers at 95-145 instead of 60-180
+brightness_feedback_strength: 0.15  # Was 0.05 - 3x faster corrections
+exposure_transition_speed: 0.15   # Was 0.08 - ~2x faster adjustments
+fast_rampdown_speed: 0.35         # Was 0.20 - faster overexposure correction
+fast_rampup_speed: 0.40           # Was 0.20 - faster underexposure recovery
+```
+
+#### Step 2: Reset ML State (if ML trained on bad data)
+```bash
+# Check training data quality
+python3 -c "
+import sqlite3
+conn = sqlite3.connect('data/timelapse.db')
+c = conn.cursor()
+c.execute('''SELECT COUNT(*) as total,
+    SUM(CASE WHEN brightness_mean BETWEEN 105 AND 135 THEN 1 ELSE 0 END) as good
+    FROM captures WHERE mode = 'day' AND timestamp > datetime('now', '-7 days')''')
+total, good = c.fetchone()
+pct = (100.0 * (good or 0) / total) if total > 0 else 0
+print(f'Day mode: {total} captures, {good or 0} good (105-135), {pct:.1f}%')
+"
+
+# If <50% good data, reset ML state:
+rm ml_state/ml_state_v2.json
+sudo systemctl restart raspilapse
+# ML will retrain automatically from only good samples in database
+```
+
+#### Step 3: Verify
+```bash
+# Monitor brightness after restart
+python scripts/db_stats.py 30m
+
+# Expected: brightness converging to 105-135 range within ~10 frames
+```
+
+### Important Notes
+- **Database is preserved** - only ML state file is deleted
+- ML automatically filters for good brightness (105-135) when training
+- Even with few good samples, ML learns correct patterns
+- Run `python scripts/db_stats.py 1h` during midday to verify fix

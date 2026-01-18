@@ -88,10 +88,14 @@ class ShipsData:
             return self._cache  # Return stale cache if available
 
     def _format_ship(self, ship: Dict) -> str:
-        """Format a single ship compactly: NAME speed dir"""
+        """Format a single ship compactly: NAME speed dir or NAME stationary"""
         name = ship.get("name", "Unknown")
         speed = ship.get("speed", 0)
         direction = ship.get("direction", "")
+
+        # Show "(stationary)" for ships not moving (speed <= 0.5 kts)
+        if speed <= 0.5:
+            return f"{name} (stationary)"
 
         # Abbreviate direction
         dir_abbrev = {
@@ -108,9 +112,9 @@ class ShipsData:
         dir_short = dir_abbrev.get(direction, direction[:2].upper() if direction else "")
 
         if dir_short:
-            return f"{name} {speed:.1f} kts {dir_short}"
+            return f"{name} ({speed:.1f} kts {dir_short})"
         else:
-            return f"{name} {speed:.1f} kts"
+            return f"{name} ({speed:.1f} kts)"
 
     def get_moving_ships_list(self) -> List[Dict]:
         """Get list of moving ships sorted by speed descending."""
@@ -125,6 +129,17 @@ class ShipsData:
         moving_ships.sort(key=lambda s: s.get("speed", 0), reverse=True)
         return moving_ships
 
+    def get_all_ships_list(self) -> List[Dict]:
+        """Get list of all ships sorted by speed descending."""
+        data = self.get_ships_data()
+        if data is None:
+            return []
+
+        items = data.get("items", [])
+        # Sort by speed descending (fastest/moving ships first)
+        ships = sorted(items, key=lambda s: s.get("speed", 0), reverse=True)
+        return ships
+
     def format_ships_lines(self, ships_per_line: int = 4) -> List[str]:
         """
         Format ships data as multiple lines for overlay display.
@@ -135,15 +150,15 @@ class ShipsData:
         Returns:
             List of formatted lines (first line includes count header)
         """
-        moving_ships = self.get_moving_ships_list()
+        all_ships = self.get_all_ships_list()
         total_count = self.get_ships_count()
 
-        if not moving_ships:
-            return [f"{total_count} Ships" if total_count > 0 else "0 Ships"]
+        if not all_ships:
+            return ["0 Ships"]
 
         # Format all ships
-        ship_strings = [self._format_ship(ship) for ship in moving_ships]
-        moving_count = len(moving_ships)
+        ship_strings = [self._format_ship(ship) for ship in all_ships]
+        ship_count = len(all_ships)
 
         # Split into chunks
         lines = []
@@ -151,7 +166,7 @@ class ShipsData:
             chunk = ship_strings[i : i + ships_per_line]
             if i == 0:
                 # First line includes count header
-                lines.append(f"{moving_count} Ships: " + ", ".join(chunk))
+                lines.append(f"{ship_count} Ships: " + ", ".join(chunk))
             else:
                 # Continuation lines - no indent, align with left margin
                 lines.append(", ".join(chunk))

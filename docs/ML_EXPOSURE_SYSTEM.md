@@ -332,3 +332,76 @@ This is especially useful for:
 4. Check that brightness stays mostly in 70-170 range
 5. Generate slitscan - should show no vertical banding
 6. Monitor logs for sustained drift corrections (should be rare)
+
+---
+
+## Troubleshooting: ML Trained on Bad Data
+
+### Symptoms
+- Day mode brightness oscillates wildly (e.g., 77-163)
+- Same camera keeps drifting even after config changes
+- Problem recurs after a few days
+
+### Diagnosis: Check Training Data Quality
+
+```bash
+python3 -c "
+import sqlite3
+conn = sqlite3.connect('data/timelapse.db')
+c = conn.cursor()
+c.execute('''SELECT COUNT(*) as total,
+    SUM(CASE WHEN brightness_mean BETWEEN 105 AND 135 THEN 1 ELSE 0 END) as good
+    FROM captures WHERE mode = 'day' AND timestamp > datetime('now', '-7 days')''')
+total, good = c.fetchone()
+pct = (100.0 * (good or 0) / total) if total > 0 else 0
+print(f'Day mode (7 days): {total} captures, {good or 0} good (105-135), {pct:.1f}%')
+"
+```
+
+**If <50% good data**: ML is learning from bad predictions (self-reinforcing problem).
+
+### Solution: Reset ML State
+
+The ML state file (`ml_state/ml_state_v2.json`) contains learned exposure buckets. The database (`data/timelapse.db`) contains all capture history.
+
+**Key insight**: ML training already filters for good brightness (105-135). The problem is the state file persisting bad learned patterns.
+
+```bash
+# 1. Delete ML state (NOT the database)
+rm ml_state/ml_state_v2.json
+
+# 2. Restart service - ML will retrain automatically
+sudo systemctl restart raspilapse
+
+# 3. Verify retrain
+journalctl -u raspilapse --since "1 min ago" | grep -i "ML v2"
+# Should show: [ML v2] Initialized: trust=X.XX, buckets=XX, trained=YYYY-MM-DDTHH:MM:SS
+```
+
+### What Happens After Reset
+
+1. ML loads and finds no state file
+2. Queries database for good frames (brightness 105-135 only)
+3. Builds new exposure buckets from clean data
+4. Saves new state file
+5. Future captures use corrected predictions
+
+### Prevention
+
+Keep config parameters tight enough to generate good data:
+
+```yaml
+transition_mode:
+  brightness_tolerance: 25          # Not 60 - triggers feedback earlier
+  brightness_feedback_strength: 0.15  # Not 0.05 - stronger corrections
+  exposure_transition_speed: 0.15   # Not 0.08 - faster adjustments
+  fast_rampup_speed: 0.40           # Not 0.20 - faster recovery
+  fast_rampdown_speed: 0.35         # Not 0.20 - faster correction
+```
+
+With tight config:
+- Feedback triggers when brightness outside 95-145
+- Corrections are applied faster
+- More captures fall within good range
+- ML learns from better data
+- Fewer resets needed
