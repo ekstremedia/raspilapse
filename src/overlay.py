@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import json
+import math
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -160,7 +161,6 @@ class ShipsData:
             List of formatted lines (first line includes count header)
         """
         all_ships = self.get_all_ships_list()
-        total_count = self.get_ships_count()
 
         if not all_ships:
             return ["0 Ships"]
@@ -1266,103 +1266,6 @@ class ImageOverlay:
             # Move to next box position
             x += box_width + box_gap
 
-    def _draw_tide_widget(
-        self,
-        img: Image.Image,
-        bar_height: int,
-        font: ImageFont.FreeTypeFont,
-        font_color: Tuple[int, int, int, int],
-        bg_color: List[int],
-        margin: int,
-        padding: int,
-    ) -> None:
-        """
-        Draw tide widget on the right side below the overlay bar.
-
-        Shows current level, trend arrow, target level, and next high/low times.
-
-        Args:
-            img: PIL Image to draw on
-            bar_height: Height of the main overlay bar (widget starts below this)
-            font: Font to use for text
-            font_color: RGBA tuple for text color
-            bg_color: RGBA list for box background [R, G, B, A]
-            margin: Margin from edges
-            padding: Padding inside boxes
-        """
-        if not hasattr(self, "tide") or not self.tide.enabled:
-            return
-
-        tide_data = self.tide.get_widget_data()
-        if not tide_data:
-            return
-
-        # Create drawing context with alpha support
-        draw = ImageDraw.Draw(img, "RGBA")
-
-        # Box styling
-        box_bg = tuple(bg_color)
-        corner_radius = int(padding * 0.8)
-        box_padding_h = int(padding * 0.8)
-        box_padding_v = int(padding * 0.5)
-        box_margin = int(padding * 0.5)
-
-        img_width = img.size[0]
-
-        # Calculate consistent text height
-        try:
-            ref_bbox = draw.textbbox((0, 0), "Ayg", font=font)
-            text_height = ref_bbox[3] - ref_bbox[1]
-        except Exception:
-            text_height = 20
-
-        line_spacing = int(text_height * 0.3)
-
-        # Build content lines
-        # Line 1: Current level with arrow and target
-        arrow = tide_data["arrow"]
-        level_str = tide_data["level_str"]
-        target_str = tide_data["target_level_str"]
-        line1 = f"Tide: {level_str} {arrow} {target_str}"
-
-        # Line 2: High time
-        high_str = f"High: {tide_data['high_time_str']} ({tide_data['high_level_str']})"
-
-        # Line 3: Low time
-        low_str = f"Low: {tide_data['low_time_str']} ({tide_data['low_level_str']})"
-
-        lines = [line1, high_str, low_str]
-
-        # Calculate box dimensions
-        max_width = 0
-        for line in lines:
-            try:
-                bbox = draw.textbbox((0, 0), line, font=font)
-                line_width = bbox[2] - bbox[0]
-                max_width = max(max_width, line_width)
-            except Exception:
-                max_width = max(max_width, len(line) * 10)
-
-        total_text_height = (text_height * len(lines)) + (line_spacing * (len(lines) - 1))
-        box_width = max_width + (box_padding_h * 2)
-        box_height = total_text_height + (box_padding_v * 2)
-
-        # Position on right side, below bar
-        x = img_width - box_width - box_margin
-        y = bar_height + box_margin
-
-        # Draw rounded rectangle background
-        box_coords = [x, y, x + box_width, y + box_height]
-        draw.rounded_rectangle(box_coords, radius=corner_radius, fill=box_bg)
-
-        # Draw text lines
-        text_x = x + box_padding_h
-        text_y = y + box_padding_v
-
-        for line in lines:
-            draw.text((text_x, text_y), line, fill=font_color, font=font)
-            text_y += text_height + line_spacing
-
     def apply_overlay(
         self,
         image_path: str,
@@ -1551,8 +1454,6 @@ class ImageOverlay:
                 if hasattr(self, "tide") and self.tide.enabled:
                     tide_widget = self.tide.get_widget_data()
                     if tide_widget:
-                        import math
-
                         # Wave visualization dimensions
                         wave_width = int(font_size * 4)  # Width of wave graphic
                         wave_height = int(line_height * 1.6)  # Height spans both lines
@@ -1593,8 +1494,16 @@ class ImageOverlay:
 
                         # Calculate position on wave (0.0 = low, 1.0 = high)
                         current_level = tide_widget["level"]
-                        high_level = tide_widget["high_level"] or 2.0
-                        low_level = tide_widget["low_level"] or 0.5
+                        high_level = (
+                            tide_widget["high_level"]
+                            if tide_widget["high_level"] is not None
+                            else 2.0
+                        )
+                        low_level = (
+                            tide_widget["low_level"]
+                            if tide_widget["low_level"] is not None
+                            else 0.5
+                        )
                         level_range = high_level - low_level
 
                         if level_range > 0:
