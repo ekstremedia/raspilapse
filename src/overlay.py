@@ -88,13 +88,16 @@ class ShipsData:
             return self._cache  # Return stale cache if available
 
     def _format_ship(self, ship: Dict) -> str:
-        """Format a single ship compactly: NAME speed dir or NAME stationary"""
+        """Format a single ship compactly: NAME (category speed dir) or NAME (category stationary)"""
         name = ship.get("name", "Unknown")
         speed = ship.get("speed", 0)
         direction = ship.get("direction", "")
+        category = ship.get("category", "")
 
-        # Show "(stationary)" for ships not moving (speed <= 0.5 kts)
+        # Show "(category, stationary)" for ships not moving (speed <= 0.5 kts)
         if speed <= 0.5:
+            if category:
+                return f"{name} ({category}, stationary)"
             return f"{name} (stationary)"
 
         # Abbreviate direction
@@ -111,10 +114,16 @@ class ShipsData:
         }
         dir_short = dir_abbrev.get(direction, direction[:2].upper() if direction else "")
 
-        if dir_short:
-            return f"{name} ({speed:.1f} kts {dir_short})"
+        if category:
+            if dir_short:
+                return f"{name} ({category}, {speed:.1f} kts {dir_short})"
+            else:
+                return f"{name} ({category}, {speed:.1f} kts)"
         else:
-            return f"{name} ({speed:.1f} kts)"
+            if dir_short:
+                return f"{name} ({speed:.1f} kts {dir_short})"
+            else:
+                return f"{name} ({speed:.1f} kts)"
 
     def get_moving_ships_list(self) -> List[Dict]:
         """Get list of moving ships sorted by speed descending."""
