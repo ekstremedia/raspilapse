@@ -508,22 +508,22 @@ class TideData:
 
         return {
             "level": level,
-            "level_str": f"{level:.1f}m",
+            "level_str": f"{int(level * 100)}cm",
             "trend": trend,
             "arrow": arrow,
             "next_event_type": event_type,
             "next_event_time": event_time,
             "next_event_time_str": self.format_time(event_time),
             "target_level": target_level,
-            "target_level_str": f"{target_level:.1f}m" if target_level else "",
+            "target_level_str": f"{int(target_level * 100)}cm" if target_level else "",
             "high_time": high_time,
             "high_time_str": self.format_time(high_time),
             "high_level": high_level,
-            "high_level_str": f"{high_level:.1f}m" if high_level else "",
+            "high_level_str": f"{int(high_level * 100)}cm" if high_level else "",
             "low_time": low_time,
             "low_time_str": self.format_time(low_time),
             "low_level": low_level,
-            "low_level_str": f"{low_level:.1f}m" if low_level else "",
+            "low_level_str": f"{int(low_level * 100)}cm" if low_level else "",
         }
 
 
@@ -1564,22 +1564,27 @@ class ImageOverlay:
                             f"H {tide_widget['high_time_str']} | L {tide_widget['low_time_str']}"
                         )
 
-                        # Calculate text width
+                        # Use FIXED text width based on max possible content
+                        # Max: "Tide: 999cm → 999cm" and "H 00:00 | L 00:00"
+                        # This ensures wave stays in same position for timelapse
                         try:
-                            bbox1 = draw.textbbox((0, 0), tide_line_1, font=font_regular)
-                            bbox2 = draw.textbbox((0, 0), tide_line_2, font=font_regular)
+                            max_line_1 = "Tide: 999cm → 999cm"
+                            max_line_2 = "H 00:00 | L 00:00"
+                            bbox1 = draw.textbbox((0, 0), max_line_1, font=font_regular)
+                            bbox2 = draw.textbbox((0, 0), max_line_2, font=font_regular)
                             text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
                         except Exception:
-                            text_width = max(len(tide_line_1), len(tide_line_2)) * font_size * 0.6
+                            text_width = max(len(max_line_1), len(max_line_2)) * font_size * 0.6
 
-                        # Total tide section width: text + margin + wave
+                        # Total tide section width: fixed text area + margin + wave
                         tide_section_width = text_width + wave_margin + wave_width
 
-                        # Position for tide section (to left of aurora) - text first, then wave
+                        # Position for tide section (to left of aurora)
                         tide_x = (
                             img_width - tide_section_width - aurora_section_width - margin - padding
                         )
                         text_x = tide_x
+                        # Wave position is fixed relative to section start
                         wave_x = tide_x + text_width + wave_margin
 
                         # Draw text
@@ -1587,11 +1592,12 @@ class ImageOverlay:
                         draw.text((text_x, y2), tide_line_2, fill=font_color, font=font_regular)
 
                         # Draw wave visualization (to the right of text)
+                        # Marker stays centered, wave scrolls underneath, marker moves up/down
                         wave_y = y1 + int(line_height * 0.1)  # Slightly below line 1 start
                         wave_color = font_color[:3] + (180,)  # Slightly transparent
                         marker_color = (255, 200, 100, 255)  # Orange/gold for marker
 
-                        # Calculate position on wave (0.0 = low, 1.0 = high)
+                        # Calculate normalized level (0.0 = low, 1.0 = high)
                         current_level = tide_widget["level"]
                         high_level = (
                             tide_widget["high_level"]
@@ -1612,52 +1618,45 @@ class ImageOverlay:
                         else:
                             normalized = 0.5
 
-                        # Determine phase based on next event (more reliable than trend)
-                        # Wave: 0.0 = low (left), 0.5 = high (peak), 1.0 = low (right)
+                        # Determine phase based on next event
+                        # Phase: 0.0 = at low going up, 0.5 = at high, 1.0 = at low going down
                         next_event = tide_widget["next_event_type"]
 
                         if next_event == "high":
-                            # Going towards high = rising = left half of wave (0.0 to 0.5)
-                            # normalized 0 (at low) -> position 0.0
-                            # normalized 1 (at high) -> position 0.5
-                            wave_position = normalized * 0.5
+                            # Rising: normalized 0->1 maps to phase 0->0.5
+                            phase = normalized * 0.5
                         else:
-                            # Going towards low = falling = right half of wave (0.5 to 1.0)
-                            # normalized 1 (at high) -> position 0.5
-                            # normalized 0 (at low) -> position 1.0
-                            wave_position = 0.5 + (1.0 - normalized) * 0.5
+                            # Falling: normalized 1->0 maps to phase 0.5->1.0
+                            phase = 0.5 + (1.0 - normalized) * 0.5
 
-                        # Draw sine wave curve
+                        # Marker stays in horizontal center of wave area
+                        marker_x = wave_x + int(wave_width / 2)
+
+                        # Marker Y position based on normalized level (high = top, low = bottom)
+                        wave_amplitude = wave_height / 2 * 0.8
+                        wave_center_y = wave_y + int(wave_height / 2)
+                        # normalized 1 (high) = top, normalized 0 (low) = bottom
+                        marker_y = int(wave_center_y - (normalized - 0.5) * 2 * wave_amplitude)
+
+                        # Draw sine wave that scrolls based on phase
+                        # The wave is drawn so current phase appears at center
                         wave_points = []
-                        num_points = 30
+                        num_points = 40
                         for i in range(num_points + 1):
                             t = i / num_points
-                            # Full sine wave (one complete cycle)
                             x = wave_x + int(t * wave_width)
-                            # Sine wave: starts at middle, goes up, down, back to middle
-                            y_offset = math.sin(t * 2 * math.pi - math.pi / 2)
-                            y = (
-                                wave_y
-                                + int(wave_height / 2)
-                                - int(y_offset * wave_height / 2 * 0.8)
-                            )
+                            # Offset the wave so current phase is at center (t=0.5)
+                            # Wave phase at position t: (t - 0.5) + phase
+                            wave_t = (t - 0.5) + phase
+                            y_offset = math.sin(wave_t * 2 * math.pi - math.pi / 2)
+                            y = int(wave_center_y - y_offset * wave_amplitude)
                             wave_points.append((x, y))
 
                         # Draw wave line
                         if len(wave_points) > 1:
                             draw.line(wave_points, fill=wave_color, width=2)
 
-                        # Draw marker (triangle/arrow) at current position
-                        marker_t = wave_position
-                        marker_x = wave_x + int(marker_t * wave_width)
-                        marker_y_offset = math.sin(marker_t * 2 * math.pi - math.pi / 2)
-                        marker_y = (
-                            wave_y
-                            + int(wave_height / 2)
-                            - int(marker_y_offset * wave_height / 2 * 0.8)
-                        )
-
-                        # Draw filled circle as marker
+                        # Draw filled circle as marker (centered, moves up/down)
                         marker_radius = int(font_size * 0.25)
                         draw.ellipse(
                             [
@@ -1671,13 +1670,14 @@ class ImageOverlay:
                             width=1,
                         )
 
-                        # Draw small vertical line from marker to show level
+                        # Draw vertical line from marker down to show level
                         line_bottom = wave_y + wave_height
-                        draw.line(
-                            [(marker_x, marker_y + marker_radius), (marker_x, line_bottom)],
-                            fill=(255, 255, 255, 100),
-                            width=1,
-                        )
+                        if marker_y + marker_radius < line_bottom:
+                            draw.line(
+                                [(marker_x, marker_y + marker_radius), (marker_x, line_bottom)],
+                                fill=(255, 255, 255, 100),
+                                width=1,
+                            )
 
                         # Add gap for next section
                         tide_section_width += section_gap
