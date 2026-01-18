@@ -168,6 +168,16 @@ class ShipsData:
         lines = self.format_ships_lines(ships_per_line=100)  # Effectively no limit
         return lines[0] if lines else ""
 
+    def get_ship_boxes_data(self) -> List[str]:
+        """
+        Get list of formatted ship strings for individual box rendering.
+
+        Returns:
+            List of formatted strings, one per ship (e.g., "NORDLYS 14.1 kts SE")
+        """
+        moving_ships = self.get_moving_ships_list()
+        return [self._format_ship(ship) for ship in moving_ships]
+
     def get_ships_count(self) -> int:
         """Get total number of ships in the area."""
         data = self.get_ships_data()
@@ -216,6 +226,16 @@ class ImageOverlay:
 
         # Initialize ships data fetcher
         self.ships = ShipsData(config)
+
+        # Load pre-sized ship icon for header box
+        self._ship_icon = None
+        icon_path = Path(__file__).parent.parent / "icons" / "ship2_small.png"
+        if icon_path.exists():
+            try:
+                self._ship_icon = Image.open(icon_path).convert("RGBA")
+                logger.debug(f"Loaded ship icon from {icon_path} ({self._ship_icon.size})")
+            except Exception as e:
+                logger.warning(f"Could not load ship icon: {e}")
 
         logger.info("Overlay initialized")
 
@@ -717,6 +737,134 @@ class ImageOverlay:
             color = (r, g, b, alpha)
             draw.rectangle([0, y, img_width, y + 1], fill=color)
 
+    def _draw_ship_boxes(
+        self,
+        img: Image.Image,
+        bar_height: int,
+        font: ImageFont.FreeTypeFont,
+        font_color: Tuple[int, int, int, int],
+        bg_color: List[int],
+        margin: int,
+        padding: int,
+    ) -> None:
+        """
+        Draw individual ship boxes below the overlay bar.
+
+        Each ship appears in its own rounded box with a ship icon prefix,
+        arranged horizontally from left to right.
+
+        Args:
+            img: PIL Image to draw on
+            bar_height: Height of the main overlay bar (boxes start below this)
+            font: Font to use for text
+            font_color: RGBA tuple for text color
+            bg_color: RGBA list for box background [R, G, B, A]
+            margin: Margin from edges
+            padding: Padding inside boxes
+        """
+        if not hasattr(self, "ships") or not self.ships.enabled:
+            return
+
+        ship_texts = self.ships.get_ship_boxes_data()
+        if not ship_texts:
+            return
+
+        # Create drawing context with alpha support
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        # Box styling
+        box_bg = tuple(bg_color)  # Same as overlay background
+        corner_radius = int(padding * 0.8)  # Rounded corners
+        box_gap = int(padding * 0.6)  # Gap between boxes
+        box_padding_h = int(padding * 0.8)  # Horizontal padding inside box
+        box_padding_v = int(padding * 0.7)  # Vertical padding inside box
+
+        # Starting position (below the bar, with some spacing)
+        x = margin + padding
+        y = bar_height + int(padding * 0.5)
+
+        img_width = img.size[0]
+
+        # Calculate consistent text height using reference characters (covers ascenders/descenders)
+        try:
+            ref_bbox = draw.textbbox((0, 0), "Ayg", font=font)
+            consistent_text_height = ref_bbox[3] - ref_bbox[1]
+        except Exception:
+            consistent_text_height = 20
+
+        # Use icon height for box height if icon is taller than text
+        ship_icon = self._ship_icon
+        if ship_icon and ship_icon.height > consistent_text_height:
+            box_content_height = ship_icon.height
+        else:
+            box_content_height = consistent_text_height
+
+        # Consistent box height for all ship boxes
+        consistent_box_height = box_content_height + (box_padding_v * 2)
+
+        # Draw header box with ship icon and count
+        ship_count = len(ship_texts)
+        count_text = str(ship_count)
+        icon_spacing = int(padding * 0.4)
+
+        if ship_icon:
+            # Calculate header box width: icon + spacing + count
+            try:
+                count_bbox = draw.textbbox((0, 0), count_text, font=font)
+                count_width = count_bbox[2] - count_bbox[0]
+            except Exception:
+                count_width = len(count_text) * 10
+
+            header_content_width = ship_icon.width + icon_spacing + count_width
+            header_box_width = header_content_width + (box_padding_h * 2)
+
+            # Draw header box background
+            header_box_coords = [x, y, x + header_box_width, y + consistent_box_height]
+            draw.rounded_rectangle(header_box_coords, radius=corner_radius, fill=box_bg)
+
+            # Paste icon vertically centered
+            icon_x = x + box_padding_h
+            icon_y = y + (consistent_box_height - ship_icon.height) // 2
+            img.paste(ship_icon, (int(icon_x), int(icon_y)), ship_icon)
+
+            # Draw count text vertically centered
+            text_x = icon_x + ship_icon.width + icon_spacing
+            text_y = y + (consistent_box_height // 2)
+            draw.text((text_x, text_y), count_text, fill=font_color, font=font, anchor="lm")
+
+            # Move to next box position
+            x += header_box_width + box_gap
+
+        # Draw ship name boxes (no icons)
+        for ship_text in ship_texts:
+            # Calculate text width
+            try:
+                bbox = draw.textbbox((0, 0), ship_text, font=font)
+                text_width = bbox[2] - bbox[0]
+            except Exception:
+                text_width = len(ship_text) * 10
+
+            box_width = text_width + (box_padding_h * 2)
+            box_height = consistent_box_height
+
+            # Check if box fits on current line
+            if x + box_width > img_width - margin:
+                # Wrap to next line
+                x = margin + padding
+                y += box_height + box_gap
+
+            # Draw rounded rectangle background
+            box_coords = [x, y, x + box_width, y + box_height]
+            draw.rounded_rectangle(box_coords, radius=corner_radius, fill=box_bg)
+
+            # Draw text vertically centered
+            text_x = x + box_padding_h
+            text_y = y + (box_height // 2)
+            draw.text((text_x, text_y), ship_text, fill=font_color, font=font, anchor="lm")
+
+            # Move to next box position
+            x += box_width + box_gap
+
     def apply_overlay(
         self,
         image_path: str,
@@ -801,33 +949,20 @@ class ImageOverlay:
                 layout_config = self.overlay_config.get("layout", {})
                 bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
 
-                # Determine number of lines dynamically based on actual content
+                # Fixed 2 lines for top bar (ships are rendered as separate floating boxes)
                 num_lines = 2
-                for line_num in range(3, 11):
-                    template = content_config.get(f"line_{line_num}_left") or content_config.get(
-                        f"line_{line_num}_center"
-                    )
-                    if template:
-                        try:
-                            formatted = template.format(**data)
-                            if formatted.strip():
-                                num_lines = line_num
-                            else:
-                                break  # Empty content, stop here
-                        except KeyError:
-                            break
-                    else:
-                        break
 
                 # Total bar height with extra bottom spacing
                 bar_height = (
                     (line_height * num_lines) + (padding * 2) + int(padding * bottom_padding_mult)
                 )
 
-                # Draw gradient background
+                # Get background config and color (used for bar and ship boxes)
                 bg_config = self.overlay_config.get("background", {})
+                bg_color = bg_config.get("color", [0, 0, 0, 140])
+
+                # Draw gradient background bar
                 if bg_config.get("enabled", True):
-                    bg_color = bg_config.get("color", [0, 0, 0, 140])
                     self._draw_gradient_bar(draw, img_width, bar_height, bg_color)
 
                 # Font color
@@ -912,46 +1047,16 @@ class ImageOverlay:
                         font=font_regular,
                     )
 
-                # ADDITIONAL LINES (3+) - for ships or other info
-                current_y = y2
-                for line_num in range(3, num_lines + 1):
-                    current_y += line_height
-
-                    # Check for left-aligned content first
-                    line_left_template = content_config.get(f"line_{line_num}_left", "")
-                    if line_left_template:
-                        try:
-                            line_text = line_left_template.format(**data)
-                        except KeyError as e:
-                            logger.warning(f"Unknown variable in line_{line_num}_left: {e}")
-                            line_text = line_left_template
-
-                        if line_text.strip():
-                            draw.text(
-                                (left_x, current_y), line_text, fill=font_color, font=font_regular
-                            )
-                        continue
-
-                    # Fall back to centered content
-                    line_center_template = content_config.get(f"line_{line_num}_center", "")
-                    if line_center_template:
-                        try:
-                            line_text = line_center_template.format(**data)
-                        except KeyError as e:
-                            logger.warning(f"Unknown variable in line_{line_num}_center: {e}")
-                            line_text = line_center_template
-
-                        if line_text.strip():
-                            try:
-                                bbox = draw.textbbox((0, 0), line_text, font=font_regular)
-                                text_width = bbox[2] - bbox[0]
-                            except Exception:
-                                text_width = len(line_text) * font_size * 0.6
-
-                            center_x = (img_width - text_width) // 2
-                            draw.text(
-                                (center_x, current_y), line_text, fill=font_color, font=font_regular
-                            )
+                # Draw ship boxes below the bar (floating boxes with rounded corners)
+                self._draw_ship_boxes(
+                    img=img,
+                    bar_height=bar_height,
+                    font=font_regular,
+                    font_color=font_color,
+                    bg_color=bg_color,
+                    margin=margin,
+                    padding=padding,
+                )
 
             else:
                 # Original box layout for non-bar modes
