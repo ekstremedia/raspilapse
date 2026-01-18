@@ -486,9 +486,9 @@ class AuroraData:
 
     def get_bz_arrow(self, bz_status: str) -> str:
         """Get arrow for Bz direction (south is good for aurora)."""
-        if bz_status == "south":
+        if "south" in bz_status:
             return "↓"
-        elif bz_status == "north":
+        elif "north" in bz_status:
             return "↑"
         return "→"
 
@@ -1559,7 +1559,7 @@ class ImageOverlay:
                         wave_margin = int(padding * 0.5)
 
                         # Tide text lines
-                        tide_line_1 = f"{tide_widget['level_str']} {tide_widget['arrow']} {tide_widget['target_level_str']}"
+                        tide_line_1 = f"Tide: {tide_widget['level_str']} {tide_widget['arrow']} {tide_widget['target_level_str']}"
                         tide_line_2 = (
                             f"H {tide_widget['high_time_str']} | L {tide_widget['low_time_str']}"
                         )
