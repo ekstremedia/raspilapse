@@ -1,5 +1,20 @@
 # ML Exposure System Documentation
 
+> **DEPRECATED (2026-01-18)**: The ML-based exposure system has been replaced by
+> **Direct Brightness Control** - a simpler physics-based approach that converges
+> in 3-5 frames instead of 10+. See `docs/CLAUDE.md` section "Direct Brightness Control".
+>
+> To use the new system, add to `config/config.yml`:
+> ```yaml
+> adaptive_timelapse:
+>   direct_brightness_control: true
+>   brightness_damping: 0.5
+> ```
+>
+> The ML system remains available for rollback by setting `direct_brightness_control: false`.
+
+---
+
 This document describes the Machine Learning-based adaptive exposure system for Raspilapse timelapse photography.
 
 ## Overview

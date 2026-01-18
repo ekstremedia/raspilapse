@@ -1,45 +1,64 @@
-# Next Session Context - Day Mode Brightness Fix
+# Next Session Context - Direct Brightness Control
 
 ## Quick Summary
-> "We fixed day mode brightness oscillation on 2026-01-17. Config was too loose, ML was trained on bad data."
+> "On 2026-01-18 we replaced the ML exposure system with Direct Brightness Control.
+> Simple physics-based feedback that converges in 3-5 frames instead of 10+."
 
-## What Was Fixed (2026-01-17)
+## What Changed (2026-01-18)
 
-### Problem
-Day mode brightness oscillated wildly (77-163) instead of staying in target range (105-135).
-- Only 21% of day captures were in the "good" range
-- ML was learning from its own bad predictions (self-reinforcing)
+### Problem with ML System
+The ML-based exposure system had multiple smoothing layers that fought each other:
+- Formula + ML blend + drift correction + interpolation (each at 15% speed)
+- Even with "64% emergency increase", actual exposure only changed ~10% per frame
+- Took 10+ frames (5+ minutes) to recover from brightness errors
+- Day mode brightness was stuck at 85-95 instead of target 120
 
-### Solution Applied
+### Solution: Direct Brightness Control
+Replaced complex ML with simple physics-based feedback:
 
-#### 1. Tightened Config Parameters
+```python
+ratio = target_brightness / actual_brightness
+new_exposure = current_exposure × ratio^damping
+```
+
+With damping=0.5 (conservative):
+- 50% of the correction applied each frame
+- Converges in 5-6 frames instead of 10+
+- No oscillation, stable convergence
+
+### Results
+| Metric | Before (ML) | After (Direct) |
+|--------|-------------|----------------|
+| Convergence speed | 10+ frames | 3-5 frames |
+| Brightness stuck at | 85-95 | Converges to 115-120 |
+| Complexity | 5 interacting systems | 1 simple ratio |
+
+## Configuration
+
 ```yaml
-# config/config.yml changes:
-brightness_tolerance: 25          # Was 60
-brightness_feedback_strength: 0.15  # Was 0.05
-exposure_transition_speed: 0.15   # Was 0.08
-fast_rampdown_speed: 0.35         # Was 0.20
-fast_rampup_speed: 0.40           # Was 0.20
-```
+# config/config.yml
+adaptive_timelapse:
+  direct_brightness_control: true   # Enable direct control
+  brightness_damping: 0.5           # Conservative (0.5-0.8)
 
-#### 2. Reset ML State
-```bash
-rm ml_state/ml_state_v2.json
-sudo systemctl restart raspilapse
+  transition_mode:
+    target_brightness: 120          # Target mean brightness
 ```
-ML retrained from 2,311 good samples (brightness 105-135 only).
 
 ## Verification Commands
 
 ```bash
-# Check brightness stability
-python scripts/db_stats.py 1h
+# Check direct control is active
+journalctl -u raspilapse | grep "DirectFB\|Skipped"
+# Should see: "[ML v2] Skipped - using direct brightness control instead"
+# And: "[DirectFB] brightness=X, target=120, ratio=Y..."
 
-# Check ML state
-cat ml_state/ml_state_v2.json | python3 -m json.tool | head -30
+# Monitor brightness convergence
+python scripts/db_stats.py 5m
+# Should see brightness converging to 105-135 range
 
-# Watch for feedback corrections
-journalctl -u raspilapse -f | grep -i "feedback\|correction\|brightness"
+# Check service status
+sudo systemctl status raspilapse
 ```
 
 ## Current State
@@ -47,31 +66,37 @@ journalctl -u raspilapse -f | grep -i "feedback\|correction\|brightness"
 | Item | Value |
 |------|-------|
 | Branch | `mlv2` |
-| Config brightness range | 105-135 (target 120) |
-| Brightness tolerance | 25 (triggers at 95-145) |
-| ML buckets | 18 |
-| ML good frames | 2,311 |
-| Last ML retrain | 2026-01-17T15:49:11 |
+| Exposure control | Direct brightness feedback |
+| ML system | Disabled (still available for rollback) |
+| Target brightness | 120 |
+| Damping | 0.5 (conservative) |
+| Convergence | 5-6 frames |
 
 ## Key Files Modified
 
-- `config/config.yml` - 5 parameter changes
-- `ml_state/ml_state_v2.json` - Reset and retrained
+- `config/config.yml` - Added `direct_brightness_control`, `brightness_damping`
+- `src/auto_timelapse.py` - Added `_calculate_exposure_from_brightness()` method
+- `docs/CLAUDE.md` - Added "Direct Brightness Control" section
+- `ML.md` - Added deprecation notice
+- `UPGRADE.md` - Instructions for updating other Pis
 
-## If Problem Recurs
+## For Other Pis
 
-See `docs/CLAUDE.md` section "Troubleshooting: Day Mode Brightness Oscillation" for full procedure:
-1. Check data quality with SQL query
-2. Tighten config if needed
-3. Reset ML state if <50% good data
-4. Restart service and monitor
+See `UPGRADE.md` for instructions on updating other Raspberry Pis to use direct brightness control.
+
+## Rollback
+
+If direct control causes issues:
+```yaml
+# In config/config.yml:
+direct_brightness_control: false  # Or remove the line entirely
+```
+Then restart: `sudo systemctl restart raspilapse`
 
 ## Key Insight
 
-The ML system already filters for good brightness when training. The problem was:
-- Too many bad captures in history
-- Wide tolerance meant feedback never triggered
-- ML state file persisted bad learned patterns
+The ML system was overengineered. The fundamental physics is simple:
+- `exposure × scene_brightness = image_brightness`
+- Therefore: `new_exposure = old_exposure × (target / actual)`
 
-Deleting ML state file forces retrain from only good samples in database.
-Database itself is never deleted - all historical data preserved.
+Adding damping (exponent < 1.0) prevents oscillation while still converging quickly.

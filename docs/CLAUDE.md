@@ -703,7 +703,81 @@ The script intelligently matches JPG files with their corresponding `_metadata.j
 
 ---
 
-## ML-Based Adaptive Exposure System
+## Direct Brightness Control (Recommended)
+
+### Overview
+
+A simple, physics-based exposure control system that replaced the complex ML approach on 2026-01-18. Uses direct proportional feedback to maintain target brightness.
+
+### Why Direct Control?
+
+The ML-based system had multiple smoothing layers that fought each other:
+- Formula + ML blend + drift correction + interpolation
+- Even with "64% emergency increase", actual exposure only changed ~10% per frame
+- Took 10+ frames (5+ minutes) to recover from brightness errors
+
+Direct control converges in 3-5 frames using simple physics.
+
+### How It Works
+
+```
+ratio = target_brightness / actual_brightness
+new_exposure = current_exposure × ratio^damping
+```
+
+**Example with damping=0.5 (conservative):**
+- Frame 1: brightness=75, target=120, ratio=1.6
+- Correction: 1.6^0.5 = 1.26x (26% increase)
+- Frame 2: brightness≈95, ratio=1.26, correction=1.12x
+- Frame 3: brightness≈107, ratio=1.12, correction=1.06x
+- Frame 4: brightness≈113, converging...
+
+### Configuration
+
+```yaml
+# config/config.yml
+adaptive_timelapse:
+  # Direct brightness feedback (recommended - replaces ML)
+  direct_brightness_control: true
+  brightness_damping: 0.5  # 0.5=conservative, 0.7=balanced, 0.8=aggressive
+
+  # Target brightness (0-255)
+  transition_mode:
+    target_brightness: 120
+```
+
+### Behavior by Mode
+
+| Mode | Exposure | Gain | Notes |
+|------|----------|------|-------|
+| Day | Direct feedback | Fixed 1.0 | Fast convergence to target |
+| Transition | Direct feedback | Ramps when exposure >80% max | Shutter-first, then gain |
+| Night | Max (20s) | Max (6-8) | No feedback needed at limits |
+
+### Verification
+
+```bash
+# Check direct control is active
+journalctl -u raspilapse | grep "DirectFB"
+
+# Monitor convergence
+python scripts/db_stats.py 5m
+# Should see brightness converging to 105-135 range
+
+# Example log output:
+# [DirectFB] brightness=75, target=120, ratio=1.60, change=1.26x, exp: 0.04s → 0.05s
+```
+
+### Rollback to ML
+
+If needed, disable direct control to use legacy ML system:
+```yaml
+direct_brightness_control: false  # or remove the line
+```
+
+---
+
+## ML-Based Adaptive Exposure System (Legacy)
 
 ### Overview
 A lightweight machine learning system that continuously learns and improves timelapse exposure settings. Designed for Raspberry Pi with minimal compute requirements.

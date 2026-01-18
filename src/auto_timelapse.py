@@ -334,12 +334,22 @@ class AdaptiveTimelapse:
         - Trains only on good frames (brightness 105-135) from database
         - Uses sun elevation for time periods (not clock hours)
         - Doesn't learn from bad frames, avoiding reinforced mistakes
+
+        NOTE: When direct_brightness_control is enabled, ML is skipped
+        in favor of simple physics-based feedback (faster, more predictable).
         """
+        # Skip ML when using direct brightness control
+        adaptive_config = self.config.get("adaptive_timelapse", {})
+        if adaptive_config.get("direct_brightness_control", False):
+            logger.info("[ML v2] Skipped - using direct brightness control instead")
+            self._ml_enabled = False
+            return
+
         if MLExposurePredictorV2 is None:
             logger.debug("[ML v2] MLExposurePredictorV2 not available")
             return
 
-        ml_config = self.config.get("adaptive_timelapse", {}).get("ml_exposure", {})
+        ml_config = adaptive_config.get("ml_exposure", {})
         self._ml_enabled = ml_config.get("enabled", False)
 
         if not self._ml_enabled:
@@ -1538,6 +1548,75 @@ class AdaptiveTimelapse:
 
         return target_exposure
 
+    def _calculate_exposure_from_brightness(
+        self, actual_brightness: float, lux: float = None
+    ) -> float:
+        """
+        Direct proportional brightness control.
+
+        Simple physics: exposure * brightness = constant (for fixed scene)
+        Therefore: new_exposure = current_exposure * (target / actual) ^ damping
+
+        This replaces the complex ML+formula+interpolation system with
+        a simple, predictable feedback loop that converges in 3-5 frames
+        instead of 10+ frames.
+
+        Args:
+            actual_brightness: Measured mean brightness (0-255)
+            lux: Current lux (used for initial estimate on first frame)
+
+        Returns:
+            Target exposure in seconds
+        """
+        adaptive_config = self.config["adaptive_timelapse"]
+        night_max = adaptive_config["night_mode"]["max_exposure_time"]
+
+        # Handle missing or invalid brightness
+        if actual_brightness is None or actual_brightness < 1:
+            actual_brightness = 1  # Prevent division by zero
+
+        # First frame - use lux-based estimate if available
+        if self._last_exposure_time is None:
+            if lux is not None and lux > 0:
+                reference_lux = adaptive_config.get("reference_lux", 3.8)
+                initial = (night_max * reference_lux) / lux
+                initial = max(0.0001, min(night_max, initial))
+                logger.info(
+                    f"[DirectFB] First frame: using lux-based estimate {initial:.4f}s "
+                    f"(lux={lux:.1f})"
+                )
+                return initial
+            logger.info("[DirectFB] First frame: using default 20ms")
+            return 0.02  # 20ms safe default
+
+        # Get damping factor from config (0.5 = conservative)
+        damping = adaptive_config.get("brightness_damping", 0.5)
+
+        # Calculate correction ratio
+        ratio = self._target_brightness / actual_brightness
+
+        # Clamp ratio to prevent extreme single-frame corrections
+        # Max 4x change per frame (ratio^0.5 = 2x actual change with 0.5 damping)
+        ratio = max(0.25, min(4.0, ratio))
+
+        # Apply ratio with damping: new = current * ratio^damping
+        new_exposure = self._last_exposure_time * (ratio**damping)
+
+        # Clamp to valid range
+        new_exposure = max(0.0001, min(night_max, new_exposure))
+
+        # Log significant corrections
+        if abs(ratio - 1.0) > 0.1:
+            actual_change = ratio**damping
+            logger.info(
+                f"[DirectFB] brightness={actual_brightness:.0f}, "
+                f"target={self._target_brightness}, ratio={ratio:.2f}, "
+                f"change={actual_change:.2f}x, "
+                f"exp: {self._last_exposure_time:.4f}s → {new_exposure:.4f}s"
+            )
+
+        return new_exposure
+
     def _update_day_wb_reference(self, metadata: Dict):
         """
         Update day white balance reference from camera's AWB in bright conditions.
@@ -1970,12 +2049,32 @@ class AdaptiveTimelapse:
             day = adaptive_config["day_mode"]
             transition_config = adaptive_config.get("transition_mode", {})
 
-            # Check if smooth exposure/gain transitions are enabled
-            smooth_exposure_enabled = transition_config.get("smooth_exposure_in_day_mode", True)
+            # Check if direct brightness control is enabled (new simple approach)
+            direct_control = adaptive_config.get("direct_brightness_control", False)
 
-            if smooth_exposure_enabled and lux is not None:
-                # SMOOTH TRANSITION MODE: Use calculated exposure/gain based on lux
-                # This prevents ISO jumps by gradually adjusting values
+            if direct_control:
+                # DIRECT BRIGHTNESS FEEDBACK: Simple physics-based control
+                # No ML, no complex interpolation - just ratio-based correction
+                settings["AeEnable"] = 0
+
+                # Calculate exposure directly from brightness error
+                target_exposure = self._calculate_exposure_from_brightness(
+                    self._last_brightness, lux
+                )
+
+                # Keep gain minimal in day mode
+                target_gain = self._interpolate_gain(1.0)
+
+                # Apply directly - no exposure interpolation!
+                settings["ExposureTime"] = int(target_exposure * 1_000_000)
+                settings["AnalogueGain"] = target_gain
+
+                # Update last exposure for next frame's feedback calculation
+                self._last_exposure_time = target_exposure
+
+            # Check if smooth exposure/gain transitions are enabled (legacy)
+            elif transition_config.get("smooth_exposure_in_day_mode", True) and lux is not None:
+                # LEGACY: Use ML/formula with interpolation
                 settings["AeEnable"] = 0
 
                 # Calculate target values based on current lux
@@ -2046,7 +2145,66 @@ class AdaptiveTimelapse:
             # Disable auto-exposure for manual control
             settings["AeEnable"] = 0
 
-            if transition.get("smooth_transition", True) and lux is not None:
+            # Check if direct brightness control is enabled (new simple approach)
+            direct_control = adaptive_config.get("direct_brightness_control", False)
+
+            if direct_control and lux is not None:
+                # DIRECT BRIGHTNESS FEEDBACK for transition mode
+                # Simple physics-based control - no ML, no complex interpolation
+                night_max = adaptive_config["night_mode"]["max_exposure_time"]
+                night_gain = adaptive_config["night_mode"]["analogue_gain"]
+
+                # Calculate exposure directly from brightness error
+                target_exposure = self._calculate_exposure_from_brightness(
+                    self._last_brightness, lux
+                )
+
+                # Gain ramping: keep gain at 1.0 until shutter approaches max
+                if target_exposure >= night_max * 0.8:
+                    # Shutter approaching max (80% of 20s = 16s)
+                    # Start increasing gain to compensate
+                    # Calculate how much extra light we need
+                    exposure_shortfall = target_exposure / (night_max * 0.8)
+                    target_gain = min(night_gain, exposure_shortfall)
+                    # Cap exposure at 80% of max when boosting gain
+                    target_exposure = night_max * 0.8
+                else:
+                    target_gain = 1.0
+
+                # Smooth gain interpolation (but NOT exposure - direct is fine)
+                smooth_gain = self._interpolate_gain(target_gain)
+
+                # Apply directly - no exposure interpolation!
+                settings["ExposureTime"] = int(target_exposure * 1_000_000)
+                settings["AnalogueGain"] = smooth_gain
+
+                # Update last exposure for next frame's feedback calculation
+                self._last_exposure_time = target_exposure
+
+                # Calculate position for WB interpolation
+                night_threshold = thresholds["night"]
+                day_threshold = thresholds["day"]
+                lux_range = day_threshold - night_threshold
+                position = (lux - night_threshold) / lux_range
+                position = max(0.0, min(1.0, position))
+
+                # ALWAYS use manual WB during transitions to prevent flickering
+                settings["AwbEnable"] = 0
+                target_gains = self._get_target_colour_gains(mode, position)
+                smooth_gains = self._interpolate_colour_gains(target_gains, position)
+                settings["ColourGains"] = smooth_gains
+
+                brightness_str = (
+                    f"{self._last_brightness:.1f}" if self._last_brightness is not None else "N/A"
+                )
+                logger.info(
+                    f"Transition mode (direct): lux={lux:.2f}, brightness={brightness_str}, "
+                    f"exposure={target_exposure:.4f}s, gain={smooth_gain:.2f}, "
+                    f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
+                )
+
+            elif transition.get("smooth_transition", True) and lux is not None:
+                # LEGACY: Complex ML/formula with interpolation
                 # Calculate position in transition range for WB interpolation
                 night_threshold = thresholds["night"]
                 day_threshold = thresholds["day"]

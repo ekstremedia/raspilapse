@@ -803,9 +803,9 @@ class ImageOverlay:
         box_padding_h = int(padding * 0.8)  # Horizontal padding inside box
         box_padding_v = int(padding * 0.7)  # Vertical padding inside box
 
-        # Starting position (below the bar, with some spacing)
+        # Starting position (below the bar, with same spacing as left margin)
         x = margin + padding
-        y = bar_height + int(padding * 0.5)
+        y = bar_height + padding  # Match visual spacing with left margin
 
         img_width = img.size[0]
 

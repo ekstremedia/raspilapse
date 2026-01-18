@@ -2429,5 +2429,165 @@ class TestP95HighlightProtection:
         assert timelapse._last_p95 is None
 
 
+class TestDirectBrightnessControl:
+    """Tests for direct brightness control (_calculate_exposure_from_brightness)."""
+
+    @pytest.fixture
+    def direct_control_config_file(self):
+        """Create config file with direct brightness control enabled."""
+        config_data = {
+            "camera": {
+                "resolution": {"width": 1280, "height": 720},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": "test_photos",
+                "filename_pattern": "{name}_{counter}.jpg",
+                "project_name": "test_project",
+                "quality": 85,
+            },
+            "system": {"create_directories": True, "save_metadata": False},
+            "overlay": {"enabled": False},
+            "adaptive_timelapse": {
+                "enabled": True,
+                "interval": 30,
+                "num_frames": 0,
+                "reference_lux": 3.8,
+                "direct_brightness_control": True,
+                "brightness_damping": 0.5,
+                "light_thresholds": {"night": 10, "day": 100},
+                "night_mode": {
+                    "max_exposure_time": 20.0,
+                    "analogue_gain": 6,
+                    "awb_enable": False,
+                },
+                "day_mode": {"awb_enable": True},
+                "transition_mode": {
+                    "smooth_transition": True,
+                    "target_brightness": 120,
+                },
+                "test_shot": {
+                    "enabled": True,
+                    "exposure_time": 0.1,
+                    "analogue_gain": 1.0,
+                },
+            },
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        yield config_path
+        os.unlink(config_path)
+
+    def test_first_frame_uses_lux_estimate(self, direct_control_config_file):
+        """Test first frame uses lux-based initial estimate."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = None
+
+        # With lux=1000, formula: (20 * 3.8) / 1000 = 0.076s
+        exposure = timelapse._calculate_exposure_from_brightness(100, lux=1000)
+        assert 0.05 < exposure < 0.1
+
+    def test_first_frame_default_without_lux(self, direct_control_config_file):
+        """Test first frame uses 20ms default when no lux available."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = None
+
+        exposure = timelapse._calculate_exposure_from_brightness(100, lux=None)
+        assert exposure == 0.02  # 20ms default
+
+    def test_increases_exposure_when_too_dark(self, direct_control_config_file):
+        """Test exposure increases when brightness is below target."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+        timelapse._target_brightness = 120
+
+        # Brightness 60 is half of target 120
+        # ratio = 120/60 = 2.0, change = 2.0^0.5 = 1.41x
+        new_exposure = timelapse._calculate_exposure_from_brightness(60, lux=500)
+        assert new_exposure > 0.1  # Should increase
+        assert 0.12 < new_exposure < 0.16  # ~1.41x increase
+
+    def test_decreases_exposure_when_too_bright(self, direct_control_config_file):
+        """Test exposure decreases when brightness is above target."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+        timelapse._target_brightness = 120
+
+        # Brightness 240 is double target 120
+        # ratio = 120/240 = 0.5, change = 0.5^0.5 = 0.71x
+        new_exposure = timelapse._calculate_exposure_from_brightness(240, lux=500)
+        assert new_exposure < 0.1  # Should decrease
+        assert 0.06 < new_exposure < 0.08  # ~0.71x decrease
+
+    def test_no_change_at_target_brightness(self, direct_control_config_file):
+        """Test minimal change when at target brightness."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+        timelapse._target_brightness = 120
+
+        # Brightness exactly at target
+        new_exposure = timelapse._calculate_exposure_from_brightness(120, lux=500)
+        assert 0.099 < new_exposure < 0.101  # Essentially unchanged
+
+    def test_ratio_clamped_to_max_4x(self, direct_control_config_file):
+        """Test correction ratio is clamped to prevent extreme changes."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+        timelapse._target_brightness = 120
+
+        # Brightness 1 would give ratio of 120, but should clamp to 4
+        # 4^0.5 = 2x max change
+        new_exposure = timelapse._calculate_exposure_from_brightness(1, lux=500)
+        assert new_exposure <= 0.2  # Max 2x change with 0.5 damping
+
+    def test_exposure_clamped_to_max(self, direct_control_config_file):
+        """Test exposure is clamped to max (20s)."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 15.0
+        timelapse._target_brightness = 120
+
+        # Very dark - would want to increase exposure beyond 20s
+        new_exposure = timelapse._calculate_exposure_from_brightness(10, lux=1)
+        assert new_exposure <= 20.0  # Clamped to max
+
+    def test_handles_none_brightness(self, direct_control_config_file):
+        """Test handles None brightness gracefully."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+
+        # Should treat None as 1 (minimum)
+        new_exposure = timelapse._calculate_exposure_from_brightness(None, lux=500)
+        assert new_exposure > 0.1  # Should increase (treating as very dark)
+
+    def test_damping_affects_correction_strength(self, direct_control_config_file):
+        """Test different damping values affect correction strength."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+        timelapse._target_brightness = 120
+
+        # Test with 0.5 damping (from config)
+        new_exp_05 = timelapse._calculate_exposure_from_brightness(60, lux=500)
+
+        # Manually set higher damping
+        timelapse.config["adaptive_timelapse"]["brightness_damping"] = 0.8
+        timelapse._last_exposure_time = 0.1
+        new_exp_08 = timelapse._calculate_exposure_from_brightness(60, lux=500)
+
+        # Higher damping = larger correction
+        assert new_exp_08 > new_exp_05
+
+    def test_ml_skipped_when_direct_control_enabled(self, direct_control_config_file):
+        """Test ML is not initialized when direct control is enabled."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+
+        # ML should be disabled
+        assert timelapse._ml_enabled is False
+        assert timelapse._ml_predictor is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
