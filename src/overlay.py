@@ -802,10 +802,11 @@ class ImageOverlay:
         box_gap = int(padding * 0.6)  # Gap between boxes
         box_padding_h = int(padding * 0.8)  # Horizontal padding inside box
         box_padding_v = int(padding * 0.7)  # Vertical padding inside box
+        box_margin = int(padding * 0.5)  # Margin from bar and left edge
 
-        # Starting position (below the bar, with same spacing as left margin)
-        x = margin + padding
-        y = bar_height + padding  # Match visual spacing with left margin
+        # Starting position (below the bar, same gap on top and left)
+        x = box_margin
+        y = bar_height + box_margin
 
         img_width = img.size[0]
 
@@ -874,7 +875,7 @@ class ImageOverlay:
             # Check if box fits on current line
             if x + box_width > img_width - margin:
                 # Wrap to next line
-                x = margin + padding
+                x = box_margin
                 y += box_height + box_gap
 
             # Draw rounded rectangle background
