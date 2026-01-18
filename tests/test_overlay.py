@@ -1114,7 +1114,7 @@ class TestShipBoxesRendering:
                 {"name": "Test Ship 1", "mmsi": "123456789"},
                 {"name": "Test Ship 2", "mmsi": "987654321"},
             ],
-            "stationary_ships": []
+            "stationary_ships": [],
         }
         with open(ships_file_path, "w") as f:
             json.dump(ships_data, f)
@@ -1134,7 +1134,9 @@ class TestShipBoxesRendering:
             if os.path.exists(ships_file_path):
                 os.unlink(ships_file_path)
 
-    def test_draw_ship_boxes_without_ships_data(self, test_overlay_config, test_image, test_metadata):
+    def test_draw_ship_boxes_without_ships_data(
+        self, test_overlay_config, test_image, test_metadata
+    ):
         """Test top-bar mode when ships file is empty or missing."""
         # Use a unique nonexistent path in temp directory
         nonexistent_path = os.path.join(tempfile.gettempdir(), "nonexistent_ships_test.json")
