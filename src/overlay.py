@@ -428,6 +428,102 @@ class TideData:
         }
 
 
+class AuroraData:
+    """Handles loading and formatting aurora data from pi-overlay-data."""
+
+    def __init__(self, config: Dict):
+        """
+        Initialize aurora data handler.
+
+        Args:
+            config: Full configuration dictionary
+        """
+        self.config = config
+        self.aurora_config = config.get("aurora", {})
+        self.enabled = self.aurora_config.get("enabled", False)
+        self.aurora_file = self.aurora_config.get("aurora_file", "")
+        self._cache: Optional[Dict] = None
+        self._cache_time: Optional[datetime] = None
+        self._cache_duration = 60  # Cache for 60 seconds
+
+    def get_aurora_data(self) -> Optional[Dict]:
+        """
+        Load aurora data from JSON file with caching.
+
+        Returns:
+            Aurora data dictionary or None if unavailable
+        """
+        if not self.enabled or not self.aurora_file:
+            return None
+
+        # Check cache
+        now = datetime.now()
+        if self._cache is not None and self._cache_time is not None:
+            age = (now - self._cache_time).total_seconds()
+            if age < self._cache_duration:
+                return self._cache
+
+        # Load from file
+        try:
+            aurora_path = Path(self.aurora_file)
+            if not aurora_path.exists():
+                logger.warning(f"Aurora file not found: {self.aurora_file}")
+                return self._cache  # Return stale cache if available
+
+            with open(aurora_path, "r") as f:
+                data = json.load(f)
+
+            # Extract aurora_data from the cache wrapper
+            aurora_data = data.get("aurora_data", data)
+
+            self._cache = aurora_data
+            self._cache_time = now
+            return aurora_data
+
+        except Exception as e:
+            logger.warning(f"Failed to load aurora data: {e}")
+            return self._cache  # Return stale cache if available
+
+    def get_bz_arrow(self, bz_status: str) -> str:
+        """Get arrow for Bz direction (south is good for aurora)."""
+        if bz_status == "south":
+            return "↓"
+        elif bz_status == "north":
+            return "↑"
+        return "→"
+
+    def get_widget_data(self) -> Optional[Dict]:
+        """
+        Get formatted data for the aurora widget display.
+
+        Returns:
+            Dictionary with widget display data or None
+        """
+        data = self.get_aurora_data()
+        if data is None:
+            return None
+
+        kp = data.get("kp", 0)
+        bz = data.get("bz", 0)
+        bz_status = data.get("bz_status", "unknown")
+        speed = data.get("speed", 0)
+        storm = data.get("storm", "G0")
+        favorable = data.get("favorable", False)
+
+        return {
+            "kp": kp,
+            "kp_str": f"{kp:.1f}" if isinstance(kp, float) else str(kp),
+            "bz": bz,
+            "bz_str": f"{bz:.1f}" if isinstance(bz, float) else str(bz),
+            "bz_status": bz_status,
+            "bz_arrow": self.get_bz_arrow(bz_status),
+            "speed": speed,
+            "speed_str": f"{speed}",
+            "storm": storm,
+            "favorable": favorable,
+        }
+
+
 class ImageOverlay:
     """Handles adding text overlays to images."""
 
@@ -463,6 +559,9 @@ class ImageOverlay:
 
         # Initialize tide data fetcher
         self.tide = TideData(config)
+
+        # Initialize aurora data fetcher
+        self.aurora = AuroraData(config)
 
         # Load pre-sized ship icon for header box
         self._ship_icon = None
@@ -1397,12 +1496,58 @@ class ImageOverlay:
                         line_2_left = line_2_left_template
                 draw.text((left_x, y2), line_2_left, fill=font_color, font=font_regular)
 
-                # RIGHT SIDE - Calculate tide section first to know offset
+                # RIGHT SIDE - Calculate aurora and tide sections first to know offset
 
-                # Tide section (far right) - only if enabled
-                tide_section_width = 0
                 section_gap = int(padding * 2)  # Gap between sections
+                aurora_section_width = 0
+                tide_section_width = 0
 
+                # Aurora section (far right) - only if enabled
+                if hasattr(self, "aurora") and self.aurora.enabled:
+                    aurora_widget = self.aurora.get_widget_data()
+                    if aurora_widget:
+                        # Aurora text lines
+                        # Line 1: Kp: 2.3 | Bz: 0.9↑
+                        aurora_line_1 = f"Kp: {aurora_widget['kp_str']} | Bz: {aurora_widget['bz_str']}{aurora_widget['bz_arrow']}"
+                        # Line 2: G0 | 556 km/s
+                        aurora_line_2 = (
+                            f"{aurora_widget['storm']} | {aurora_widget['speed_str']} km/s"
+                        )
+
+                        # Calculate text width
+                        try:
+                            bbox1 = draw.textbbox((0, 0), aurora_line_1, font=font_regular)
+                            bbox2 = draw.textbbox((0, 0), aurora_line_2, font=font_regular)
+                            aurora_text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
+                        except Exception:
+                            aurora_text_width = (
+                                max(len(aurora_line_1), len(aurora_line_2)) * font_size * 0.6
+                            )
+
+                        aurora_section_width = aurora_text_width
+
+                        # Position for aurora section (far right)
+                        aurora_x = img_width - aurora_section_width - margin - padding
+
+                        # Draw aurora text
+                        draw.text((aurora_x, y1), aurora_line_1, fill=font_color, font=font_regular)
+                        draw.text((aurora_x, y2), aurora_line_2, fill=font_color, font=font_regular)
+
+                        # Add gap for next section
+                        aurora_section_width += section_gap
+
+                        # Draw subtle vertical divider line to left of aurora section
+                        divider_x = aurora_x - int(section_gap * 0.5)
+                        divider_y1 = y1
+                        divider_y2 = y2 + line_height - int(padding * 0.3)
+                        divider_color = font_color[:3] + (60,)  # Very subtle
+                        draw.line(
+                            [(divider_x, divider_y1), (divider_x, divider_y2)],
+                            fill=divider_color,
+                            width=1,
+                        )
+
+                # Tide section (to left of aurora) - only if enabled
                 if hasattr(self, "tide") and self.tide.enabled:
                     tide_widget = self.tide.get_widget_data()
                     if tide_widget:
@@ -1430,8 +1575,10 @@ class ImageOverlay:
                         # Total tide section width: text + margin + wave
                         tide_section_width = text_width + wave_margin + wave_width
 
-                        # Position for tide section (far right) - text first, then wave
-                        tide_x = img_width - tide_section_width - margin - padding
+                        # Position for tide section (to left of aurora) - text first, then wave
+                        tide_x = (
+                            img_width - tide_section_width - aurora_section_width - margin - padding
+                        )
                         text_x = tide_x
                         wave_x = tide_x + text_width + wave_margin
 
@@ -1554,7 +1701,14 @@ class ImageOverlay:
                     except Exception:
                         text_width = len(line_1_right) * font_size * 0.6
 
-                    right_x = img_width - text_width - margin - padding - tide_section_width
+                    right_x = (
+                        img_width
+                        - text_width
+                        - margin
+                        - padding
+                        - tide_section_width
+                        - aurora_section_width
+                    )
                     draw.text(
                         (right_x, y1),
                         line_1_right,
@@ -1577,7 +1731,14 @@ class ImageOverlay:
                     except Exception:
                         text_width = len(line_2_right) * font_size * 0.6
 
-                    right_x = img_width - text_width - margin - padding - tide_section_width
+                    right_x = (
+                        img_width
+                        - text_width
+                        - margin
+                        - padding
+                        - tide_section_width
+                        - aurora_section_width
+                    )
                     draw.text(
                         (right_x, y2),
                         line_2_right,
