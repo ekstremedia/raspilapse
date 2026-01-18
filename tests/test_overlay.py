@@ -1054,3 +1054,114 @@ class TestLocaleDatetimeEdgeCases:
         result = overlay._format_localized_datetime(dt)
         assert isinstance(result, str)
         assert len(result) > 0
+
+
+class TestPillowCompatibility:
+    """Test Pillow version compatibility for required features."""
+
+    def test_pillow_has_rounded_rectangle(self):
+        """
+        Ensure Pillow has rounded_rectangle method.
+
+        This method was added in Pillow 8.2.0 and is required for ship box rendering.
+        If this test fails, upgrade Pillow: pip install --upgrade Pillow
+        """
+        from PIL import ImageDraw
+
+        # Create a test image and draw context
+        test_img = Image.new("RGBA", (100, 100), color=(255, 255, 255, 0))
+        draw = ImageDraw.Draw(test_img, "RGBA")
+
+        # Verify rounded_rectangle method exists
+        assert hasattr(draw, "rounded_rectangle"), (
+            "Pillow version is too old. rounded_rectangle requires Pillow >= 8.2.0. "
+            "Please upgrade: pip install --upgrade Pillow"
+        )
+
+        # Verify it works without error
+        draw.rounded_rectangle([10, 10, 50, 50], radius=5, fill=(0, 0, 0, 128))
+
+    def test_pillow_version_minimum(self):
+        """Verify Pillow version meets minimum requirement for all features."""
+        from PIL import __version__ as pillow_version
+        from packaging import version
+
+        min_version = "8.2.0"
+        assert version.parse(pillow_version) >= version.parse(min_version), (
+            f"Pillow version {pillow_version} is below minimum required {min_version}. "
+            f"Please upgrade: pip install --upgrade Pillow"
+        )
+
+
+class TestShipBoxesRendering:
+    """Test ship boxes overlay rendering."""
+
+    def test_draw_ship_boxes_with_ships_data(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar mode with ship boxes when ships data is present."""
+        test_overlay_config["overlay"]["position"] = "top-bar"
+        test_overlay_config["barentswatch"] = {
+            "enabled": True,
+            "ships_file": "/tmp/test_ships.json",
+        }
+
+        # Create mock ships data file
+        ships_data = {
+            "ships": [
+                {"name": "Test Ship 1", "mmsi": "123456789"},
+                {"name": "Test Ship 2", "mmsi": "987654321"},
+            ],
+            "stationary_ships": []
+        }
+        with open("/tmp/test_ships.json", "w") as f:
+            json.dump(ships_data, f)
+
+        try:
+            overlay = ImageOverlay(test_overlay_config)
+            output_path = test_image.replace(".jpg", "_ships.jpg")
+
+            # This should not fail - if rounded_rectangle is missing, this test will catch it
+            result = overlay.apply_overlay(
+                test_image, test_metadata, mode="day", output_path=output_path
+            )
+
+            assert os.path.exists(result)
+            os.unlink(output_path)
+        finally:
+            if os.path.exists("/tmp/test_ships.json"):
+                os.unlink("/tmp/test_ships.json")
+
+    def test_draw_ship_boxes_without_ships_data(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar mode when ships file is empty or missing."""
+        test_overlay_config["overlay"]["position"] = "top-bar"
+        test_overlay_config["barentswatch"] = {
+            "enabled": True,
+            "ships_file": "/tmp/nonexistent_ships.json",
+        }
+
+        overlay = ImageOverlay(test_overlay_config)
+        output_path = test_image.replace(".jpg", "_noships.jpg")
+
+        # Should succeed even without ships data
+        result = overlay.apply_overlay(
+            test_image, test_metadata, mode="day", output_path=output_path
+        )
+
+        assert os.path.exists(result)
+        os.unlink(output_path)
+
+    def test_ship_boxes_disabled(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar mode with ships feature disabled."""
+        test_overlay_config["overlay"]["position"] = "top-bar"
+        test_overlay_config["barentswatch"] = {
+            "enabled": False,
+        }
+
+        overlay = ImageOverlay(test_overlay_config)
+        output_path = test_image.replace(".jpg", "_ships_disabled.jpg")
+
+        result = overlay.apply_overlay(
+            test_image, test_metadata, mode="day", output_path=output_path
+        )
+
+        assert os.path.exists(result)
+        os.unlink(output_path)
