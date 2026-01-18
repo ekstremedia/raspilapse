@@ -275,10 +275,67 @@ class TideData:
             return self._cache  # Return stale cache if available
 
     def get_current_level(self) -> Optional[float]:
-        """Get current tide level in meters."""
+        """
+        Get current tide level in meters, interpolated from points array.
+
+        Uses the points array to find the level for the current time,
+        interpolating between the two nearest points.
+        """
         data = self.get_tide_data()
         if data is None:
             return None
+
+        points = data.get("points", [])
+        if not points:
+            # Fallback to static current level if no points
+            current = data.get("current", {})
+            level_cm = current.get("level_cm")
+            if level_cm is not None:
+                return level_cm / 100.0
+            return None
+
+        now = datetime.now().astimezone()
+
+        # Find the two points surrounding the current time
+        prev_point = None
+        next_point = None
+
+        for point in points:
+            point_time = self._parse_time(point.get("time"))
+            if point_time is None:
+                continue
+
+            if point_time <= now:
+                prev_point = point
+            elif next_point is None:
+                next_point = point
+                break
+
+        # If we have both points, interpolate
+        if prev_point and next_point:
+            prev_time = self._parse_time(prev_point["time"])
+            next_time = self._parse_time(next_point["time"])
+            prev_level = prev_point.get("level_cm", 0)
+            next_level = next_point.get("level_cm", 0)
+
+            # Calculate interpolation factor (0.0 to 1.0)
+            total_diff = (next_time - prev_time).total_seconds()
+            current_diff = (now - prev_time).total_seconds()
+
+            if total_diff > 0:
+                factor = current_diff / total_diff
+                level_cm = prev_level + (next_level - prev_level) * factor
+                return level_cm / 100.0
+
+        # If we only have previous point, use it
+        if prev_point:
+            return prev_point.get("level_cm", 0) / 100.0
+
+        # If we only have next point, use it
+        if next_point:
+            return next_point.get("level_cm", 0) / 100.0
+
+        # Fallback to static current level
         current = data.get("current", {})
         level_cm = current.get("level_cm")
         if level_cm is not None:
@@ -286,10 +343,52 @@ class TideData:
         return None
 
     def get_trend(self) -> str:
-        """Get tide trend (rising, falling, stable)."""
+        """
+        Get tide trend (rising, falling, stable) based on points array.
+
+        Calculates trend from the current interpolated position in the points array.
+        """
         data = self.get_tide_data()
         if data is None:
             return "unknown"
+
+        points = data.get("points", [])
+        if len(points) < 2:
+            # Fallback to static trend
+            current = data.get("current", {})
+            return current.get("trend", "unknown")
+
+        now = datetime.now().astimezone()
+
+        # Find the two points surrounding current time
+        prev_point = None
+        next_point = None
+
+        for point in points:
+            point_time = self._parse_time(point.get("time"))
+            if point_time is None:
+                continue
+
+            if point_time <= now:
+                prev_point = point
+            elif next_point is None:
+                next_point = point
+                break
+
+        # Determine trend from the two surrounding points
+        if prev_point and next_point:
+            prev_level = prev_point.get("level_cm", 0)
+            next_level = next_point.get("level_cm", 0)
+
+            diff = next_level - prev_level
+            if diff > 2:  # Rising threshold
+                return "rising"
+            elif diff < -2:  # Falling threshold
+                return "falling"
+            else:
+                return "stable"
+
+        # Fallback to static trend
         current = data.get("current", {})
         return current.get("trend", "unknown")
 
