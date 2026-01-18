@@ -218,6 +218,216 @@ class ShipsData:
         return len([s for s in items if s.get("speed", 0) > 0.5])
 
 
+class TideData:
+    """Handles loading and formatting tide data from pi-overlay-data."""
+
+    def __init__(self, config: Dict):
+        """
+        Initialize tide data handler.
+
+        Args:
+            config: Full configuration dictionary
+        """
+        self.config = config
+        self.tide_config = config.get("tide", {})
+        self.enabled = self.tide_config.get("enabled", False)
+        self.tide_file = self.tide_config.get("tide_file", "")
+        self._cache: Optional[Dict] = None
+        self._cache_time: Optional[datetime] = None
+        self._cache_duration = 60  # Cache for 60 seconds
+
+    def get_tide_data(self) -> Optional[Dict]:
+        """
+        Load tide data from JSON file with caching.
+
+        Returns:
+            Tide data dictionary or None if unavailable
+        """
+        if not self.enabled or not self.tide_file:
+            return None
+
+        # Check cache
+        now = datetime.now()
+        if self._cache is not None and self._cache_time is not None:
+            age = (now - self._cache_time).total_seconds()
+            if age < self._cache_duration:
+                return self._cache
+
+        # Load from file
+        try:
+            tide_path = Path(self.tide_file)
+            if not tide_path.exists():
+                logger.warning(f"Tide file not found: {self.tide_file}")
+                return self._cache  # Return stale cache if available
+
+            with open(tide_path, "r") as f:
+                data = json.load(f)
+
+            # Extract tide_data from the cache wrapper
+            tide_data = data.get("tide_data", data)
+
+            self._cache = tide_data
+            self._cache_time = now
+            return tide_data
+
+        except Exception as e:
+            logger.warning(f"Failed to load tide data: {e}")
+            return self._cache  # Return stale cache if available
+
+    def get_current_level(self) -> Optional[float]:
+        """Get current tide level in meters."""
+        data = self.get_tide_data()
+        if data is None:
+            return None
+        current = data.get("current", {})
+        level_cm = current.get("level_cm")
+        if level_cm is not None:
+            return level_cm / 100.0
+        return None
+
+    def get_trend(self) -> str:
+        """Get tide trend (rising, falling, stable)."""
+        data = self.get_tide_data()
+        if data is None:
+            return "unknown"
+        current = data.get("current", {})
+        return current.get("trend", "unknown")
+
+    def get_trend_arrow(self) -> str:
+        """Get arrow character for trend direction."""
+        trend = self.get_trend()
+        if trend == "rising":
+            return "↑"
+        elif trend == "falling":
+            return "↓"
+        else:
+            return "→"
+
+    def get_next_high(self) -> Optional[Dict]:
+        """Get next high tide info."""
+        data = self.get_tide_data()
+        if data is None:
+            return None
+        return data.get("next_high")
+
+    def get_next_low(self) -> Optional[Dict]:
+        """Get next low tide info."""
+        data = self.get_tide_data()
+        if data is None:
+            return None
+        return data.get("next_low")
+
+    def _parse_time(self, time_str: str) -> Optional[datetime]:
+        """Parse ISO format time string."""
+        if not time_str:
+            return None
+        try:
+            return datetime.fromisoformat(time_str)
+        except (ValueError, TypeError):
+            return None
+
+    def get_next_event(self) -> Tuple[str, Optional[datetime], Optional[float]]:
+        """
+        Get the next tide event (whichever is sooner).
+
+        Returns:
+            Tuple of (event_type, event_time, level_m)
+            event_type is "high" or "low"
+        """
+        next_high = self.get_next_high()
+        next_low = self.get_next_low()
+
+        high_time = None
+        low_time = None
+
+        if next_high:
+            high_time = self._parse_time(next_high.get("time"))
+        if next_low:
+            low_time = self._parse_time(next_low.get("time"))
+
+        if high_time and low_time:
+            if high_time < low_time:
+                level = next_high.get("level_cm", 0) / 100.0
+                return ("high", high_time, level)
+            else:
+                level = next_low.get("level_cm", 0) / 100.0
+                return ("low", low_time, level)
+        elif high_time:
+            level = next_high.get("level_cm", 0) / 100.0
+            return ("high", high_time, level)
+        elif low_time:
+            level = next_low.get("level_cm", 0) / 100.0
+            return ("low", low_time, level)
+
+        return ("unknown", None, None)
+
+    def format_time(self, dt: Optional[datetime]) -> str:
+        """Format datetime as HH:MM."""
+        if dt is None:
+            return "--:--"
+        return dt.strftime("%H:%M")
+
+    def format_tide_compact(self) -> str:
+        """
+        Format tide info in compact form for text overlay.
+
+        Returns:
+            String like "1.4m ↑ (high 18:30)"
+        """
+        level = self.get_current_level()
+        if level is None:
+            return ""
+
+        arrow = self.get_trend_arrow()
+        event_type, event_time, _ = self.get_next_event()
+        time_str = self.format_time(event_time)
+
+        return f"{level:.1f}m {arrow} ({event_type} {time_str})"
+
+    def get_widget_data(self) -> Optional[Dict]:
+        """
+        Get formatted data for the tide widget display.
+
+        Returns:
+            Dictionary with widget display data or None
+        """
+        level = self.get_current_level()
+        if level is None:
+            return None
+
+        trend = self.get_trend()
+        arrow = self.get_trend_arrow()
+        event_type, event_time, target_level = self.get_next_event()
+
+        next_high = self.get_next_high()
+        next_low = self.get_next_low()
+
+        high_time = self._parse_time(next_high.get("time")) if next_high else None
+        low_time = self._parse_time(next_low.get("time")) if next_low else None
+        high_level = next_high.get("level_cm", 0) / 100.0 if next_high else None
+        low_level = next_low.get("level_cm", 0) / 100.0 if next_low else None
+
+        return {
+            "level": level,
+            "level_str": f"{level:.1f}m",
+            "trend": trend,
+            "arrow": arrow,
+            "next_event_type": event_type,
+            "next_event_time": event_time,
+            "next_event_time_str": self.format_time(event_time),
+            "target_level": target_level,
+            "target_level_str": f"{target_level:.1f}m" if target_level else "",
+            "high_time": high_time,
+            "high_time_str": self.format_time(high_time),
+            "high_level": high_level,
+            "high_level_str": f"{high_level:.1f}m" if high_level else "",
+            "low_time": low_time,
+            "low_time_str": self.format_time(low_time),
+            "low_level": low_level,
+            "low_level_str": f"{low_level:.1f}m" if low_level else "",
+        }
+
+
 class ImageOverlay:
     """Handles adding text overlays to images."""
 
@@ -250,6 +460,9 @@ class ImageOverlay:
 
         # Initialize ships data fetcher
         self.ships = ShipsData(config)
+
+        # Initialize tide data fetcher
+        self.tide = TideData(config)
 
         # Load pre-sized ship icon for header box
         self._ship_icon = None
@@ -662,6 +875,40 @@ class ImageOverlay:
             for i in range(1, 6):
                 data[f"ships_line_{i}"] = ""
 
+        # Add tide data if available
+        if hasattr(self, "tide") and self.tide.enabled:
+            tide_widget = self.tide.get_widget_data()
+            if tide_widget:
+                data["tide"] = self.tide.format_tide_compact()
+                data["tide_level"] = tide_widget["level_str"]
+                data["tide_arrow"] = tide_widget["arrow"]
+                data["tide_trend"] = tide_widget["trend"]
+                data["tide_target"] = tide_widget["target_level_str"]
+                data["tide_high_time"] = tide_widget["high_time_str"]
+                data["tide_high_level"] = tide_widget["high_level_str"]
+                data["tide_low_time"] = tide_widget["low_time_str"]
+                data["tide_low_level"] = tide_widget["low_level_str"]
+            else:
+                data["tide"] = ""
+                data["tide_level"] = "-"
+                data["tide_arrow"] = ""
+                data["tide_trend"] = "-"
+                data["tide_target"] = "-"
+                data["tide_high_time"] = "-"
+                data["tide_high_level"] = "-"
+                data["tide_low_time"] = "-"
+                data["tide_low_level"] = "-"
+        else:
+            data["tide"] = ""
+            data["tide_level"] = "-"
+            data["tide_arrow"] = ""
+            data["tide_trend"] = "-"
+            data["tide_target"] = "-"
+            data["tide_high_time"] = "-"
+            data["tide_high_level"] = "-"
+            data["tide_low_time"] = "-"
+            data["tide_low_level"] = "-"
+
         return data
 
     def _get_text_lines(self, data: Dict[str, str]) -> List[str]:
@@ -920,6 +1167,103 @@ class ImageOverlay:
             # Move to next box position
             x += box_width + box_gap
 
+    def _draw_tide_widget(
+        self,
+        img: Image.Image,
+        bar_height: int,
+        font: ImageFont.FreeTypeFont,
+        font_color: Tuple[int, int, int, int],
+        bg_color: List[int],
+        margin: int,
+        padding: int,
+    ) -> None:
+        """
+        Draw tide widget on the right side below the overlay bar.
+
+        Shows current level, trend arrow, target level, and next high/low times.
+
+        Args:
+            img: PIL Image to draw on
+            bar_height: Height of the main overlay bar (widget starts below this)
+            font: Font to use for text
+            font_color: RGBA tuple for text color
+            bg_color: RGBA list for box background [R, G, B, A]
+            margin: Margin from edges
+            padding: Padding inside boxes
+        """
+        if not hasattr(self, "tide") or not self.tide.enabled:
+            return
+
+        tide_data = self.tide.get_widget_data()
+        if not tide_data:
+            return
+
+        # Create drawing context with alpha support
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        # Box styling
+        box_bg = tuple(bg_color)
+        corner_radius = int(padding * 0.8)
+        box_padding_h = int(padding * 0.8)
+        box_padding_v = int(padding * 0.5)
+        box_margin = int(padding * 0.5)
+
+        img_width = img.size[0]
+
+        # Calculate consistent text height
+        try:
+            ref_bbox = draw.textbbox((0, 0), "Ayg", font=font)
+            text_height = ref_bbox[3] - ref_bbox[1]
+        except Exception:
+            text_height = 20
+
+        line_spacing = int(text_height * 0.3)
+
+        # Build content lines
+        # Line 1: Current level with arrow and target
+        arrow = tide_data["arrow"]
+        level_str = tide_data["level_str"]
+        target_str = tide_data["target_level_str"]
+        line1 = f"Tide: {level_str} {arrow} {target_str}"
+
+        # Line 2: High time
+        high_str = f"High: {tide_data['high_time_str']} ({tide_data['high_level_str']})"
+
+        # Line 3: Low time
+        low_str = f"Low: {tide_data['low_time_str']} ({tide_data['low_level_str']})"
+
+        lines = [line1, high_str, low_str]
+
+        # Calculate box dimensions
+        max_width = 0
+        for line in lines:
+            try:
+                bbox = draw.textbbox((0, 0), line, font=font)
+                line_width = bbox[2] - bbox[0]
+                max_width = max(max_width, line_width)
+            except Exception:
+                max_width = max(max_width, len(line) * 10)
+
+        total_text_height = (text_height * len(lines)) + (line_spacing * (len(lines) - 1))
+        box_width = max_width + (box_padding_h * 2)
+        box_height = total_text_height + (box_padding_v * 2)
+
+        # Position on right side, below bar
+        x = img_width - box_width - box_margin
+        y = bar_height + box_margin
+
+        # Draw rounded rectangle background
+        box_coords = [x, y, x + box_width, y + box_height]
+        draw.rounded_rectangle(box_coords, radius=corner_radius, fill=box_bg)
+
+        # Draw text lines
+        text_x = x + box_padding_h
+        text_y = y + box_padding_v
+
+        for line in lines:
+            draw.text((text_x, text_y), line, fill=font_color, font=font)
+            text_y += text_height + line_spacing
+
     def apply_overlay(
         self,
         image_path: str,
@@ -1053,9 +1397,148 @@ class ImageOverlay:
                         line_2_left = line_2_left_template
                 draw.text((left_x, y2), line_2_left, fill=font_color, font=font_regular)
 
-                # RIGHT SIDE
+                # RIGHT SIDE - Calculate tide section first to know offset
 
-                # Line 1 Right
+                # Tide section (far right) - only if enabled
+                tide_section_width = 0
+                section_gap = int(padding * 2)  # Gap between sections
+
+                if hasattr(self, "tide") and self.tide.enabled:
+                    tide_widget = self.tide.get_widget_data()
+                    if tide_widget:
+                        import math
+
+                        # Wave visualization dimensions
+                        wave_width = int(font_size * 4)  # Width of wave graphic
+                        wave_height = int(line_height * 1.6)  # Height spans both lines
+                        wave_margin = int(padding * 0.5)
+
+                        # Tide text lines
+                        tide_line_1 = f"{tide_widget['level_str']} {tide_widget['arrow']} {tide_widget['target_level_str']}"
+                        tide_line_2 = (
+                            f"H {tide_widget['high_time_str']} | L {tide_widget['low_time_str']}"
+                        )
+
+                        # Calculate text width
+                        try:
+                            bbox1 = draw.textbbox((0, 0), tide_line_1, font=font_regular)
+                            bbox2 = draw.textbbox((0, 0), tide_line_2, font=font_regular)
+                            text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
+                        except Exception:
+                            text_width = max(len(tide_line_1), len(tide_line_2)) * font_size * 0.6
+
+                        # Total tide section width: text + margin + wave
+                        tide_section_width = text_width + wave_margin + wave_width
+
+                        # Position for tide section (far right) - text first, then wave
+                        tide_x = img_width - tide_section_width - margin - padding
+                        text_x = tide_x
+                        wave_x = tide_x + text_width + wave_margin
+
+                        # Draw text
+                        draw.text((text_x, y1), tide_line_1, fill=font_color, font=font_regular)
+                        draw.text((text_x, y2), tide_line_2, fill=font_color, font=font_regular)
+
+                        # Draw wave visualization (to the right of text)
+                        wave_y = y1 + int(line_height * 0.1)  # Slightly below line 1 start
+                        wave_color = font_color[:3] + (180,)  # Slightly transparent
+                        marker_color = (255, 200, 100, 255)  # Orange/gold for marker
+
+                        # Calculate position on wave (0.0 = low, 1.0 = high)
+                        current_level = tide_widget["level"]
+                        high_level = tide_widget["high_level"] or 2.0
+                        low_level = tide_widget["low_level"] or 0.5
+                        level_range = high_level - low_level
+
+                        if level_range > 0:
+                            # Normalize current level to 0-1 range
+                            normalized = (current_level - low_level) / level_range
+                            normalized = max(0.0, min(1.0, normalized))
+                        else:
+                            normalized = 0.5
+
+                        # Determine phase based on next event (more reliable than trend)
+                        # Wave: 0.0 = low (left), 0.5 = high (peak), 1.0 = low (right)
+                        next_event = tide_widget["next_event_type"]
+
+                        if next_event == "high":
+                            # Going towards high = rising = left half of wave (0.0 to 0.5)
+                            # normalized 0 (at low) -> position 0.0
+                            # normalized 1 (at high) -> position 0.5
+                            wave_position = normalized * 0.5
+                        else:
+                            # Going towards low = falling = right half of wave (0.5 to 1.0)
+                            # normalized 1 (at high) -> position 0.5
+                            # normalized 0 (at low) -> position 1.0
+                            wave_position = 0.5 + (1.0 - normalized) * 0.5
+
+                        # Draw sine wave curve
+                        wave_points = []
+                        num_points = 30
+                        for i in range(num_points + 1):
+                            t = i / num_points
+                            # Full sine wave (one complete cycle)
+                            x = wave_x + int(t * wave_width)
+                            # Sine wave: starts at middle, goes up, down, back to middle
+                            y_offset = math.sin(t * 2 * math.pi - math.pi / 2)
+                            y = (
+                                wave_y
+                                + int(wave_height / 2)
+                                - int(y_offset * wave_height / 2 * 0.8)
+                            )
+                            wave_points.append((x, y))
+
+                        # Draw wave line
+                        if len(wave_points) > 1:
+                            draw.line(wave_points, fill=wave_color, width=2)
+
+                        # Draw marker (triangle/arrow) at current position
+                        marker_t = wave_position
+                        marker_x = wave_x + int(marker_t * wave_width)
+                        marker_y_offset = math.sin(marker_t * 2 * math.pi - math.pi / 2)
+                        marker_y = (
+                            wave_y
+                            + int(wave_height / 2)
+                            - int(marker_y_offset * wave_height / 2 * 0.8)
+                        )
+
+                        # Draw filled circle as marker
+                        marker_radius = int(font_size * 0.25)
+                        draw.ellipse(
+                            [
+                                marker_x - marker_radius,
+                                marker_y - marker_radius,
+                                marker_x + marker_radius,
+                                marker_y + marker_radius,
+                            ],
+                            fill=marker_color,
+                            outline=(255, 255, 255, 255),
+                            width=1,
+                        )
+
+                        # Draw small vertical line from marker to show level
+                        line_bottom = wave_y + wave_height
+                        draw.line(
+                            [(marker_x, marker_y + marker_radius), (marker_x, line_bottom)],
+                            fill=(255, 255, 255, 100),
+                            width=1,
+                        )
+
+                        # Add gap for next section
+                        tide_section_width += section_gap
+
+                        # Draw subtle vertical divider line to left of tide section
+                        divider_x = tide_x - int(section_gap * 0.5)
+                        divider_y1 = y1
+                        divider_y2 = y2 + line_height - int(padding * 0.3)
+                        divider_color = font_color[:3] + (60,)  # Very subtle
+                        draw.line(
+                            [(divider_x, divider_y1), (divider_x, divider_y2)],
+                            fill=divider_color,
+                            width=1,
+                        )
+
+                # Line 1 Right (positioned to left of tide section)
                 line_1_right_template = content_config.get("line_1_right", "")
                 if line_1_right_template:
                     try:
@@ -1064,14 +1547,14 @@ class ImageOverlay:
                         logger.warning(f"Unknown variable in line_1_right: {e}")
                         line_1_right = line_1_right_template
 
-                    # Calculate width to position from right
+                    # Calculate width to position from right (accounting for tide section)
                     try:
                         bbox = draw.textbbox((0, 0), line_1_right, font=font_regular)
                         text_width = bbox[2] - bbox[0]
                     except Exception:
                         text_width = len(line_1_right) * font_size * 0.6
 
-                    right_x = img_width - text_width - margin - padding
+                    right_x = img_width - text_width - margin - padding - tide_section_width
                     draw.text(
                         (right_x, y1),
                         line_1_right,
@@ -1079,7 +1562,7 @@ class ImageOverlay:
                         font=font_regular,
                     )
 
-                # Line 2 Right
+                # Line 2 Right (positioned to left of tide section)
                 line_2_right_template = content_config.get("line_2_right", "")
                 if line_2_right_template:
                     try:
@@ -1094,7 +1577,7 @@ class ImageOverlay:
                     except Exception:
                         text_width = len(line_2_right) * font_size * 0.6
 
-                    right_x = img_width - text_width - margin - padding
+                    right_x = img_width - text_width - margin - padding - tide_section_width
                     draw.text(
                         (right_x, y2),
                         line_2_right,
