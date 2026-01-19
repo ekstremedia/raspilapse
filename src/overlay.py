@@ -1636,13 +1636,22 @@ class ImageOverlay:
                             wave_margin = int(padding * 0.5)
 
                             # Tide text lines
-                            tide_line_1 = f"Tide: {tide_widget['level_str']} {tide_widget['arrow']} {tide_widget['target_level_str']}"
-                            tide_line_2 = f"H {tide_widget['high_time_str']} ({tide_widget['high_level_str']}) | L {tide_widget['low_time_str']} ({tide_widget['low_level_str']})"
+                            tide_line_1 = f"Tide level: {tide_widget['level_str']} {tide_widget['arrow']} {tide_widget['target_level_str']}"
+
+                            # Show H/L in chronological order (earlier event first)
+                            high_time = tide_widget.get("high_time")
+                            low_time = tide_widget.get("low_time")
+                            if high_time and low_time and low_time < high_time:
+                                # Low comes first
+                                tide_line_2 = f"L {tide_widget['low_time_str']} ({tide_widget['low_level_str']}) | H {tide_widget['high_time_str']} ({tide_widget['high_level_str']})"
+                            else:
+                                # High comes first (or one is missing)
+                                tide_line_2 = f"H {tide_widget['high_time_str']} ({tide_widget['high_level_str']}) | L {tide_widget['low_time_str']} ({tide_widget['low_level_str']})"
 
                             # Use FIXED text width based on max possible content
                             # This ensures wave stays in same position for timelapse
                             try:
-                                max_line_1 = "Tide: 999cm → 999cm"
+                                max_line_1 = "Tide level: 999cm → 999cm"
                                 max_line_2 = "H 00:00 (999cm) | L 00:00 (999cm)"
                                 bbox1 = draw.textbbox((0, 0), max_line_1, font=font_regular)
                                 bbox2 = draw.textbbox((0, 0), max_line_2, font=font_regular)

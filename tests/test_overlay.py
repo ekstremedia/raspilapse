@@ -1238,10 +1238,13 @@ class TestWidgetFixedWidths:
 
     def test_tide_max_width_template(self, test_overlay_config):
         """Test that tide widget uses appropriate max width template."""
+        max_line_1 = "Tide level: 999cm → 999cm"
+        typical_line_1 = "Tide level: 227cm → 76cm"
         max_line_2 = "H 00:00 (999cm) | L 00:00 (999cm)"
         typical_line_2 = "H 13:18 (227cm) | L 07:10 (76cm)"
 
         # Max template should accommodate all reasonable values
+        assert len(max_line_1) >= len(typical_line_1)
         assert len(max_line_2) >= len(typical_line_2)
 
 
