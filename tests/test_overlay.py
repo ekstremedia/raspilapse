@@ -395,9 +395,9 @@ class TestErrorHandling:
         """Test handling of missing image file."""
         overlay = ImageOverlay(test_overlay_config)
 
-        # Should return original path and log error (not raise exception)
+        # Should return None on failure (not raise exception)
         result = overlay.apply_overlay("/nonexistent/image.jpg", {}, mode="day")
-        assert result == "/nonexistent/image.jpg"  # Returns original path on error
+        assert result is None  # Returns None on error
 
     def test_apply_overlay_invalid_metadata(self, test_overlay_config, test_image):
         """Test handling of invalid metadata."""
@@ -1110,11 +1110,10 @@ class TestShipBoxesRendering:
 
         # Create mock ships data file
         ships_data = {
-            "ships": [
-                {"name": "Test Ship 1", "mmsi": "123456789"},
-                {"name": "Test Ship 2", "mmsi": "987654321"},
+            "items": [
+                {"name": "Test Ship 1", "mmsi": "123456789", "speed": 5.0},
+                {"name": "Test Ship 2", "mmsi": "987654321", "speed": 3.0},
             ],
-            "stationary_ships": [],
         }
         with open(ships_file_path, "w") as f:
             json.dump(ships_data, f)

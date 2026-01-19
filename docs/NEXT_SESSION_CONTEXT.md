@@ -18,15 +18,16 @@ Replaced complex ML with simple physics-based feedback:
 
 ```python
 ratio = target_brightness / actual_brightness
-new_exposure = current_exposure × ratio^damping
+new_exposure = current_exposure * ratio ** damping
 ```
 
 With damping=0.5 (conservative):
 - 50% of the correction applied each frame
-- Converges in 5-6 frames instead of 10+
+- Converges in 3-5 frames instead of 10+
 - No oscillation, stable convergence
 
 ### Results
+
 | Metric | Before (ML) | After (Direct) |
 |--------|-------------|----------------|
 | Convergence speed | 10+ frames | 3-5 frames |
@@ -65,12 +66,12 @@ sudo systemctl status raspilapse
 
 | Item | Value |
 |------|-------|
-| Branch | `mlv2` |
+| Branch | `brightness_control` |
 | Exposure control | Direct brightness feedback |
 | ML system | Disabled (still available for rollback) |
 | Target brightness | 120 |
 | Damping | 0.5 (conservative) |
-| Convergence | 5-6 frames |
+| Convergence | 3-5 frames |
 
 ## Key Files Modified
 
@@ -86,10 +87,10 @@ See `UPGRADE.md` for instructions on updating other Raspberry Pis to use direct 
 
 ## Rollback
 
-If direct control causes issues:
+If direct control causes issues, edit `config/config.yml`:
 ```yaml
-# In config/config.yml:
-direct_brightness_control: false  # Or remove the line entirely
+adaptive_timelapse:
+  direct_brightness_control: false  # Or remove the line entirely
 ```
 Then restart: `sudo systemctl restart raspilapse`
 

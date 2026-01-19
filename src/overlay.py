@@ -479,11 +479,15 @@ class TideData:
         return None
 
     def _parse_time(self, time_str: str) -> Optional[datetime]:
-        """Parse ISO format time string."""
+        """Parse ISO format time string, always returning timezone-aware datetime."""
         if not time_str:
             return None
         try:
-            return datetime.fromisoformat(time_str)
+            dt = datetime.fromisoformat(time_str)
+            # Ensure timezone-aware for comparison with datetime.now().astimezone()
+            if dt.tzinfo is None:
+                dt = dt.astimezone()
+            return dt
         except (ValueError, TypeError):
             return None
 
@@ -1410,7 +1414,7 @@ class ImageOverlay:
             box_height = consistent_box_height
 
             # Check if box fits on current line
-            if x + box_width > img_width - margin:
+            if x + box_width > img_width - box_margin:
                 # Wrap to next line
                 x = box_margin
                 y += box_height + box_gap
@@ -1433,7 +1437,7 @@ class ImageOverlay:
         metadata: Dict,
         mode: Optional[str] = None,
         output_path: Optional[str] = None,
-    ) -> str:
+    ) -> Optional[str]:
         """
         Apply overlay to an image.
 
@@ -1444,7 +1448,7 @@ class ImageOverlay:
             output_path: Optional output path (if None, overwrites source)
 
         Returns:
-            Path to output image
+            Path to output image, or None on failure
         """
         if not self.enabled:
             logger.debug("Overlay disabled, skipping")
@@ -1928,7 +1932,7 @@ def apply_overlay_to_image(
     config_path: str = "config/config.yml",
     mode: Optional[str] = None,
     output_path: Optional[str] = None,
-) -> str:
+) -> Optional[str]:
     """
     Convenience function to apply overlay to an image.
 
@@ -1941,7 +1945,7 @@ def apply_overlay_to_image(
         output_path: Optional output path
 
     Returns:
-        Path to output image
+        Path to output image, or None on failure
     """
     import yaml
 
