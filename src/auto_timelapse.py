@@ -376,7 +376,7 @@ class AdaptiveTimelapse:
                 f"trained={stats.get('last_trained', 'never')}"
             )
         except Exception as e:
-            logger.warning(f"[ML v2] Failed to initialize predictor: {e}")
+            logger.warning(f"[ML v2] Failed to initialize predictor: {e}", exc_info=True)
             self._ml_predictor = None
             self._ml_enabled = False
 

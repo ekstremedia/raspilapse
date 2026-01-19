@@ -9,7 +9,7 @@ and track the polar winter recovery.
 Usage:
     python src/graph_ml_patterns.py
     python src/graph_ml_patterns.py --days 14
-    python src/graph_ml_patterns.py --output graphs/ml_solar_patterns.png
+    python src/graph_ml_patterns.py --output graphs/daily_solar_patterns.png
 """
 
 import argparse
@@ -285,7 +285,7 @@ def main():
         "--days", "-d", type=int, default=14, help="Number of days to include (default: 14)"
     )
     parser.add_argument(
-        "--output", "-o", default="graphs/ml_solar_patterns.png", help="Output path for graph"
+        "--output", "-o", default="graphs/daily_solar_patterns.png", help="Output path for graph"
     )
 
     args = parser.parse_args()
