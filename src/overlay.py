@@ -1516,14 +1516,17 @@ class ImageOverlay:
                             f"{aurora_widget['storm']} | {aurora_widget['speed_str']} km/s"
                         )
 
-                        # Calculate text width
+                        # Use FIXED text width based on max possible content
+                        # This ensures position stays fixed for timelapse (arrow chars vary in width)
                         try:
-                            bbox1 = draw.textbbox((0, 0), aurora_line_1, font=font_regular)
-                            bbox2 = draw.textbbox((0, 0), aurora_line_2, font=font_regular)
+                            max_line_1 = "Kp: 9.9 | Bz: -99.9↓"  # Max width template
+                            max_line_2 = "G5 | 9999 km/s"
+                            bbox1 = draw.textbbox((0, 0), max_line_1, font=font_regular)
+                            bbox2 = draw.textbbox((0, 0), max_line_2, font=font_regular)
                             aurora_text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
                         except Exception:
                             aurora_text_width = (
-                                max(len(aurora_line_1), len(aurora_line_2)) * font_size * 0.6
+                                max(len(max_line_1), len(max_line_2)) * font_size * 0.6
                             )
 
                         aurora_section_width = aurora_text_width
@@ -1560,16 +1563,13 @@ class ImageOverlay:
 
                         # Tide text lines
                         tide_line_1 = f"Tide: {tide_widget['level_str']} {tide_widget['arrow']} {tide_widget['target_level_str']}"
-                        tide_line_2 = (
-                            f"H {tide_widget['high_time_str']} | L {tide_widget['low_time_str']}"
-                        )
+                        tide_line_2 = f"H {tide_widget['high_time_str']} ({tide_widget['high_level_str']}) | L {tide_widget['low_time_str']} ({tide_widget['low_level_str']})"
 
                         # Use FIXED text width based on max possible content
-                        # Max: "Tide: 999cm → 999cm" and "H 00:00 | L 00:00"
                         # This ensures wave stays in same position for timelapse
                         try:
                             max_line_1 = "Tide: 999cm → 999cm"
-                            max_line_2 = "H 00:00 | L 00:00"
+                            max_line_2 = "H 00:00 (999cm) | L 00:00 (999cm)"
                             bbox1 = draw.textbbox((0, 0), max_line_1, font=font_regular)
                             bbox2 = draw.textbbox((0, 0), max_line_2, font=font_regular)
                             text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
@@ -1828,14 +1828,18 @@ class ImageOverlay:
                 output_path = image_path
 
             output_quality = self.config.get("output", {}).get("quality", 95)
-            img.save(output_path, quality=output_quality)
-            logger.debug(f"Overlay applied to {output_path}")
+            try:
+                img.save(output_path, quality=output_quality)
+                logger.debug(f"Overlay saved to {output_path}")
+            except Exception as save_error:
+                logger.error(f"Failed to save overlay image: {save_error}", exc_info=True)
+                return None  # Return None to indicate failure
 
             return output_path
 
         except Exception as e:
             logger.error(f"Failed to apply overlay: {e}", exc_info=True)
-            return image_path
+            return None  # Return None to indicate failure
 
 
 def apply_overlay_to_image(

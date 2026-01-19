@@ -100,3 +100,21 @@ The ML system was overengineered. The fundamental physics is simple:
 - Therefore: `new_exposure = old_exposure × (target / actual)`
 
 Adding damping (exponent < 1.0) prevents oscillation while still converging quickly.
+
+---
+
+## Overlay Improvements (2026-01-19)
+
+### Fixed Widget Positioning
+- **Aurora widget**: Now uses fixed-width templates to prevent shifting when arrow characters change (↑↓→)
+- **Tide widget**: Expanded to show cm values: `H 13:18 (227cm) | L 07:10 (76cm)`
+- **Ship boxes**: Consistent spacing with `box_margin` for both vertical and horizontal gaps
+
+### Better Error Handling
+- `apply_overlay()` now returns `None` on failure instead of original path
+- Separate try/catch for image save operation
+- Proper error logging with stack traces
+
+### Tide Data Freshness
+- Reduced pi-overlay-data tide cache from 24h to 1h
+- API endpoint updated to refresh hourly (was every 6h)

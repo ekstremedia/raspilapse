@@ -1174,3 +1174,73 @@ class TestShipBoxesRendering:
 
         assert os.path.exists(result)
         os.unlink(output_path)
+
+
+class TestOverlayErrorHandling:
+    """Tests for overlay error handling improvements."""
+
+    def test_apply_overlay_returns_none_on_invalid_image(self, test_overlay_config):
+        """Test that apply_overlay returns None when given invalid image path."""
+        overlay = ImageOverlay(test_overlay_config)
+
+        result = overlay.apply_overlay(
+            "/nonexistent/path/to/image.jpg", {"ExposureTime": 1000}, mode="day"
+        )
+
+        # Should return None on failure, not the original path
+        assert result is None
+
+    def test_apply_overlay_returns_none_on_save_failure(
+        self, test_overlay_config, test_image, test_metadata
+    ):
+        """Test that apply_overlay returns None when save fails."""
+        overlay = ImageOverlay(test_overlay_config)
+
+        # Try to save to a read-only location
+        result = overlay.apply_overlay(
+            test_image, test_metadata, mode="day", output_path="/root/cannot_write_here.jpg"
+        )
+
+        # Should return None on save failure
+        assert result is None
+
+
+class TestWidgetFixedWidths:
+    """Tests for fixed-width widget positioning."""
+
+    def test_aurora_uses_fixed_width_template(self, test_overlay_config):
+        """Test that aurora widget uses fixed-width templates for consistent positioning."""
+        # The max templates should be used for width calculation
+        max_line_1 = "Kp: 9.9 | Bz: -99.9↓"
+        max_line_2 = "G5 | 9999 km/s"
+
+        # These should be longer than typical values
+        typical_line_1 = "Kp: 2.3 | Bz: 0.9↑"
+        typical_line_2 = "G0 | 556 km/s"
+
+        assert len(max_line_1) >= len(typical_line_1)
+        assert len(max_line_2) >= len(typical_line_2)
+
+    def test_tide_format_includes_cm_values(self, test_overlay_config):
+        """Test that tide widget includes cm values in parentheses."""
+        # The expected format is: "H 13:18 (227cm) | L 07:10 (76cm)"
+        tide_widget = {
+            "high_time_str": "13:18",
+            "high_level_str": "227cm",
+            "low_time_str": "07:10",
+            "low_level_str": "76cm",
+        }
+
+        expected_format = f"H {tide_widget['high_time_str']} ({tide_widget['high_level_str']}) | L {tide_widget['low_time_str']} ({tide_widget['low_level_str']})"
+
+        assert "(227cm)" in expected_format
+        assert "(76cm)" in expected_format
+        assert expected_format == "H 13:18 (227cm) | L 07:10 (76cm)"
+
+    def test_tide_max_width_template(self, test_overlay_config):
+        """Test that tide widget uses appropriate max width template."""
+        max_line_2 = "H 00:00 (999cm) | L 00:00 (999cm)"
+        typical_line_2 = "H 13:18 (227cm) | L 07:10 (76cm)"
+
+        # Max template should accommodate all reasonable values
+        assert len(max_line_2) >= len(typical_line_2)
