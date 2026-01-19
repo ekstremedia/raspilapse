@@ -2589,5 +2589,116 @@ class TestDirectBrightnessControl:
         assert timelapse._ml_predictor is None
 
 
+class TestGainSpeedOverride:
+    """Test _interpolate_gain with speed_override parameter."""
+
+    def test_gain_speed_override_faster(self, test_config_file):
+        """Test speed_override makes gain change faster."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Initialize at gain 1.0
+        timelapse._interpolate_gain(1.0)
+
+        # Normal interpolation (default speed ~0.10)
+        timelapse_normal = AdaptiveTimelapse(test_config_file)
+        timelapse_normal._interpolate_gain(1.0)
+        normal_result = timelapse_normal._interpolate_gain(6.0)
+
+        # Fast interpolation with speed_override
+        fast_result = timelapse._interpolate_gain(6.0, speed_override=0.30)
+
+        # Fast should be closer to target than normal
+        assert fast_result > normal_result
+        assert fast_result > 1.0 and fast_result < 6.0
+
+    def test_gain_speed_override_slower(self, test_config_file):
+        """Test speed_override can also slow down transitions."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        timelapse._interpolate_gain(1.0)
+        slow_result = timelapse._interpolate_gain(6.0, speed_override=0.05)
+
+        # With 5% speed: 1.0 + 0.05 * (6.0 - 1.0) = 1.25
+        assert slow_result < 2.0  # Should be very slow
+
+
+class TestNightModeBrightnessFeedback:
+    """Test night mode brightness feedback for dawn overexposure."""
+
+    def test_night_mode_reduces_exposure_when_overexposed(self, test_config_file):
+        """Test night mode reduces exposure when brightness > 140."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        # Enable direct brightness control
+        timelapse.config["adaptive_timelapse"]["direct_brightness_control"] = True
+
+        # Initialize exposure tracking
+        timelapse._last_exposure_time = 20.0
+        timelapse._last_analogue_gain = 6.0
+        timelapse._last_brightness = 165  # Overexposed
+
+        settings = timelapse.get_camera_settings(LightMode.NIGHT, lux=2.0)
+
+        # Should reduce from max 20s due to brightness feedback
+        exposure_s = settings["ExposureTime"] / 1_000_000
+        assert exposure_s < 20.0
+        # But not below 60% of max (12s)
+        assert exposure_s >= 12.0
+
+    def test_night_mode_full_exposure_when_not_overexposed(self, test_config_file):
+        """Test night mode uses max exposure when brightness is normal."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.config["adaptive_timelapse"]["direct_brightness_control"] = True
+
+        timelapse._last_exposure_time = 18.0
+        timelapse._last_analogue_gain = 5.5
+        timelapse._last_brightness = 100  # Normal brightness
+
+        settings = timelapse.get_camera_settings(LightMode.NIGHT, lux=2.0)
+
+        # Should ramp towards max 20s (not reduce)
+        exposure_s = settings["ExposureTime"] / 1_000_000
+        assert exposure_s >= 18.0
+
+
+class TestCoordinatedNightModeRamps:
+    """Test coordinated gain/exposure ramps when entering night mode."""
+
+    def test_entering_night_uses_coordinated_ramps(self, test_config_file):
+        """Test coordinated ramps when gain < 50% of target."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.config["adaptive_timelapse"]["direct_brightness_control"] = True
+
+        # Simulate coming from transition: low gain, medium exposure
+        timelapse._last_analogue_gain = 1.5  # < 50% of target 6.0
+        timelapse._last_exposure_time = 16.0
+        timelapse._last_brightness = 80
+
+        settings = timelapse.get_camera_settings(LightMode.NIGHT, lux=2.0)
+
+        # Gain should increase (using faster 0.08 speed)
+        assert settings["AnalogueGain"] > 1.5
+        # Exposure should increase slowly (using 0.05 speed)
+        exposure_s = settings["ExposureTime"] / 1_000_000
+        assert exposure_s > 16.0
+
+    def test_established_night_uses_normal_ramps(self, test_config_file):
+        """Test normal ramps when already in night mode (gain >= 50% of target)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.config["adaptive_timelapse"]["direct_brightness_control"] = True
+
+        # Already in night mode: high gain
+        timelapse._last_analogue_gain = 4.0  # >= 50% of target 6.0
+        timelapse._last_exposure_time = 19.0
+        timelapse._last_brightness = 100
+
+        # This should NOT trigger coordinated ramps
+        settings = timelapse.get_camera_settings(LightMode.NIGHT, lux=2.0)
+
+        # Should still work normally
+        assert settings["AnalogueGain"] >= 4.0
+        exposure_s = settings["ExposureTime"] / 1_000_000
+        assert exposure_s >= 19.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

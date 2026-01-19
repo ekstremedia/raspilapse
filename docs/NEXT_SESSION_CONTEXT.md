@@ -179,3 +179,73 @@ print(f'Next high: {tide.get_next_high()}')
 print(f'Next low: {tide.get_next_low()}')
 "
 ```
+
+---
+
+## Mode Transition Brightness Fixes (2026-01-19)
+
+### Problem: Two Artifacts Visible in Slitscan
+
+1. **Morning dip (~8 AM)**: Night mode can't reduce exposure as dawn brightens → sudden drop when switching to transition
+2. **Evening flash (~16-17)**: Gain ramps too slowly when entering night mode → brightness spike
+
+### Root Causes
+
+**Morning Dip (Night → Transition)**:
+- Night mode used fixed max settings (20s, gain 6.0) regardless of brightness
+- As dawn arrived, brightness climbed but night mode couldn't reduce exposure
+- When brightness > 160, hybrid override forced TRANSITION mode
+- Transition mode saw high brightness and slashed exposure → visible dip
+
+**Evening Flash (Transition → Night)**:
+- Exposure ramps fast (15%/frame → reaches 20s in ~4 frames)
+- Gain ramps slow (10%/frame → 1.2 to 6.0 takes ~10 frames)
+- High exposure + low gain = brightness spike
+
+### Solution: Two Fixes in `auto_timelapse.py`
+
+**Fix 1: Brightness Feedback in Night Mode** (lines 2032-2050):
+- When `direct_brightness_control` enabled and brightness > 140
+- Night mode can now reduce exposure using same physics-based feedback
+- Minimum 60% max exposure (12s) and gain 2.0 to prevent over-reduction
+
+**Fix 2: Coordinated Ramps When Entering Night Mode** (lines 2052-2080):
+- Detects entry: current gain < 50% of target (coming from day/transition)
+- Gain ramps faster (0.08 = 8%/frame) to catch up
+- Exposure ramps slower (0.05 = 5%/frame) to give gain time
+- Spreads transition over ~15-20 minutes for smooth blending
+
+**Also added**: `speed_override` parameter to `_interpolate_gain()` (line 574)
+
+### Config Changes Required: None
+
+All fixes use hardcoded sensible defaults. Works automatically when:
+```yaml
+adaptive_timelapse:
+  direct_brightness_control: true  # Already in your config
+```
+
+### For Other Cameras
+
+Just pull the code:
+```bash
+cd /home/pi/raspilapse
+git pull
+sudo systemctl restart raspilapse
+```
+
+No config changes needed.
+
+### Verification
+
+After next dawn/dusk cycle, check slitscan for:
+- Morning (8-9 AM): brightness stays 100-150, no sudden dips
+- Evening (16-17): brightness stays 90-150, no spikes to 190+
+
+```bash
+# Monitor during transitions
+python scripts/db_stats.py 5m
+
+# Check logs for new debug messages
+journalctl -u raspilapse | grep -E "(Entering night|brightness feedback)"
+```

@@ -752,7 +752,22 @@ adaptive_timelapse:
 |------|----------|------|-------|
 | Day | Direct feedback | Fixed 1.0 | Fast convergence to target |
 | Transition | Direct feedback | Ramps when exposure >80% max | Shutter-first, then gain |
-| Night | Max (20s) | Max (6-8) | No feedback needed at limits |
+| Night | Direct feedback if bright | Coordinated ramp on entry | Prevents transition artifacts |
+
+### Mode Transition Smoothing (2026-01-19)
+
+Two fixes prevent brightness artifacts at mode boundaries:
+
+**Night Mode Brightness Feedback**:
+- When brightness > 140 (overexposed at dawn), night mode reduces exposure
+- Uses same physics-based feedback as day/transition modes
+- Minimum 60% max exposure (12s) and gain 2.0 to prevent over-reduction
+
+**Coordinated Ramps When Entering Night**:
+- Detects entry: current gain < 50% of target
+- Gain ramps at 0.08 (8%/frame), exposure at 0.05 (5%/frame)
+- Spreads transition over ~15-20 minutes for imperceptible blending
+- Prevents evening brightness spike from gain lagging behind exposure
 
 ### Verification
 

@@ -570,7 +570,7 @@ class AdaptiveTimelapse:
         )
         return interpolated
 
-    def _interpolate_gain(self, target_gain: float) -> float:
+    def _interpolate_gain(self, target_gain: float, speed_override: float = None) -> float:
         """
         Smoothly interpolate analogue gain to prevent sudden ISO jumps.
 
@@ -578,6 +578,7 @@ class AdaptiveTimelapse:
 
         Args:
             target_gain: Target analogue gain value
+            speed_override: Optional speed override (0.0-1.0) for faster transitions
 
         Returns:
             Interpolated gain value
@@ -591,7 +592,7 @@ class AdaptiveTimelapse:
             return target_gain
 
         # Gradual transition towards target
-        speed = self._gain_transition_speed
+        speed = speed_override if speed_override is not None else self._gain_transition_speed
         new_gain = self._last_analogue_gain + speed * (target_gain - self._last_analogue_gain)
 
         # Clamp to valid range
@@ -599,7 +600,10 @@ class AdaptiveTimelapse:
 
         self._last_analogue_gain = new_gain
 
-        logger.debug(f"Gain interpolation: target={target_gain:.2f} → actual={new_gain:.2f}")
+        logger.debug(
+            f"Gain interpolation: target={target_gain:.2f} → actual={new_gain:.2f}"
+            + (f" (fast: {speed:.2f})" if speed_override else "")
+        )
         return new_gain
 
     def _interpolate_exposure(
@@ -2014,19 +2018,59 @@ class AdaptiveTimelapse:
             # Disable auto-exposure, auto-gain, and auto-white-balance for manual control
             settings["AeEnable"] = 0
 
-            # Calculate target values for night mode
-            target_gain = night["analogue_gain"]
-            target_exposure = night["max_exposure_time"]
+            # Check if direct brightness control is enabled
+            direct_control = adaptive_config.get("direct_brightness_control", False)
+            night_max = night["max_exposure_time"]
+            night_gain = night["analogue_gain"]
 
-            # Apply smooth interpolation even in night mode for seamless transitions
-            # Use fast ramp-up for underexposure or fast ramp-down for overexposure
-            if self._underexposure_detected:
-                exposure_speed = self._get_rampup_speed()
-            elif self._overexposure_detected:
-                exposure_speed = self._get_rampdown_speed()
+            # Calculate target values for night mode
+            target_gain = night_gain
+            target_exposure = night_max
+
+            # FIX 1: Brightness feedback in night mode when overexposed
+            # Allow night mode to reduce exposure when brightness > 140 (dawn overexposure)
+            if direct_control and self._last_brightness is not None and self._last_brightness > 140:
+                # Calculate ideal exposure from brightness ratio (same as transition mode)
+                target_exposure = self._calculate_exposure_from_brightness(
+                    self._last_brightness, lux=None
+                )
+                # Enforce night mode minimums: 60% max exposure, gain 2.0
+                # This prevents over-reduction in actual dark scenes
+                target_exposure = max(night_max * 0.6, min(night_max, target_exposure))
+                target_gain = max(2.0, min(night_gain, target_gain))
+                logger.debug(
+                    f"Night mode brightness feedback: brightness={self._last_brightness:.0f}, "
+                    f"target_exposure={target_exposure:.2f}s"
+                )
+
+            # FIX 2: Coordinated ramps when entering night mode
+            # Detect entry: current gain is < 50% of target (coming from day/transition)
+            entering_night = (
+                self._last_analogue_gain is not None
+                and self._last_analogue_gain < target_gain * 0.5
+            )
+
+            if entering_night:
+                # Gain ramps faster than exposure to catch up
+                # But both are slow to spread transition over ~15-20 minutes
+                # At ~30s/frame: gain 0.08 = ~25 frames, exposure 0.05 = ~40 frames
+                gain_speed = 0.08
+                exposure_speed = 0.05
+                logger.debug(
+                    f"Entering night mode: gain={self._last_analogue_gain:.2f} → {target_gain:.2f}, "
+                    f"using coordinated ramps (gain={gain_speed}, exp={exposure_speed})"
+                )
             else:
-                exposure_speed = None
-            smooth_gain = self._interpolate_gain(target_gain)
+                # Normal operation - use standard ramps with over/underexposure adjustments
+                gain_speed = None
+                if self._underexposure_detected:
+                    exposure_speed = self._get_rampup_speed()
+                elif self._overexposure_detected:
+                    exposure_speed = self._get_rampdown_speed()
+                else:
+                    exposure_speed = None
+
+            smooth_gain = self._interpolate_gain(target_gain, gain_speed)
             smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
 
             settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
