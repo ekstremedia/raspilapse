@@ -570,7 +570,9 @@ class AdaptiveTimelapse:
         )
         return interpolated
 
-    def _interpolate_gain(self, target_gain: float, speed_override: float = None) -> float:
+    def _interpolate_gain(
+        self, target_gain: float, speed_override: Optional[float] = None
+    ) -> float:
         """
         Smoothly interpolate analogue gain to prevent sudden ISO jumps.
 
@@ -602,7 +604,7 @@ class AdaptiveTimelapse:
 
         logger.debug(
             f"Gain interpolation: target={target_gain:.2f} → actual={new_gain:.2f}"
-            + (f" (fast: {speed:.2f})" if speed_override else "")
+            + (f" (fast: {speed:.2f})" if speed_override is not None else "")
         )
         return new_gain
 
@@ -1553,7 +1555,7 @@ class AdaptiveTimelapse:
         return target_exposure
 
     def _calculate_exposure_from_brightness(
-        self, actual_brightness: float, lux: float = None
+        self, actual_brightness: float, lux: Optional[float] = None
     ) -> float:
         """
         Direct proportional brightness control.
@@ -2789,9 +2791,10 @@ class AdaptiveTimelapse:
                     mode = self._last_mode or LightMode.DAY
                     lux = self._smoothed_lux  # Use last smoothed lux
                     settings = self.get_camera_settings(mode, lux)
+                    lux_str = f"{lux:.2f}" if lux is not None else "N/A"
                     logger.debug(
                         f"Skipping test shot (frame {self.frame_count}), "
-                        f"reusing mode={mode}, lux={lux:.2f if lux else 'N/A'}"
+                        f"reusing mode={mode}, lux={lux_str}"
                     )
 
                 # Initialize camera on first frame or if it was closed

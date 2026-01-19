@@ -557,7 +557,7 @@ python3 src/status.py -c config/custom.yml
 ```
 
 **Output Example:**
-```
+```text
 ============================================================
   RASPILAPSE STATUS
 ============================================================
@@ -720,7 +720,7 @@ Direct control converges in 3-5 frames using simple physics.
 
 ### How It Works
 
-```
+```text
 ratio = target_brightness / actual_brightness
 new_exposure = current_exposure × ratio^damping
 ```
@@ -806,7 +806,7 @@ The system runs automatically as part of `auto_timelapse.py`:
 
 ### Components
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                    ML Exposure Predictor                     │
 ├─────────────────────────────────────────────────────────────┤
@@ -947,7 +947,7 @@ Database auto-migrates on startup. No manual steps required.
 - **Schema v2**: Added `sun_elevation` column for Arctic-aware ML
 
 When pulling new code to cameras with older databases:
-```
+```text
 [DB] Applying migration v2: Add sun_elevation column for Arctic-aware ML
 [DB] Migration v2 complete
 ```
