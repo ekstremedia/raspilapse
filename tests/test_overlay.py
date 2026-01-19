@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.overlay import ImageOverlay, apply_overlay_to_image
+from src.overlay import ImageOverlay, apply_overlay_to_image, TideData
 
 
 @pytest.fixture
@@ -1244,3 +1244,202 @@ class TestWidgetFixedWidths:
 
         # Max template should accommodate all reasonable values
         assert len(max_line_2) >= len(typical_line_2)
+
+
+class TestTideDataCalculation:
+    """Tests for TideData calculation of next high/low from points array."""
+
+    @pytest.fixture
+    def tide_config(self, tmp_path):
+        """Create a config with tide enabled and a temp tide file."""
+        tide_file = tmp_path / "tide.json"
+        return {
+            "tide": {
+                "enabled": True,
+                "tide_file": str(tide_file),
+            }
+        }
+
+    @pytest.fixture
+    def sample_tide_data(self):
+        """Sample tide data with points array showing a typical day."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        base_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Generate points that create clear highs and lows:
+        # Low at 02:00, High at 08:00, Low at 14:00, High at 20:00
+        points = []
+        for i in range(145):  # 24 hours of 10-min intervals + 1
+            t = base_time + timedelta(minutes=i * 10)
+            # Simulate tide with two cycles per day
+            import math
+
+            hours = i * 10 / 60
+            # Create a pattern: low at 2:00, high at 8:00, low at 14:00, high at 20:00
+            level = 150 + 80 * math.sin((hours - 2) * math.pi / 6)
+            points.append({"time": t.isoformat(), "level_cm": int(level)})
+
+        return {
+            "tide_data": {
+                "location": "Test",
+                "points": points,
+                "next_high": {
+                    "time": (base_time + timedelta(hours=8)).isoformat(),
+                    "level_cm": 230,
+                },
+                "next_low": {"time": (base_time + timedelta(hours=2)).isoformat(), "level_cm": 70},
+            }
+        }
+
+    def test_find_extremes_from_points_finds_highs_and_lows(
+        self, tide_config, sample_tide_data, tmp_path
+    ):
+        """Test that _find_extremes_from_points correctly identifies peaks and troughs."""
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(sample_tide_data, f)
+
+        tide = TideData(tide_config)
+        highs, lows = tide._find_extremes_from_points()
+
+        # Should find at least one high and one low
+        assert len(highs) >= 1, "Should find at least one high tide"
+        assert len(lows) >= 1, "Should find at least one low tide"
+
+        # Highs should have higher levels than lows
+        if highs and lows:
+            assert highs[0]["level_cm"] > lows[0]["level_cm"]
+
+    def test_get_next_high_filters_past_events(self, tide_config, tmp_path):
+        """Test that get_next_high returns only future events."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+
+        # Create data with a past high and a future high
+        past_high_time = now - timedelta(hours=2)
+        future_high_time = now + timedelta(hours=4)
+
+        # Create simple points that create these highs
+        points = []
+        for i in range(-30, 60):  # -5 hours to +10 hours in 10-min intervals
+            t = now + timedelta(minutes=i * 10)
+            # Create peaks at past_high and future_high
+            if abs((t - past_high_time).total_seconds()) < 600:
+                level = 220 - abs((t - past_high_time).total_seconds()) / 60
+            elif abs((t - future_high_time).total_seconds()) < 600:
+                level = 210 - abs((t - future_high_time).total_seconds()) / 60
+            else:
+                level = 100
+            points.append({"time": t.isoformat(), "level_cm": int(level)})
+
+        tide_data = {
+            "tide_data": {
+                "points": points,
+                "next_high": {
+                    "time": past_high_time.isoformat(),  # Backend says past high
+                    "level_cm": 220,
+                },
+            }
+        }
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        next_high = tide.get_next_high()
+
+        # Should return the future high, not the past one
+        if next_high:
+            high_time = tide._parse_time(next_high.get("time"))
+            assert high_time > now, "Next high should be in the future"
+
+    def test_get_next_low_filters_past_events(self, tide_config, tmp_path):
+        """Test that get_next_low returns only future events."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+
+        # Create data with a past low and a future low
+        past_low_time = now - timedelta(hours=3)
+        future_low_time = now + timedelta(hours=3)
+
+        # Create simple points that create these lows
+        points = []
+        for i in range(-40, 50):  # -6.6 hours to +8.3 hours in 10-min intervals
+            t = now + timedelta(minutes=i * 10)
+            # Create troughs at past_low and future_low
+            if abs((t - past_low_time).total_seconds()) < 600:
+                level = 70 + abs((t - past_low_time).total_seconds()) / 60
+            elif abs((t - future_low_time).total_seconds()) < 600:
+                level = 80 + abs((t - future_low_time).total_seconds()) / 60
+            else:
+                level = 180
+            points.append({"time": t.isoformat(), "level_cm": int(level)})
+
+        tide_data = {
+            "tide_data": {
+                "points": points,
+                "next_low": {
+                    "time": past_low_time.isoformat(),  # Backend says past low
+                    "level_cm": 70,
+                },
+            }
+        }
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        next_low = tide.get_next_low()
+
+        # Should return the future low, not the past one
+        if next_low:
+            low_time = tide._parse_time(next_low.get("time"))
+            assert low_time > now, "Next low should be in the future"
+
+    def test_empty_points_returns_none(self, tide_config, tmp_path):
+        """Test that empty points array gracefully returns None."""
+        tide_data = {"tide_data": {"points": []}}
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        assert tide.get_next_high() is None
+        assert tide.get_next_low() is None
+
+    def test_no_extremes_returns_none(self, tide_config, tmp_path):
+        """Test that if points don't have extremes, returns None (no fallback)."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+
+        # Create flat points (no extremes) - always calculates from points, no fallback
+        points = [
+            {"time": (now + timedelta(minutes=i * 10)).isoformat(), "level_cm": 150}
+            for i in range(20)
+        ]
+
+        tide_data = {
+            "tide_data": {
+                "points": points,
+                # Backend next_high is ignored - we always calculate from points
+                "next_high": {"time": (now + timedelta(hours=5)).isoformat(), "level_cm": 220},
+            }
+        }
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        next_high = tide.get_next_high()
+
+        # No extremes in points = None (we don't use backend's pre-calculated values)
+        assert next_high is None

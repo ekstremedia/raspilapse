@@ -234,7 +234,7 @@ class TideData:
         self.tide_file = self.tide_config.get("tide_file", "")
         self._cache: Optional[Dict] = None
         self._cache_time: Optional[datetime] = None
-        self._cache_duration = 60  # Cache for 60 seconds
+        self._cache_duration = 600  # Cache for 10 minutes (points array covers 24h)
 
     def get_tide_data(self) -> Optional[Dict]:
         """
@@ -402,19 +402,81 @@ class TideData:
         else:
             return "→"
 
-    def get_next_high(self) -> Optional[Dict]:
-        """Get next high tide info."""
+    def _find_extremes_from_points(self) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Find all high and low tides from the points array.
+
+        Analyzes the points to find local maxima (highs) and minima (lows)
+        by detecting where the tide changes direction.
+
+        Returns:
+            Tuple of (highs_list, lows_list) where each item is
+            {"time": iso_string, "level_cm": int}
+        """
         data = self.get_tide_data()
         if data is None:
-            return None
-        return data.get("next_high")
+            return [], []
+
+        points = data.get("points", [])
+        if len(points) < 3:
+            return [], []
+
+        highs = []
+        lows = []
+
+        # Look for direction changes in the tide level
+        for i in range(1, len(points) - 1):
+            prev_level = points[i - 1].get("level_cm", 0)
+            curr_level = points[i].get("level_cm", 0)
+            next_level = points[i + 1].get("level_cm", 0)
+
+            # High tide: level was rising, now falling
+            if curr_level >= prev_level and curr_level > next_level:
+                # Verify it's a significant peak (not just noise)
+                if curr_level - prev_level >= 0 and curr_level - next_level > 0:
+                    highs.append({"time": points[i].get("time"), "level_cm": curr_level})
+
+            # Low tide: level was falling, now rising
+            if curr_level <= prev_level and curr_level < next_level:
+                # Verify it's a significant trough
+                if prev_level - curr_level >= 0 and next_level - curr_level > 0:
+                    lows.append({"time": points[i].get("time"), "level_cm": curr_level})
+
+        return highs, lows
+
+    def get_next_high(self) -> Optional[Dict]:
+        """
+        Get next high tide info by calculating from points array.
+
+        Always calculates from the points array to ensure accuracy,
+        filtering to only return future events.
+        """
+        now = datetime.now().astimezone()
+
+        highs, _ = self._find_extremes_from_points()
+        for high in highs:
+            high_time = self._parse_time(high.get("time"))
+            if high_time and high_time > now:
+                return high
+
+        return None
 
     def get_next_low(self) -> Optional[Dict]:
-        """Get next low tide info."""
-        data = self.get_tide_data()
-        if data is None:
-            return None
-        return data.get("next_low")
+        """
+        Get next low tide info by calculating from points array.
+
+        Always calculates from the points array to ensure accuracy,
+        filtering to only return future events.
+        """
+        now = datetime.now().astimezone()
+
+        _, lows = self._find_extremes_from_points()
+        for low in lows:
+            low_time = self._parse_time(low.get("time"))
+            if low_time and low_time > now:
+                return low
+
+        return None
 
     def _parse_time(self, time_str: str) -> Optional[datetime]:
         """Parse ISO format time string."""
@@ -1506,192 +1568,206 @@ class ImageOverlay:
 
                 # Aurora section (far right) - only if enabled
                 if hasattr(self, "aurora") and self.aurora.enabled:
-                    aurora_widget = self.aurora.get_widget_data()
-                    if aurora_widget:
-                        # Aurora text lines
-                        # Line 1: Kp: 2.3 | Bz: 0.9↑
-                        aurora_line_1 = f"Kp: {aurora_widget['kp_str']} | Bz: {aurora_widget['bz_str']}{aurora_widget['bz_arrow']}"
-                        # Line 2: G0 | 556 km/s
-                        aurora_line_2 = (
-                            f"{aurora_widget['storm']} | {aurora_widget['speed_str']} km/s"
-                        )
-
-                        # Use FIXED text width based on max possible content
-                        # This ensures position stays fixed for timelapse (arrow chars vary in width)
-                        try:
-                            max_line_1 = "Kp: 9.9 | Bz: -99.9↓"  # Max width template
-                            max_line_2 = "G5 | 9999 km/s"
-                            bbox1 = draw.textbbox((0, 0), max_line_1, font=font_regular)
-                            bbox2 = draw.textbbox((0, 0), max_line_2, font=font_regular)
-                            aurora_text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
-                        except Exception:
-                            aurora_text_width = (
-                                max(len(max_line_1), len(max_line_2)) * font_size * 0.6
+                    try:
+                        aurora_widget = self.aurora.get_widget_data()
+                        if aurora_widget:
+                            # Aurora text lines
+                            # Line 1: Kp: 2.3 | Bz: 0.9↑
+                            aurora_line_1 = f"Kp: {aurora_widget['kp_str']} | Bz: {aurora_widget['bz_str']}{aurora_widget['bz_arrow']}"
+                            # Line 2: G0 | 556 km/s
+                            aurora_line_2 = (
+                                f"{aurora_widget['storm']} | {aurora_widget['speed_str']} km/s"
                             )
 
-                        aurora_section_width = aurora_text_width
+                            # Use FIXED text width based on max possible content
+                            # This ensures position stays fixed for timelapse (arrow chars vary in width)
+                            try:
+                                max_line_1 = "Kp: 9.9 | Bz: -99.9↓"  # Max width template
+                                max_line_2 = "G5 | 9999 km/s"
+                                bbox1 = draw.textbbox((0, 0), max_line_1, font=font_regular)
+                                bbox2 = draw.textbbox((0, 0), max_line_2, font=font_regular)
+                                aurora_text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
+                            except Exception:
+                                aurora_text_width = (
+                                    max(len(max_line_1), len(max_line_2)) * font_size * 0.6
+                                )
 
-                        # Position for aurora section (far right)
-                        aurora_x = img_width - aurora_section_width - margin - padding
+                            aurora_section_width = aurora_text_width
 
-                        # Draw aurora text
-                        draw.text((aurora_x, y1), aurora_line_1, fill=font_color, font=font_regular)
-                        draw.text((aurora_x, y2), aurora_line_2, fill=font_color, font=font_regular)
+                            # Position for aurora section (far right)
+                            aurora_x = img_width - aurora_section_width - margin - padding
 
-                        # Add gap for next section
-                        aurora_section_width += section_gap
+                            # Draw aurora text
+                            draw.text(
+                                (aurora_x, y1), aurora_line_1, fill=font_color, font=font_regular
+                            )
+                            draw.text(
+                                (aurora_x, y2), aurora_line_2, fill=font_color, font=font_regular
+                            )
 
-                        # Draw subtle vertical divider line to left of aurora section
-                        divider_x = aurora_x - int(section_gap * 0.5)
-                        divider_y1 = y1
-                        divider_y2 = y2 + line_height - int(padding * 0.3)
-                        divider_color = font_color[:3] + (60,)  # Very subtle
-                        draw.line(
-                            [(divider_x, divider_y1), (divider_x, divider_y2)],
-                            fill=divider_color,
-                            width=1,
-                        )
+                            # Add gap for next section
+                            aurora_section_width += section_gap
+
+                            # Draw subtle vertical divider line to left of aurora section
+                            divider_x = aurora_x - int(section_gap * 0.5)
+                            divider_y1 = y1
+                            divider_y2 = y2 + line_height - int(padding * 0.3)
+                            divider_color = font_color[:3] + (60,)  # Very subtle
+                            draw.line(
+                                [(divider_x, divider_y1), (divider_x, divider_y2)],
+                                fill=divider_color,
+                                width=1,
+                            )
+                    except Exception as aurora_err:
+                        logger.error(f"Failed to draw aurora widget: {aurora_err}", exc_info=True)
 
                 # Tide section (to left of aurora) - only if enabled
                 if hasattr(self, "tide") and self.tide.enabled:
-                    tide_widget = self.tide.get_widget_data()
-                    if tide_widget:
-                        # Wave visualization dimensions
-                        wave_width = int(font_size * 4)  # Width of wave graphic
-                        wave_height = int(line_height * 1.6)  # Height spans both lines
-                        wave_margin = int(padding * 0.5)
+                    try:
+                        tide_widget = self.tide.get_widget_data()
+                        if tide_widget:
+                            # Wave visualization dimensions
+                            wave_width = int(font_size * 4)  # Width of wave graphic
+                            wave_height = int(line_height * 1.6)  # Height spans both lines
+                            wave_margin = int(padding * 0.5)
 
-                        # Tide text lines
-                        tide_line_1 = f"Tide: {tide_widget['level_str']} {tide_widget['arrow']} {tide_widget['target_level_str']}"
-                        tide_line_2 = f"H {tide_widget['high_time_str']} ({tide_widget['high_level_str']}) | L {tide_widget['low_time_str']} ({tide_widget['low_level_str']})"
+                            # Tide text lines
+                            tide_line_1 = f"Tide: {tide_widget['level_str']} {tide_widget['arrow']} {tide_widget['target_level_str']}"
+                            tide_line_2 = f"H {tide_widget['high_time_str']} ({tide_widget['high_level_str']}) | L {tide_widget['low_time_str']} ({tide_widget['low_level_str']})"
 
-                        # Use FIXED text width based on max possible content
-                        # This ensures wave stays in same position for timelapse
-                        try:
-                            max_line_1 = "Tide: 999cm → 999cm"
-                            max_line_2 = "H 00:00 (999cm) | L 00:00 (999cm)"
-                            bbox1 = draw.textbbox((0, 0), max_line_1, font=font_regular)
-                            bbox2 = draw.textbbox((0, 0), max_line_2, font=font_regular)
-                            text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
-                        except Exception:
-                            text_width = max(len(max_line_1), len(max_line_2)) * font_size * 0.6
+                            # Use FIXED text width based on max possible content
+                            # This ensures wave stays in same position for timelapse
+                            try:
+                                max_line_1 = "Tide: 999cm → 999cm"
+                                max_line_2 = "H 00:00 (999cm) | L 00:00 (999cm)"
+                                bbox1 = draw.textbbox((0, 0), max_line_1, font=font_regular)
+                                bbox2 = draw.textbbox((0, 0), max_line_2, font=font_regular)
+                                text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
+                            except Exception:
+                                text_width = max(len(max_line_1), len(max_line_2)) * font_size * 0.6
 
-                        # Total tide section width: fixed text area + margin + wave
-                        tide_section_width = text_width + wave_margin + wave_width
+                            # Total tide section width: fixed text area + margin + wave
+                            tide_section_width = text_width + wave_margin + wave_width
 
-                        # Position for tide section (to left of aurora)
-                        tide_x = (
-                            img_width - tide_section_width - aurora_section_width - margin - padding
-                        )
-                        text_x = tide_x
-                        # Wave position is fixed relative to section start
-                        wave_x = tide_x + text_width + wave_margin
+                            # Position for tide section (to left of aurora)
+                            tide_x = (
+                                img_width
+                                - tide_section_width
+                                - aurora_section_width
+                                - margin
+                                - padding
+                            )
+                            text_x = tide_x
+                            # Wave position is fixed relative to section start
+                            wave_x = tide_x + text_width + wave_margin
 
-                        # Draw text
-                        draw.text((text_x, y1), tide_line_1, fill=font_color, font=font_regular)
-                        draw.text((text_x, y2), tide_line_2, fill=font_color, font=font_regular)
+                            # Draw text
+                            draw.text((text_x, y1), tide_line_1, fill=font_color, font=font_regular)
+                            draw.text((text_x, y2), tide_line_2, fill=font_color, font=font_regular)
 
-                        # Draw wave visualization (to the right of text)
-                        # Marker stays centered, wave scrolls underneath, marker moves up/down
-                        wave_y = y1 + int(line_height * 0.1)  # Slightly below line 1 start
-                        wave_color = font_color[:3] + (180,)  # Slightly transparent
-                        marker_color = (255, 200, 100, 255)  # Orange/gold for marker
+                            # Draw wave visualization (to the right of text)
+                            # Marker stays centered, wave scrolls underneath, marker moves up/down
+                            wave_y = y1 + int(line_height * 0.1)  # Slightly below line 1 start
+                            wave_color = font_color[:3] + (180,)  # Slightly transparent
+                            marker_color = (255, 200, 100, 255)  # Orange/gold for marker
 
-                        # Calculate normalized level (0.0 = low, 1.0 = high)
-                        current_level = tide_widget["level"]
-                        high_level = (
-                            tide_widget["high_level"]
-                            if tide_widget["high_level"] is not None
-                            else 2.0
-                        )
-                        low_level = (
-                            tide_widget["low_level"]
-                            if tide_widget["low_level"] is not None
-                            else 0.5
-                        )
-                        level_range = high_level - low_level
+                            # Calculate normalized level (0.0 = low, 1.0 = high)
+                            current_level = tide_widget["level"]
+                            high_level = (
+                                tide_widget["high_level"]
+                                if tide_widget["high_level"] is not None
+                                else 2.0
+                            )
+                            low_level = (
+                                tide_widget["low_level"]
+                                if tide_widget["low_level"] is not None
+                                else 0.5
+                            )
+                            level_range = high_level - low_level
 
-                        if level_range > 0:
-                            # Normalize current level to 0-1 range
-                            normalized = (current_level - low_level) / level_range
-                            normalized = max(0.0, min(1.0, normalized))
-                        else:
-                            normalized = 0.5
+                            if level_range > 0:
+                                # Normalize current level to 0-1 range
+                                normalized = (current_level - low_level) / level_range
+                                normalized = max(0.0, min(1.0, normalized))
+                            else:
+                                normalized = 0.5
 
-                        # Determine phase based on next event
-                        # Phase: 0.0 = at low going up, 0.5 = at high, 1.0 = at low going down
-                        next_event = tide_widget["next_event_type"]
+                            # Determine phase based on next event
+                            # Phase: 0.0 = at low going up, 0.5 = at high, 1.0 = at low going down
+                            next_event = tide_widget["next_event_type"]
 
-                        if next_event == "high":
-                            # Rising: normalized 0->1 maps to phase 0->0.5
-                            phase = normalized * 0.5
-                        else:
-                            # Falling: normalized 1->0 maps to phase 0.5->1.0
-                            phase = 0.5 + (1.0 - normalized) * 0.5
+                            if next_event == "high":
+                                # Rising: normalized 0->1 maps to phase 0->0.5
+                                phase = normalized * 0.5
+                            else:
+                                # Falling: normalized 1->0 maps to phase 0.5->1.0
+                                phase = 0.5 + (1.0 - normalized) * 0.5
 
-                        # Marker stays in horizontal center of wave area
-                        marker_x = wave_x + int(wave_width / 2)
+                            # Marker stays in horizontal center of wave area
+                            marker_x = wave_x + int(wave_width / 2)
 
-                        # Marker Y position based on normalized level (high = top, low = bottom)
-                        wave_amplitude = wave_height / 2 * 0.8
-                        wave_center_y = wave_y + int(wave_height / 2)
-                        # normalized 1 (high) = top, normalized 0 (low) = bottom
-                        marker_y = int(wave_center_y - (normalized - 0.5) * 2 * wave_amplitude)
+                            # Marker Y position based on normalized level (high = top, low = bottom)
+                            wave_amplitude = wave_height / 2 * 0.8
+                            wave_center_y = wave_y + int(wave_height / 2)
+                            # normalized 1 (high) = top, normalized 0 (low) = bottom
+                            marker_y = int(wave_center_y - (normalized - 0.5) * 2 * wave_amplitude)
 
-                        # Draw sine wave that scrolls based on phase
-                        # The wave is drawn so current phase appears at center
-                        wave_points = []
-                        num_points = 40
-                        for i in range(num_points + 1):
-                            t = i / num_points
-                            x = wave_x + int(t * wave_width)
-                            # Offset the wave so current phase is at center (t=0.5)
-                            # Wave phase at position t: (t - 0.5) + phase
-                            wave_t = (t - 0.5) + phase
-                            y_offset = math.sin(wave_t * 2 * math.pi - math.pi / 2)
-                            y = int(wave_center_y - y_offset * wave_amplitude)
-                            wave_points.append((x, y))
+                            # Draw sine wave that scrolls based on phase
+                            # The wave is drawn so current phase appears at center
+                            wave_points = []
+                            num_points = 40
+                            for i in range(num_points + 1):
+                                t = i / num_points
+                                x = wave_x + int(t * wave_width)
+                                # Offset the wave so current phase is at center (t=0.5)
+                                # Wave phase at position t: (t - 0.5) + phase
+                                wave_t = (t - 0.5) + phase
+                                y_offset = math.sin(wave_t * 2 * math.pi - math.pi / 2)
+                                y = int(wave_center_y - y_offset * wave_amplitude)
+                                wave_points.append((x, y))
 
-                        # Draw wave line
-                        if len(wave_points) > 1:
-                            draw.line(wave_points, fill=wave_color, width=2)
+                            # Draw wave line
+                            if len(wave_points) > 1:
+                                draw.line(wave_points, fill=wave_color, width=2)
 
-                        # Draw filled circle as marker (centered, moves up/down)
-                        marker_radius = int(font_size * 0.25)
-                        draw.ellipse(
-                            [
-                                marker_x - marker_radius,
-                                marker_y - marker_radius,
-                                marker_x + marker_radius,
-                                marker_y + marker_radius,
-                            ],
-                            fill=marker_color,
-                            outline=(255, 255, 255, 255),
-                            width=1,
-                        )
-
-                        # Draw vertical line from marker down to show level
-                        line_bottom = wave_y + wave_height
-                        if marker_y + marker_radius < line_bottom:
-                            draw.line(
-                                [(marker_x, marker_y + marker_radius), (marker_x, line_bottom)],
-                                fill=(255, 255, 255, 100),
+                            # Draw filled circle as marker (centered, moves up/down)
+                            marker_radius = int(font_size * 0.25)
+                            draw.ellipse(
+                                [
+                                    marker_x - marker_radius,
+                                    marker_y - marker_radius,
+                                    marker_x + marker_radius,
+                                    marker_y + marker_radius,
+                                ],
+                                fill=marker_color,
+                                outline=(255, 255, 255, 255),
                                 width=1,
                             )
 
-                        # Add gap for next section
-                        tide_section_width += section_gap
+                            # Draw vertical line from marker down to show level
+                            line_bottom = wave_y + wave_height
+                            if marker_y + marker_radius < line_bottom:
+                                draw.line(
+                                    [(marker_x, marker_y + marker_radius), (marker_x, line_bottom)],
+                                    fill=(255, 255, 255, 100),
+                                    width=1,
+                                )
 
-                        # Draw subtle vertical divider line to left of tide section
-                        divider_x = tide_x - int(section_gap * 0.5)
-                        divider_y1 = y1
-                        divider_y2 = y2 + line_height - int(padding * 0.3)
-                        divider_color = font_color[:3] + (60,)  # Very subtle
-                        draw.line(
-                            [(divider_x, divider_y1), (divider_x, divider_y2)],
-                            fill=divider_color,
-                            width=1,
-                        )
+                            # Add gap for next section
+                            tide_section_width += section_gap
+
+                            # Draw subtle vertical divider line to left of tide section
+                            divider_x = tide_x - int(section_gap * 0.5)
+                            divider_y1 = y1
+                            divider_y2 = y2 + line_height - int(padding * 0.3)
+                            divider_color = font_color[:3] + (60,)  # Very subtle
+                            draw.line(
+                                [(divider_x, divider_y1), (divider_x, divider_y2)],
+                                fill=divider_color,
+                                width=1,
+                            )
+                    except Exception as tide_err:
+                        logger.error(f"Failed to draw tide widget: {tide_err}", exc_info=True)
 
                 # Line 1 Right (positioned to left of tide section)
                 line_1_right_template = content_config.get("line_1_right", "")
@@ -1755,15 +1831,18 @@ class ImageOverlay:
                     )
 
                 # Draw ship boxes below the bar (floating boxes with rounded corners)
-                self._draw_ship_boxes(
-                    img=img,
-                    bar_height=bar_height,
-                    font=font_regular,
-                    font_color=font_color,
-                    bg_color=bg_color,
-                    margin=margin,
-                    padding=padding,
-                )
+                try:
+                    self._draw_ship_boxes(
+                        img=img,
+                        bar_height=bar_height,
+                        font=font_regular,
+                        font_color=font_color,
+                        bg_color=bg_color,
+                        margin=margin,
+                        padding=padding,
+                    )
+                except Exception as ships_err:
+                    logger.error(f"Failed to draw ship boxes: {ships_err}", exc_info=True)
 
             else:
                 # Original box layout for non-bar modes

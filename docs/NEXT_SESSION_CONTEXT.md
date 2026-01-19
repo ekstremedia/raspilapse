@@ -112,9 +112,69 @@ Adding damping (exponent < 1.0) prevents oscillation while still converging quic
 
 ### Better Error Handling
 - `apply_overlay()` now returns `None` on failure instead of original path
+- **Main try/catch** wraps entire overlay drawing (lines 1391-1842 in overlay.py)
 - Separate try/catch for image save operation
 - Proper error logging with stack traces
+- **Per-widget try/catch blocks** (added 2026-01-19): Each widget (aurora, tide, ships) now has its own try/catch so one failing widget doesn't break the entire overlay
+
+### Overlay Debugging Commands
+
+```bash
+# Check overlay errors (widget failures logged individually)
+grep -E "(ERROR|WARNING)" /home/pi/raspilapse/logs/overlay.log | tail -20
+
+# Check if overlay is being applied
+tail -50 /home/pi/raspilapse/logs/capture_image.log | grep -i overlay
+
+# Check tide data freshness (is next_high in the past?)
+cat /home/pi/pi-overlay-data/data/tides_current.json | python3 -m json.tool
+
+# Errors to look for:
+# "Failed to draw aurora widget: ..." - Aurora data issue
+# "Failed to draw tide widget: ..."   - Tide data issue
+# "Failed to draw ship boxes: ..."    - Ships data issue
+# "Failed to apply overlay: ..."      - General overlay failure
+# "Failed to save overlay image: ..." - Disk/permission issue
+```
 
 ### Tide Data Freshness
 - Reduced pi-overlay-data tide cache from 24h to 1h
 - API endpoint updated to refresh hourly (was every 6h)
+
+### Fixed: Tide Now Shows Future Events Only (2026-01-19)
+**Problem**: After a high/low tide passed, overlay showed past events until backend refreshed.
+- Example: At 14:55, overlay showed "H 13:18" (past high) instead of next high
+
+**Solution**: Raspilapse now **always calculates** next high/low from the `points` array:
+- New method `TideData._find_extremes_from_points()` analyzes the points array
+- Finds local maxima (highs) and minima (lows) by detecting direction changes
+- `get_next_high()` and `get_next_low()` filter to only return **future** events
+- **No fallback** to backend's pre-calculated `next_high`/`next_low` (those fields are now ignored)
+- Cache increased from 60s to 600s (10 min) since points cover 24 hours
+
+**Backend simplification** (optional):
+- Backend can remove `next_high`/`next_low` fields from tide data
+- Only the `points` array is needed now
+- Reduces backend complexity and eliminates stale data issues
+
+**Files changed**:
+- `src/overlay.py`: Added `_find_extremes_from_points()`, simplified `get_next_high()`, `get_next_low()`
+- `tests/test_overlay.py`: Added `TestTideDataCalculation` class with 5 tests
+
+**Verification**:
+```bash
+# Test the new calculation
+python3 -c "
+import yaml
+from src.overlay import TideData
+from datetime import datetime
+
+with open('config/config.yml') as f:
+    config = yaml.safe_load(f)
+
+tide = TideData(config)
+print(f'Now: {datetime.now()}')
+print(f'Next high: {tide.get_next_high()}')
+print(f'Next low: {tide.get_next_low()}')
+"
+```
