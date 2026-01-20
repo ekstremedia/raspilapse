@@ -2038,11 +2038,27 @@ class AdaptiveTimelapse:
                 )
                 # Enforce night mode minimums: 60% max exposure, gain 2.0
                 # This prevents over-reduction in actual dark scenes
-                target_exposure = max(night_max * 0.6, min(night_max, target_exposure))
-                target_gain = max(2.0, min(night_gain, target_gain))
+                exposure_floor = night_max * 0.6
+                target_exposure = max(exposure_floor, min(night_max, target_exposure))
+
+                # FIX 1b: When exposure is near floor AND brightness still high, reduce gain
+                # This prevents brightness climbing when exposure can't go lower
+                exposure_near_floor = target_exposure <= exposure_floor * 1.1
+                if exposure_near_floor and self._last_brightness > 150:
+                    # Reduce gain proportionally to bring brightness toward 120
+                    # Use sqrt for gentler reduction (since brightness ~ gain * exposure)
+                    brightness_ratio = 120.0 / self._last_brightness
+                    target_gain = max(2.0, self._last_analogue_gain * brightness_ratio**0.5)
+                    logger.debug(
+                        f"Night mode gain reduction: brightness={self._last_brightness:.0f}, "
+                        f"exposure at floor ({target_exposure:.2f}s), reducing gain to {target_gain:.2f}"
+                    )
+                else:
+                    target_gain = max(2.0, min(night_gain, target_gain))
+
                 logger.debug(
                     f"Night mode brightness feedback: brightness={self._last_brightness:.0f}, "
-                    f"target_exposure={target_exposure:.2f}s"
+                    f"target_exposure={target_exposure:.2f}s, target_gain={target_gain:.2f}"
                 )
 
             # FIX 2: Coordinated ramps when entering night mode
@@ -2053,14 +2069,34 @@ class AdaptiveTimelapse:
             )
 
             if entering_night:
-                # Gain ramps faster than exposure to catch up
-                # But both are slow to spread transition over ~15-20 minutes
-                # At ~30s/frame: gain 0.08 = ~25 frames, exposure 0.05 = ~40 frames
-                gain_speed = 0.08
-                exposure_speed = 0.05
+                # FIX 2b: Even slower base ramps to spread over ~20-30 minutes
+                # At ~30s/frame: gain 0.04 = ~50 frames, exposure 0.03 = ~66 frames
+                base_gain_speed = 0.04  # 4% per frame (was 8%)
+                base_exposure_speed = 0.03  # 3% per frame (was 5%)
+
+                # FIX 2c: Throttle when brightness is approaching target
+                # Night target brightness is ~80 (lower than day's 120)
+                night_brightness_target = 80
+                if (
+                    self._last_brightness is not None
+                    and self._last_brightness > night_brightness_target * 0.8
+                ):
+                    # Approaching or exceeding target, slow down further
+                    proximity = self._last_brightness / night_brightness_target
+                    # Throttle from 100% speed at 64 brightness to 30% at 80+
+                    throttle = max(0.3, 1.0 - (proximity - 0.8) * 2)
+                    base_gain_speed *= throttle
+                    base_exposure_speed *= throttle
+                    logger.debug(
+                        f"Entering night throttle: brightness={self._last_brightness:.0f}, "
+                        f"throttle={throttle:.0%}, gain_speed={base_gain_speed:.3f}, exp_speed={base_exposure_speed:.3f}"
+                    )
+
+                gain_speed = base_gain_speed
+                exposure_speed = base_exposure_speed
                 logger.debug(
                     f"Entering night mode: gain={self._last_analogue_gain:.2f} → {target_gain:.2f}, "
-                    f"using coordinated ramps (gain={gain_speed}, exp={exposure_speed})"
+                    f"using coordinated ramps (gain={gain_speed:.3f}, exp={exposure_speed:.3f})"
                 )
             else:
                 # Normal operation - use standard ramps with over/underexposure adjustments

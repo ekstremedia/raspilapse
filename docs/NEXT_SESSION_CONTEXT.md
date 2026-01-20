@@ -182,70 +182,71 @@ print(f'Next low: {tide.get_next_low()}')
 
 ---
 
-## Mode Transition Brightness Fixes (2026-01-19)
+## Mode Transition Brightness Fixes (Iteration 2: 2026-01-20)
 
-### Problem: Two Artifacts Visible in Slitscan
+### Problem: Artifacts Still Visible After Iteration 1 (2026-01-19)
 
-1. **Morning dip (~8 AM)**: Night mode can't reduce exposure as dawn brightens → sudden drop when switching to transition
-2. **Evening flash (~16-17)**: Gain ramps too slowly when entering night mode → brightness spike
+Data from 2026-01-20 showed the previous fixes helped but artifacts remain:
 
-### Root Causes
+1. **Morning dip (~08:08-08:11)**: Night mode reduces exposure but NOT gain, so brightness climbs until transition slashes both
+2. **Evening flash (~16:33-16:37)**: Coordinated ramps at 8%/5% still cause brightness overshoot from combined exposure+gain increase
 
-**Morning Dip (Night → Transition)**:
-- Night mode used fixed max settings (20s, gain 6.0) regardless of brightness
-- As dawn arrived, brightness climbed but night mode couldn't reduce exposure
-- When brightness > 160, hybrid override forced TRANSITION mode
-- Transition mode saw high brightness and slashed exposure → visible dip
+### Iteration 2 Root Cause Analysis
 
-**Evening Flash (Transition → Night)**:
-- Exposure ramps fast (15%/frame → reaches 20s in ~4 frames)
-- Gain ramps slow (10%/frame → 1.2 to 6.0 takes ~10 frames)
-- High exposure + low gain = brightness spike
+**Morning Dip**:
+```
+08:05:46  night  exp=12.16s  gain=6.00  bright=145  ← exposure hit floor (12s)
+08:07:46  night  exp=12.03s  gain=6.00  bright=153  ← brightness still climbing!
+08:08:16  trans  exp=10.38s  gain=5.50  bright=170  ← transition slashes both → DIP
+```
+- Night mode reduces EXPOSURE (20s→12s) but gain stays fixed at 6.0
+- When exposure hits floor (60% of max), brightness can still climb
 
-### Solution: Two Fixes in `auto_timelapse.py`
+**Evening Flash**:
+```
+16:31:35  trans  exp=16.0s   gain=1.21  bright=62   ← low brightness
+16:36:54  night  exp=18.39s  gain=3.64  bright=120  ← OVERSHOOT after 5 min
+```
+- Even at 8% gain ramps, combined exposure+gain increase causes overshoot
 
-**Fix 1: Brightness Feedback in Night Mode** (lines 2032-2050):
-- When `direct_brightness_control` enabled and brightness > 140
-- Night mode can now reduce exposure using same physics-based feedback
-- Minimum 60% max exposure (12s) and gain 2.0 to prevent over-reduction
+### Solution: Four Fixes in `auto_timelapse.py`
 
-**Fix 2: Coordinated Ramps When Entering Night Mode** (lines 2052-2080):
-- Detects entry: current gain < 50% of target (coming from day/transition)
-- Gain ramps faster (0.08 = 8%/frame) to catch up
-- Exposure ramps slower (0.05 = 5%/frame) to give gain time
-- Spreads transition over ~15-20 minutes for smooth blending
+**Fix 1a: Brightness Feedback in Night Mode** (lines 2032-2042):
+- When brightness > 140, night mode reduces exposure via physics feedback
+- Minimum 60% max exposure (12s) to prevent over-reduction
 
-**Also added**: `speed_override` parameter to `_interpolate_gain()` (line 574)
+**Fix 1b: Night Mode Gain Reduction** (lines 2044-2057, NEW):
+- When exposure near floor (≤13.2s) AND brightness > 150
+- Reduce gain proportionally: `gain = gain * (120/brightness)^0.5`
+- Minimum gain 2.0 prevents complete darkness
 
-### Config Changes Required: None
+**Fix 2a: Slower Coordinated Ramps** (lines 2074-2075):
+- Base speeds reduced: gain 0.04 (was 0.08), exposure 0.03 (was 0.05)
+- Spreads transition over ~20-30 minutes
 
-All fixes use hardcoded sensible defaults. Works automatically when:
-```yaml
-adaptive_timelapse:
-  direct_brightness_control: true  # Already in your config
+**Fix 2b: Brightness Throttling** (lines 2077-2090, NEW):
+- When brightness > 64 (80% of target 80), throttle ramp speed
+- Throttle from 100% at brightness 64 to 30% at brightness 80+
+- Prevents overshoot by slowing down as brightness approaches target
+
+### Verification
+
+```bash
+# Monitor transitions in real-time
+journalctl -u raspilapse -f | grep -E "(gain reduction|throttle|Entering night)"
+
+# After next dawn/dusk:
+python scripts/db_stats.py 30m
+
+# Expected:
+# - Morning: brightness stays 110-150, no drop below 100
+# - Evening: brightness stays 60-90, no spike above 110
 ```
 
 ### For Other Cameras
 
-Just pull the code:
 ```bash
 cd /home/pi/raspilapse
 git pull
 sudo systemctl restart raspilapse
-```
-
-No config changes needed.
-
-### Verification
-
-After next dawn/dusk cycle, check slitscan for:
-- Morning (8-9 AM): brightness stays 100-150, no sudden dips
-- Evening (16-17): brightness stays 90-150, no spikes to 190+
-
-```bash
-# Monitor during transitions
-python scripts/db_stats.py 5m
-
-# Check logs for new debug messages
-journalctl -u raspilapse | grep -E "(Entering night|brightness feedback)"
 ```

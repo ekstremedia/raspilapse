@@ -754,20 +754,30 @@ adaptive_timelapse:
 | Transition | Direct feedback | Ramps when exposure >80% max | Shutter-first, then gain |
 | Night | Direct feedback if bright | Coordinated ramp on entry | Prevents transition artifacts |
 
-### Mode Transition Smoothing (2026-01-19)
+### Mode Transition Smoothing (2026-01-20, iteration 2)
 
-Two fixes prevent brightness artifacts at mode boundaries:
+Four fixes prevent brightness artifacts at mode boundaries:
 
-**Night Mode Brightness Feedback**:
+**Night Mode Brightness Feedback (dawn)**:
 - When brightness > 140 (overexposed at dawn), night mode reduces exposure
 - Uses same physics-based feedback as day/transition modes
-- Minimum 60% max exposure (12s) and gain 2.0 to prevent over-reduction
+- Minimum 60% max exposure (12s) to prevent over-reduction
 
-**Coordinated Ramps When Entering Night**:
+**Night Mode Gain Reduction (dawn, NEW)**:
+- When exposure hits floor (12s) AND brightness still > 150, also reduce gain
+- Uses sqrt-based reduction: `gain = gain * (120/brightness)^0.5`
+- Minimum gain 2.0 prevents complete darkness
+- Prevents brightness climbing when exposure can't go lower
+
+**Coordinated Ramps When Entering Night (evening)**:
 - Detects entry: current gain < 50% of target
-- Gain ramps at 0.08 (8%/frame), exposure at 0.05 (5%/frame)
-- Spreads transition over ~15-20 minutes for imperceptible blending
-- Prevents evening brightness spike from gain lagging behind exposure
+- Slower base ramps: gain 0.04 (4%/frame), exposure 0.03 (3%/frame)
+- Spreads transition over ~20-30 minutes for imperceptible blending
+
+**Brightness Throttling When Entering Night (NEW)**:
+- When brightness > 64 (80% of night target 80), throttles ramp speed
+- Throttle ranges from 100% at brightness 64 to 30% at brightness 80+
+- Prevents overshoot from combined exposure+gain increase
 
 ### Verification
 

@@ -320,3 +320,155 @@ class TestUrgencyScaledFeedback:
 
         # With 3x urgency multiplier, change should be significant
         assert change > 0.1  # At least 10% change
+
+
+class TestNightModeGainReduction:
+    """Tests for night mode gain reduction when exposure is at floor."""
+
+    @pytest.fixture
+    def timelapse(self, tmp_path):
+        """Create a minimal AdaptiveTimelapse instance for testing."""
+        config = {
+            "adaptive_timelapse": {
+                "night_mode": {"max_exposure_time": 20.0, "analogue_gain": 6.0},
+                "day_mode": {"exposure_time": 0.02},
+                "light_thresholds": {"night": 3, "day": 80},
+                "direct_brightness_control": True,
+                "transition_mode": {
+                    "target_brightness": 120,
+                    "brightness_tolerance": 40,
+                    "brightness_feedback_strength": 0.3,
+                },
+            },
+            "output": {"directory": str(tmp_path / "output")},
+            "camera": {"resolution": [1920, 1080]},
+        }
+
+        config_path = tmp_path / "config.yml"
+        with open(config_path, "w") as f:
+            yaml.dump(config, f)
+
+        (tmp_path / "output").mkdir(exist_ok=True)
+
+        from src.auto_timelapse import AdaptiveTimelapse
+
+        timelapse = AdaptiveTimelapse(str(config_path))
+        return timelapse
+
+    def test_gain_reduction_triggers_at_floor(self, timelapse):
+        """Test that gain is reduced when exposure is at floor and brightness high."""
+        # Simulate exposure at floor (12s = 60% of 20s max)
+        timelapse._last_exposure_time = 12.0
+        timelapse._last_analogue_gain = 6.0
+        timelapse._last_brightness = 160  # Above 150 threshold
+
+        # Get camera settings for night mode
+        settings = timelapse.get_camera_settings("night")
+
+        # When exposure is at floor and brightness > 150, gain should be reduced
+        # The gain should be lower than the configured night gain (6.0)
+        assert settings["AnalogueGain"] < 6.0
+
+    def test_gain_not_reduced_when_brightness_normal(self, timelapse):
+        """Test that gain is not reduced when brightness is acceptable."""
+        timelapse._last_exposure_time = 12.0
+        timelapse._last_analogue_gain = 6.0
+        timelapse._last_brightness = 130  # Below 150, within acceptable range
+
+        settings = timelapse.get_camera_settings("night")
+
+        # Gain should ramp toward target (6.0) normally
+        # Should be close to last gain since we're in steady state
+        assert settings["AnalogueGain"] >= 5.5  # Should be ramping up, not down
+
+    def test_gain_floor_respected(self, timelapse):
+        """Test that gain never goes below minimum (2.0)."""
+        timelapse._last_exposure_time = 12.0
+        timelapse._last_analogue_gain = 6.0
+        timelapse._last_brightness = 250  # Very high brightness
+
+        settings = timelapse.get_camera_settings("night")
+
+        # Even with extreme brightness, gain should not go below 2.0
+        assert settings["AnalogueGain"] >= 2.0
+
+
+class TestEnteringNightThrottle:
+    """Tests for brightness throttling when entering night mode."""
+
+    @pytest.fixture
+    def timelapse(self, tmp_path):
+        """Create a minimal AdaptiveTimelapse instance for testing."""
+        config = {
+            "adaptive_timelapse": {
+                "night_mode": {"max_exposure_time": 20.0, "analogue_gain": 6.0},
+                "day_mode": {"exposure_time": 0.02},
+                "light_thresholds": {"night": 3, "day": 80},
+                "direct_brightness_control": True,
+                "transition_mode": {
+                    "target_brightness": 120,
+                    "brightness_tolerance": 40,
+                    "brightness_feedback_strength": 0.3,
+                },
+            },
+            "output": {"directory": str(tmp_path / "output")},
+            "camera": {"resolution": [1920, 1080]},
+        }
+
+        config_path = tmp_path / "config.yml"
+        with open(config_path, "w") as f:
+            yaml.dump(config, f)
+
+        (tmp_path / "output").mkdir(exist_ok=True)
+
+        from src.auto_timelapse import AdaptiveTimelapse
+
+        timelapse = AdaptiveTimelapse(str(config_path))
+        return timelapse
+
+    def test_entering_night_detected(self, timelapse):
+        """Test that entering night mode is detected when gain is low."""
+        # Simulate coming from transition mode with low gain
+        timelapse._last_analogue_gain = 2.0  # < 50% of target 6.0
+        timelapse._last_exposure_time = 16.0
+        timelapse._last_brightness = 60
+
+        # Get camera settings - should use coordinated ramps
+        settings = timelapse.get_camera_settings("night")
+
+        # Gain should increase slowly (coordinated ramp at 4%)
+        # From 2.0 toward 6.0, first step should be small
+        assert 2.0 < settings["AnalogueGain"] < 2.5  # 4% of 2.0 = 0.08, so ~2.08
+
+    def test_throttle_applied_when_brightness_high(self, timelapse):
+        """Test that ramp speed is throttled when brightness approaches target."""
+        # Simulate entering night with brightness near target (80)
+        timelapse._last_analogue_gain = 2.0  # Entering night
+        timelapse._last_exposure_time = 16.0
+        timelapse._last_brightness = 85  # > 80, should trigger throttle
+
+        settings1 = timelapse.get_camera_settings("night")
+        gain_increase_throttled = settings1["AnalogueGain"] - 2.0
+
+        # Reset and test without throttle (low brightness)
+        timelapse._last_analogue_gain = 2.0
+        timelapse._last_brightness = 50  # Below 64, no throttle
+
+        settings2 = timelapse.get_camera_settings("night")
+        gain_increase_normal = settings2["AnalogueGain"] - 2.0
+
+        # Throttled increase should be smaller than normal
+        assert gain_increase_throttled < gain_increase_normal
+
+    def test_minimum_throttle_speed(self, timelapse):
+        """Test that throttle has a minimum speed (30%)."""
+        # Even at high brightness, ramps should still progress
+        timelapse._last_analogue_gain = 2.0
+        timelapse._last_exposure_time = 16.0
+        timelapse._last_brightness = 120  # Very high, max throttle
+
+        settings = timelapse.get_camera_settings("night")
+
+        # Should still make progress (30% of base 4% = 1.2% per frame)
+        # From gain 2.0, should increase by at least 0.024
+        assert settings["AnalogueGain"] > 2.0

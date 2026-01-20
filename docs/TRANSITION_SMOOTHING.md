@@ -719,6 +719,34 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 
 ## Changelog
 
+### 2026-01-20 - Mode Transition Fix Iteration 2 (Gain Reduction + Throttling)
+
+**Problem Identified (from 2026-01-20 slitscan):**
+- Morning dip (~08:08-08:11): Night mode could reduce exposure but NOT gain
+- When exposure hit floor (12s), brightness continued climbing (145→153→170)
+- Evening flash (~16:33-16:37): 8% gain ramps still caused overshoot (62→120)
+
+**Fix 1b: Night Mode Gain Reduction at Dawn:**
+- When exposure is near floor (≤ 13.2s = 110% of 12s floor) AND brightness > 150
+- Reduce gain proportionally: `gain = gain * (120/brightness)^0.5`
+- Uses sqrt for gentler reduction (since brightness ~ gain × exposure)
+- Minimum gain 2.0 prevents complete darkness
+
+**Fix 2a: Slower Base Ramps:**
+- Reduced from gain 0.08/exposure 0.05 to gain 0.04/exposure 0.03
+- Spreads transition over ~20-30 minutes instead of ~15-20
+
+**Fix 2b: Brightness Throttling When Entering Night:**
+- Night target brightness is 80 (lower than day's 120)
+- When brightness > 64 (80% of target), throttle ramp speed
+- Throttle formula: `throttle = max(0.3, 1.0 - (brightness/80 - 0.8) * 2)`
+- At brightness 64: 100% speed, at brightness 80+: 30% speed
+- Prevents overshoot by slowing as brightness approaches target
+
+**Expected Results:**
+- Morning: brightness stays 110-150, no drop below 100
+- Evening: brightness stays 60-90, no spike above 110
+
 ### 2026-01-15 - Arctic Twilight Severe Underexposure Fix
 
 **Problem Identified:**
