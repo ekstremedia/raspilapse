@@ -66,7 +66,7 @@ class CaptureDatabase:
         SCHEMA_VERSION: Current database schema version
     """
 
-    SCHEMA_VERSION = 2  # Bumped for sun_elevation column
+    SCHEMA_VERSION = 3  # Bumped for upload_queue table
 
     # Migration definitions: version -> (description, SQL statements)
     MIGRATIONS = {
@@ -74,6 +74,28 @@ class CaptureDatabase:
             "Add sun_elevation column for Arctic-aware ML",
             [
                 "ALTER TABLE captures ADD COLUMN sun_elevation REAL",
+            ],
+        ),
+        3: (
+            "Add upload_queue table for retry mechanism",
+            [
+                """CREATE TABLE IF NOT EXISTS upload_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_date DATE NOT NULL UNIQUE,
+                    video_path TEXT NOT NULL,
+                    keogram_path TEXT,
+                    slitscan_path TEXT,
+                    status TEXT DEFAULT 'pending',
+                    retry_count INTEGER DEFAULT 0,
+                    max_retries INTEGER DEFAULT 5,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    last_attempt_at TEXT,
+                    next_retry_at TEXT,
+                    completed_at TEXT,
+                    last_error TEXT,
+                    server_response TEXT
+                )""",
+                "CREATE INDEX IF NOT EXISTS idx_upload_queue_status ON upload_queue(status)",
             ],
         ),
     }
