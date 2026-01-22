@@ -1865,5 +1865,840 @@ class TestMainFunction:
         assert exc_info.value.code == 0
 
 
+class TestMLv2Integration:
+    """Test ML v2 integration in AdaptiveTimelapse."""
+
+    @pytest.fixture
+    def ml_enabled_config_file(self):
+        """Create a config file with ML v2 enabled."""
+        config_data = {
+            "camera": {
+                "resolution": {"width": 1280, "height": 720},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": "test_photos",
+                "filename_pattern": "{name}_{counter}.jpg",
+                "project_name": "test_project",
+                "quality": 85,
+            },
+            "system": {
+                "create_directories": True,
+                "save_metadata": True,
+                "metadata_filename": "{name}_{counter}_metadata.json",
+                "metadata_folder": "metadata",
+            },
+            "overlay": {"enabled": False},
+            "database": {
+                "enabled": True,
+                "path": "test_data/test_timelapse.db",
+            },
+            "adaptive_timelapse": {
+                "enabled": True,
+                "interval": 30,
+                "light_thresholds": {"night": 10, "day": 100},
+                "night_mode": {"max_exposure_time": 20.0, "analogue_gain": 6},
+                "day_mode": {"awb_enable": True},
+                "ml_exposure": {
+                    "enabled": True,
+                    "good_brightness_min": 100,
+                    "good_brightness_max": 140,
+                },
+            },
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        yield config_path
+        os.unlink(config_path)
+
+    def test_ml_v2_disabled_by_default(self, test_config_file):
+        """Test ML v2 is disabled when not configured."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        assert timelapse._ml_enabled is False
+        assert timelapse._ml_predictor is None
+
+    def test_ml_v2_requires_database(self, ml_enabled_config_file):
+        """Test ML v2 initializes when database is enabled."""
+        # Create the test database directory
+        os.makedirs("test_data", exist_ok=True)
+
+        try:
+            timelapse = AdaptiveTimelapse(ml_enabled_config_file)
+            # ML should attempt to initialize (may fail if no data, but should try)
+            # The key test is that it doesn't crash and handles gracefully
+            assert timelapse is not None
+        finally:
+            # Cleanup
+            import shutil
+
+            if os.path.exists("test_data"):
+                shutil.rmtree("test_data")
+
+    def test_ml_v2_disabled_without_database(self):
+        """Test ML v2 is disabled when database is disabled."""
+        config_data = {
+            "camera": {
+                "resolution": {"width": 1280, "height": 720},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": "test_photos",
+                "filename_pattern": "{name}_{counter}.jpg",
+                "project_name": "test_project",
+                "quality": 85,
+            },
+            "system": {"create_directories": True, "save_metadata": True},
+            "overlay": {"enabled": False},
+            "database": {"enabled": False},  # Database disabled
+            "adaptive_timelapse": {
+                "enabled": True,
+                "light_thresholds": {"night": 10, "day": 100},
+                "night_mode": {"max_exposure_time": 20.0, "analogue_gain": 6},
+                "ml_exposure": {"enabled": True},  # ML enabled but no database
+            },
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            timelapse = AdaptiveTimelapse(config_path)
+            # ML should be disabled because database is disabled
+            assert timelapse._ml_enabled is False
+        finally:
+            os.unlink(config_path)
+
+
+class TestSmoothedEmergencyFactor:
+    """Test smoothed emergency brightness factor to prevent oscillation."""
+
+    def test_emergency_factor_starts_at_one(self, test_config_file):
+        """Test that smoothed emergency factor starts at 1.0 (no correction)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        assert timelapse._smoothed_emergency_factor == 1.0
+
+    def test_emergency_factor_reduces_for_overexposure(self, test_config_file):
+        """Test factor decreases when brightness is above emergency threshold."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate several frames with severe overexposure (brightness > 180)
+        for _ in range(10):
+            factor = timelapse._get_emergency_brightness_factor(200)
+
+        # Factor should have moved towards 0.7 (EMERGENCY_HIGH_FACTOR)
+        assert factor < 1.0
+        assert factor < 0.9  # Should have moved significantly towards 0.7
+
+    def test_emergency_factor_increases_for_underexposure(self, test_config_file):
+        """Test factor increases when brightness is below emergency threshold."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate several frames with critical underexposure (brightness < 40)
+        for _ in range(15):
+            factor = timelapse._get_emergency_brightness_factor(30)
+
+        # Factor should have moved towards 4.0 (CRITICAL_LOW_FACTOR for brightness < 40)
+        assert factor > 1.0
+        assert factor > 3.0  # Should have moved significantly towards 4.0
+
+    def test_emergency_factor_stays_stable_in_normal_range(self, test_config_file):
+        """Test factor stays at 1.0 when brightness is in normal range."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate frames with normal brightness (around target 120)
+        for _ in range(10):
+            factor = timelapse._get_emergency_brightness_factor(120)
+
+        # Factor should stay at or very close to 1.0
+        assert 0.98 < factor < 1.02
+
+    def test_emergency_factor_smoothing_prevents_oscillation(self, test_config_file):
+        """Test that alternating brightness values don't cause factor oscillation."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Simulate the oscillation pattern: alternating above/below threshold
+        factors = []
+        for i in range(20):
+            brightness = 187 if i % 2 == 0 else 173
+            factor = timelapse._get_emergency_brightness_factor(brightness)
+            factors.append(factor)
+
+        # The factor should NOT oscillate wildly between values
+        # Check that consecutive factors are close to each other (smooth transitions)
+        for i in range(1, len(factors)):
+            diff = abs(factors[i] - factors[i - 1])
+            # Maximum change per frame should be limited by smoothing
+            assert diff < 0.15, f"Factor jumped too much: {factors[i-1]:.3f} -> {factors[i]:.3f}"
+
+    def test_emergency_factor_applies_faster_when_worsening(self, test_config_file):
+        """Test that corrections apply faster when brightness is getting worse."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # First, apply overexposure correction for 5 frames
+        for _ in range(5):
+            timelapse._get_emergency_brightness_factor(200)
+        factor_after_correction = timelapse._smoothed_emergency_factor
+
+        # Reset
+        timelapse._smoothed_emergency_factor = 1.0
+
+        # Now apply normal brightness for 5 frames (relaxing)
+        timelapse._smoothed_emergency_factor = 0.7  # Start from corrected state
+        for _ in range(5):
+            timelapse._get_emergency_brightness_factor(120)
+        factor_after_relaxing = timelapse._smoothed_emergency_factor
+
+        # The correction (moving away from 1.0) should be faster than relaxing (moving towards 1.0)
+        # After 5 frames of severe overexposure, factor should have moved more from 1.0
+        # than it moved back towards 1.0 after 5 frames of normal brightness
+        correction_amount = 1.0 - factor_after_correction  # How much it corrected
+        relaxation_amount = factor_after_relaxing - 0.7  # How much it relaxed
+
+        # Correction should be faster (larger change) than relaxation
+        assert correction_amount > relaxation_amount * 0.5
+
+    def test_emergency_factor_none_brightness_decays_towards_1(self, test_config_file):
+        """Test that None brightness decays factor towards 1.0."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Set a non-default factor (below 1.0)
+        timelapse._smoothed_emergency_factor = 0.85
+
+        # Call with None brightness
+        factor = timelapse._get_emergency_brightness_factor(None)
+
+        # Should decay towards 1.0 (factor should increase from 0.85)
+        assert factor > 0.85
+        assert factor < 1.0  # But not reach 1.0 in one step
+
+        # Test decay from above 1.0
+        timelapse._smoothed_emergency_factor = 1.5
+        factor = timelapse._get_emergency_brightness_factor(None)
+
+        # Should decay towards 1.0 (factor should decrease from 1.5)
+        assert factor < 1.5
+        assert factor > 1.0  # But not reach 1.0 in one step
+
+
+class TestSustainedDriftCorrector:
+    """Tests for SustainedDriftCorrector class."""
+
+    def test_drift_corrector_init(self):
+        """Test drift corrector initialization."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+        assert corrector._threshold_frames == 3
+        assert corrector._min_error == 20.0
+        assert corrector._last_correction == 1.0
+
+    def test_drift_corrector_no_correction_initially(self):
+        """Test no correction when not enough frames."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # Only 1-2 frames
+        assert corrector.update(80.0) == 1.0
+        assert corrector.update(75.0) == 1.0  # Still only 2 frames
+
+    def test_drift_corrector_triggers_on_sustained_low(self):
+        """Test correction triggers after sustained underexposure."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # 3 consecutive frames all too dark (error < -20)
+        corrector.update(70.0)  # error = -50
+        corrector.update(65.0)  # error = -55
+        correction = corrector.update(60.0)  # error = -60
+
+        # Should trigger correction > 1.0 (increase exposure)
+        assert correction > 1.0
+
+    def test_drift_corrector_triggers_on_sustained_high(self):
+        """Test correction triggers after sustained overexposure."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # 3 consecutive frames all too bright (error > +20)
+        corrector.update(160.0)  # error = +40
+        corrector.update(170.0)  # error = +50
+        correction = corrector.update(180.0)  # error = +60
+
+        # Should trigger correction < 1.0 (decrease exposure)
+        assert correction < 1.0
+
+    def test_drift_corrector_no_trigger_on_mixed_errors(self):
+        """Test no correction when errors are mixed direction."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # Mixed: dark, bright, dark
+        corrector.update(70.0)  # error = -50
+        corrector.update(160.0)  # error = +40
+        correction = corrector.update(70.0)  # error = -50
+
+        # Should NOT trigger - not sustained in one direction
+        assert abs(correction - 1.0) < 0.1
+
+    def test_drift_corrector_decays_towards_neutral(self):
+        """Test correction decays when pattern breaks."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # Trigger a correction
+        corrector.update(60.0)
+        corrector.update(60.0)
+        corrector.update(60.0)
+        first_correction = corrector._last_correction
+
+        # Now provide normal brightness
+        corrector.update(120.0)
+        corrector.update(120.0)
+        later_correction = corrector._last_correction
+
+        # Should have decayed closer to 1.0
+        assert abs(later_correction - 1.0) < abs(first_correction - 1.0)
+
+    def test_drift_corrector_reset(self):
+        """Test reset clears history."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # Build up some history
+        corrector.update(60.0)
+        corrector.update(60.0)
+        corrector.update(60.0)
+
+        # Reset
+        corrector.reset()
+
+        assert len(corrector._error_history) == 0
+        assert corrector._last_correction == 1.0
+
+    def test_drift_corrector_clamped_range(self):
+        """Test correction is clamped to 0.5-2.0 range."""
+        from src.auto_timelapse import SustainedDriftCorrector
+
+        corrector = SustainedDriftCorrector(threshold_frames=3, min_error=20.0)
+
+        # Extreme underexposure
+        for _ in range(10):
+            correction = corrector.update(10.0)
+
+        assert correction <= 2.0
+
+        # Extreme overexposure
+        corrector.reset()
+        for _ in range(10):
+            correction = corrector.update(250.0)
+
+        assert correction >= 0.5
+
+
+class TestBrightnessAdjustedTrust:
+    """Tests for get_brightness_adjusted_trust method."""
+
+    def test_brightness_adjusted_trust_normal_range(self, test_config_file):
+        """Test full trust in normal brightness range."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Normal brightness (70-170) should return full base trust
+        trust = timelapse.get_brightness_adjusted_trust(120.0, 0.7)
+        assert trust == 0.7
+
+        trust = timelapse.get_brightness_adjusted_trust(100.0, 0.8)
+        assert trust == 0.8
+
+        trust = timelapse.get_brightness_adjusted_trust(150.0, 0.9)
+        assert trust == 0.9
+
+    def test_brightness_adjusted_trust_severe_low(self, test_config_file):
+        """Test zero trust for severe underexposure."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Below 50: force formula (trust = 0)
+        trust = timelapse.get_brightness_adjusted_trust(40.0, 0.7)
+        assert trust == 0.0
+
+        trust = timelapse.get_brightness_adjusted_trust(20.0, 0.9)
+        assert trust == 0.0
+
+    def test_brightness_adjusted_trust_severe_high(self, test_config_file):
+        """Test zero trust for severe overexposure."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Above 200: force formula (trust = 0)
+        trust = timelapse.get_brightness_adjusted_trust(210.0, 0.7)
+        assert trust == 0.0
+
+        trust = timelapse.get_brightness_adjusted_trust(250.0, 0.9)
+        assert trust == 0.0
+
+    def test_brightness_adjusted_trust_warning_low_ramp(self, test_config_file):
+        """Test graduated reduction in low warning zone."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Between 50-70: ramp from 0% to 100%
+        trust_at_50 = timelapse.get_brightness_adjusted_trust(50.0, 0.8)
+        trust_at_60 = timelapse.get_brightness_adjusted_trust(60.0, 0.8)
+        trust_at_70 = timelapse.get_brightness_adjusted_trust(70.0, 0.8)
+
+        # Should ramp up
+        assert trust_at_50 < trust_at_60 < trust_at_70
+        # At 70, should be full trust
+        assert abs(trust_at_70 - 0.8) < 0.01
+
+    def test_brightness_adjusted_trust_warning_high_ramp(self, test_config_file):
+        """Test graduated reduction in high warning zone."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Between 170-200: ramp from 100% to 0%
+        trust_at_170 = timelapse.get_brightness_adjusted_trust(170.0, 0.8)
+        trust_at_185 = timelapse.get_brightness_adjusted_trust(185.0, 0.8)
+        trust_at_200 = timelapse.get_brightness_adjusted_trust(200.0, 0.8)
+
+        # At 170, should be full trust
+        assert abs(trust_at_170 - 0.8) < 0.01
+        # Should ramp down
+        assert trust_at_170 > trust_at_185 > trust_at_200
+        # At 200, should be zero
+        assert trust_at_200 == 0.0
+
+    def test_brightness_adjusted_trust_none_brightness(self, test_config_file):
+        """Test None brightness returns base trust unchanged."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        trust = timelapse.get_brightness_adjusted_trust(None, 0.7)
+        assert trust == 0.7
+
+
+class TestLuxStabilityTrust:
+    """Tests for get_lux_stability_trust method."""
+
+    def test_lux_stability_stable_light(self, test_config_file):
+        """Test full trust when light is stable."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Small lux change over 30 seconds - stable
+        trust = timelapse.get_lux_stability_trust(100.0, 95.0, 30.0)
+        assert trust == 1.0
+
+    def test_lux_stability_rapid_change(self, test_config_file):
+        """Test reduced trust during rapid light changes."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Large lux change (10x) over 30 seconds - rapid
+        trust = timelapse.get_lux_stability_trust(1000.0, 100.0, 30.0)
+        assert trust < 1.0
+
+    def test_lux_stability_no_previous_lux(self, test_config_file):
+        """Test full trust when no previous lux available."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        trust = timelapse.get_lux_stability_trust(100.0, None, 30.0)
+        assert trust == 1.0
+
+    def test_lux_stability_zero_previous_lux(self, test_config_file):
+        """Test full trust when previous lux is zero."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        trust = timelapse.get_lux_stability_trust(100.0, 0.0, 30.0)
+        assert trust == 1.0
+
+    def test_lux_stability_zero_elapsed(self, test_config_file):
+        """Test full trust when elapsed time is zero."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        trust = timelapse.get_lux_stability_trust(100.0, 50.0, 0.0)
+        assert trust == 1.0
+
+    def test_lux_stability_never_below_half(self, test_config_file):
+        """Test trust never goes below 0.5 even for extreme changes."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Extremely rapid change - 100x in 10 seconds
+        trust = timelapse.get_lux_stability_trust(10000.0, 100.0, 10.0)
+        assert trust >= 0.5
+
+
+class TestDriftCorrectorIntegration:
+    """Tests for drift corrector integration in AdaptiveTimelapse."""
+
+    def test_drift_corrector_initialized(self, test_config_file):
+        """Test drift corrector is initialized on startup."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        assert hasattr(timelapse, "_drift_corrector")
+        assert timelapse._drift_corrector is not None
+
+    def test_lux_tracking_initialized(self, test_config_file):
+        """Test lux tracking variables are initialized."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        assert hasattr(timelapse, "_previous_lux_for_stability")
+        assert hasattr(timelapse, "_last_lux_timestamp")
+
+
+class TestP95HighlightProtection:
+    """Tests for proactive p95-based highlight protection."""
+
+    def test_p95_factor_safe_range(self, test_config_file):
+        """Test no adjustment when p95 is in safe range (<200)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Safe range - no adjustment
+        assert timelapse.get_p95_highlight_factor(100.0) == 1.0
+        assert timelapse.get_p95_highlight_factor(150.0) == 1.0
+        assert timelapse.get_p95_highlight_factor(199.0) == 1.0
+
+    def test_p95_factor_warning_range(self, test_config_file):
+        """Test gentle reduction in warning range (200-220)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # At 200 - just entering warning
+        factor_200 = timelapse.get_p95_highlight_factor(200.0)
+        assert factor_200 == 1.0
+
+        # At 210 - mid warning (should be ~0.975)
+        factor_210 = timelapse.get_p95_highlight_factor(210.0)
+        assert 0.97 < factor_210 < 0.98
+
+        # At 220 - end of warning (should be ~0.95)
+        factor_220 = timelapse.get_p95_highlight_factor(220.0)
+        assert 0.94 < factor_220 < 0.96
+
+    def test_p95_factor_critical_range(self, test_config_file):
+        """Test moderate reduction in critical range (220-240)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # At 230 - mid critical (should be ~0.90)
+        factor_230 = timelapse.get_p95_highlight_factor(230.0)
+        assert 0.88 < factor_230 < 0.92
+
+        # At 240 - end of critical (should be ~0.85)
+        factor_240 = timelapse.get_p95_highlight_factor(240.0)
+        assert 0.84 < factor_240 < 0.86
+
+    def test_p95_factor_emergency_range(self, test_config_file):
+        """Test aggressive reduction for imminent clipping (>240)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # At 245 - emergency (should be ~0.82)
+        factor_245 = timelapse.get_p95_highlight_factor(245.0)
+        assert 0.78 < factor_245 < 0.84
+
+        # At 250 - severe emergency (should be ~0.75)
+        factor_250 = timelapse.get_p95_highlight_factor(250.0)
+        assert 0.74 <= factor_250 <= 0.80
+
+        # At 255 - maximum (should be ~0.70)
+        factor_255 = timelapse.get_p95_highlight_factor(255.0)
+        assert factor_255 >= 0.70
+
+    def test_p95_factor_none_returns_1(self, test_config_file):
+        """Test that None p95 returns factor of 1.0."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        assert timelapse.get_p95_highlight_factor(None) == 1.0
+
+    def test_p95_factor_never_below_0_7(self, test_config_file):
+        """Test factor never goes below 0.70."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Even for impossible values
+        assert timelapse.get_p95_highlight_factor(255.0) >= 0.70
+        assert timelapse.get_p95_highlight_factor(300.0) >= 0.70
+
+    def test_p95_tracking_initialized(self, test_config_file):
+        """Test p95 tracking is initialized."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        assert hasattr(timelapse, "_last_p95")
+        assert timelapse._last_p95 is None
+
+
+class TestDirectBrightnessControl:
+    """Tests for direct brightness control (_calculate_exposure_from_brightness)."""
+
+    @pytest.fixture
+    def direct_control_config_file(self):
+        """Create config file with direct brightness control enabled."""
+        config_data = {
+            "camera": {
+                "resolution": {"width": 1280, "height": 720},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+                "controls": {},
+            },
+            "output": {
+                "directory": "test_photos",
+                "filename_pattern": "{name}_{counter}.jpg",
+                "project_name": "test_project",
+                "quality": 85,
+            },
+            "system": {"create_directories": True, "save_metadata": False},
+            "overlay": {"enabled": False},
+            "adaptive_timelapse": {
+                "enabled": True,
+                "interval": 30,
+                "num_frames": 0,
+                "reference_lux": 3.8,
+                "direct_brightness_control": True,
+                "brightness_damping": 0.5,
+                "light_thresholds": {"night": 10, "day": 100},
+                "night_mode": {
+                    "max_exposure_time": 20.0,
+                    "analogue_gain": 6,
+                    "awb_enable": False,
+                },
+                "day_mode": {"awb_enable": True},
+                "transition_mode": {
+                    "smooth_transition": True,
+                    "target_brightness": 120,
+                },
+                "test_shot": {
+                    "enabled": True,
+                    "exposure_time": 0.1,
+                    "analogue_gain": 1.0,
+                },
+            },
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        yield config_path
+        os.unlink(config_path)
+
+    def test_first_frame_uses_lux_estimate(self, direct_control_config_file):
+        """Test first frame uses lux-based initial estimate."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = None
+
+        # With lux=1000, formula: (20 * 3.8) / 1000 = 0.076s
+        exposure = timelapse._calculate_exposure_from_brightness(100, lux=1000)
+        assert 0.05 < exposure < 0.1
+
+    def test_first_frame_default_without_lux(self, direct_control_config_file):
+        """Test first frame uses 20ms default when no lux available."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = None
+
+        exposure = timelapse._calculate_exposure_from_brightness(100, lux=None)
+        assert exposure == 0.02  # 20ms default
+
+    def test_increases_exposure_when_too_dark(self, direct_control_config_file):
+        """Test exposure increases when brightness is below target."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+        timelapse._target_brightness = 120
+
+        # Brightness 60 is half of target 120
+        # ratio = 120/60 = 2.0, change = 2.0^0.5 = 1.41x
+        new_exposure = timelapse._calculate_exposure_from_brightness(60, lux=500)
+        assert new_exposure > 0.1  # Should increase
+        assert 0.12 < new_exposure < 0.16  # ~1.41x increase
+
+    def test_decreases_exposure_when_too_bright(self, direct_control_config_file):
+        """Test exposure decreases when brightness is above target."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+        timelapse._target_brightness = 120
+
+        # Brightness 240 is double target 120
+        # ratio = 120/240 = 0.5, change = 0.5^0.5 = 0.71x
+        new_exposure = timelapse._calculate_exposure_from_brightness(240, lux=500)
+        assert new_exposure < 0.1  # Should decrease
+        assert 0.06 < new_exposure < 0.08  # ~0.71x decrease
+
+    def test_no_change_at_target_brightness(self, direct_control_config_file):
+        """Test minimal change when at target brightness."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+        timelapse._target_brightness = 120
+
+        # Brightness exactly at target
+        new_exposure = timelapse._calculate_exposure_from_brightness(120, lux=500)
+        assert 0.099 < new_exposure < 0.101  # Essentially unchanged
+
+    def test_ratio_clamped_to_max_4x(self, direct_control_config_file):
+        """Test correction ratio is clamped to prevent extreme changes."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+        timelapse._target_brightness = 120
+
+        # Brightness 1 would give ratio of 120, but should clamp to 4
+        # 4^0.5 = 2x max change
+        new_exposure = timelapse._calculate_exposure_from_brightness(1, lux=500)
+        assert new_exposure <= 0.2  # Max 2x change with 0.5 damping
+
+    def test_exposure_clamped_to_max(self, direct_control_config_file):
+        """Test exposure is clamped to max (20s)."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 15.0
+        timelapse._target_brightness = 120
+
+        # Very dark - would want to increase exposure beyond 20s
+        new_exposure = timelapse._calculate_exposure_from_brightness(10, lux=1)
+        assert new_exposure <= 20.0  # Clamped to max
+
+    def test_handles_none_brightness(self, direct_control_config_file):
+        """Test handles None brightness gracefully."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+
+        # Should treat None as 1 (minimum)
+        new_exposure = timelapse._calculate_exposure_from_brightness(None, lux=500)
+        assert new_exposure > 0.1  # Should increase (treating as very dark)
+
+    def test_damping_affects_correction_strength(self, direct_control_config_file):
+        """Test different damping values affect correction strength."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+        timelapse._last_exposure_time = 0.1
+        timelapse._target_brightness = 120
+
+        # Test with 0.5 damping (from config)
+        new_exp_05 = timelapse._calculate_exposure_from_brightness(60, lux=500)
+
+        # Manually set higher damping
+        timelapse.config["adaptive_timelapse"]["brightness_damping"] = 0.8
+        timelapse._last_exposure_time = 0.1
+        new_exp_08 = timelapse._calculate_exposure_from_brightness(60, lux=500)
+
+        # Higher damping = larger correction
+        assert new_exp_08 > new_exp_05
+
+    def test_ml_skipped_when_direct_control_enabled(self, direct_control_config_file):
+        """Test ML is not initialized when direct control is enabled."""
+        timelapse = AdaptiveTimelapse(direct_control_config_file)
+
+        # ML should be disabled
+        assert timelapse._ml_enabled is False
+        assert timelapse._ml_predictor is None
+
+
+class TestGainSpeedOverride:
+    """Test _interpolate_gain with speed_override parameter."""
+
+    def test_gain_speed_override_faster(self, test_config_file):
+        """Test speed_override makes gain change faster."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        # Initialize at gain 1.0
+        timelapse._interpolate_gain(1.0)
+
+        # Normal interpolation (default speed ~0.10)
+        timelapse_normal = AdaptiveTimelapse(test_config_file)
+        timelapse_normal._interpolate_gain(1.0)
+        normal_result = timelapse_normal._interpolate_gain(6.0)
+
+        # Fast interpolation with speed_override
+        fast_result = timelapse._interpolate_gain(6.0, speed_override=0.30)
+
+        # Fast should be closer to target than normal
+        assert fast_result > normal_result
+        assert fast_result > 1.0 and fast_result < 6.0
+
+    def test_gain_speed_override_slower(self, test_config_file):
+        """Test speed_override can also slow down transitions."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+
+        timelapse._interpolate_gain(1.0)
+        slow_result = timelapse._interpolate_gain(6.0, speed_override=0.05)
+
+        # With 5% speed: 1.0 + 0.05 * (6.0 - 1.0) = 1.25
+        assert slow_result < 2.0  # Should be very slow
+
+
+class TestNightModeBrightnessFeedback:
+    """Test night mode brightness feedback for dawn overexposure."""
+
+    def test_night_mode_reduces_exposure_when_overexposed(self, test_config_file):
+        """Test night mode reduces exposure when brightness > 140."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        # Enable direct brightness control
+        timelapse.config["adaptive_timelapse"]["direct_brightness_control"] = True
+
+        # Initialize exposure tracking
+        timelapse._last_exposure_time = 20.0
+        timelapse._last_analogue_gain = 6.0
+        timelapse._last_brightness = 165  # Overexposed
+
+        settings = timelapse.get_camera_settings(LightMode.NIGHT, lux=2.0)
+
+        # Should reduce from max 20s due to brightness feedback
+        exposure_s = settings["ExposureTime"] / 1_000_000
+        assert exposure_s < 20.0
+        # But not below 60% of max (12s)
+        assert exposure_s >= 12.0
+
+    def test_night_mode_full_exposure_when_not_overexposed(self, test_config_file):
+        """Test night mode uses max exposure when brightness is normal."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.config["adaptive_timelapse"]["direct_brightness_control"] = True
+
+        timelapse._last_exposure_time = 18.0
+        timelapse._last_analogue_gain = 5.5
+        timelapse._last_brightness = 100  # Normal brightness
+
+        settings = timelapse.get_camera_settings(LightMode.NIGHT, lux=2.0)
+
+        # Should ramp towards max 20s (not reduce)
+        exposure_s = settings["ExposureTime"] / 1_000_000
+        assert exposure_s >= 18.0
+
+
+class TestCoordinatedNightModeRamps:
+    """Test coordinated gain/exposure ramps when entering night mode."""
+
+    def test_entering_night_uses_coordinated_ramps(self, test_config_file):
+        """Test coordinated ramps when gain < 50% of target."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.config["adaptive_timelapse"]["direct_brightness_control"] = True
+
+        # Simulate coming from transition: low gain, medium exposure
+        timelapse._last_analogue_gain = 1.5  # < 50% of target 6.0
+        timelapse._last_exposure_time = 16.0
+        timelapse._last_brightness = 80
+
+        settings = timelapse.get_camera_settings(LightMode.NIGHT, lux=2.0)
+
+        # Gain should increase (using faster 0.08 speed)
+        assert settings["AnalogueGain"] > 1.5
+        # Exposure should increase slowly (using 0.05 speed)
+        exposure_s = settings["ExposureTime"] / 1_000_000
+        assert exposure_s > 16.0
+
+    def test_established_night_uses_normal_ramps(self, test_config_file):
+        """Test normal ramps when already in night mode (gain >= 50% of target)."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.config["adaptive_timelapse"]["direct_brightness_control"] = True
+
+        # Already in night mode: high gain
+        timelapse._last_analogue_gain = 4.0  # >= 50% of target 6.0
+        timelapse._last_exposure_time = 19.0
+        timelapse._last_brightness = 100
+
+        # This should NOT trigger coordinated ramps
+        settings = timelapse.get_camera_settings(LightMode.NIGHT, lux=2.0)
+
+        # Should still work normally
+        assert settings["AnalogueGain"] >= 4.0
+        exposure_s = settings["ExposureTime"] / 1_000_000
+        assert exposure_s >= 19.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

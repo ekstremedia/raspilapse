@@ -66,7 +66,39 @@ class CaptureDatabase:
         SCHEMA_VERSION: Current database schema version
     """
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 3  # Bumped for upload_queue table
+
+    # Migration definitions: version -> (description, SQL statements)
+    MIGRATIONS = {
+        2: (
+            "Add sun_elevation column for Arctic-aware ML",
+            [
+                "ALTER TABLE captures ADD COLUMN sun_elevation REAL",
+            ],
+        ),
+        3: (
+            "Add upload_queue table for retry mechanism",
+            [
+                """CREATE TABLE IF NOT EXISTS upload_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_date DATE NOT NULL UNIQUE,
+                    video_path TEXT NOT NULL,
+                    keogram_path TEXT,
+                    slitscan_path TEXT,
+                    status TEXT DEFAULT 'pending',
+                    retry_count INTEGER DEFAULT 0,
+                    max_retries INTEGER DEFAULT 5,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    last_attempt_at TEXT,
+                    next_retry_at TEXT,
+                    completed_at TEXT,
+                    last_error TEXT,
+                    server_response TEXT
+                )""",
+                "CREATE INDEX IF NOT EXISTS idx_upload_queue_status ON upload_queue(status)",
+            ],
+        ),
+    }
 
     def __init__(self, config: Dict):
         """
@@ -248,13 +280,45 @@ class CaptureDatabase:
                 """
                 )
 
-                # Insert schema version if not exists
-                cursor.execute(
-                    "INSERT OR IGNORE INTO schema_version (version) VALUES (?)",
-                    (self.SCHEMA_VERSION,),
-                )
+                # Get current schema version
+                cursor.execute("SELECT MAX(version) FROM schema_version")
+                row = cursor.fetchone()
+                current_version = row[0] if row[0] is not None else 0
 
-                logger.info(f"[DB] Initialized: {self.config.db_path}")
+                # Apply pending migrations
+                for migration_version in sorted(self.MIGRATIONS.keys()):
+                    if migration_version > current_version:
+                        description, statements = self.MIGRATIONS[migration_version]
+                        logger.info(f"[DB] Applying migration v{migration_version}: {description}")
+
+                        for sql in statements:
+                            try:
+                                cursor.execute(sql)
+                                logger.debug(f"[DB] Executed: {sql[:50]}...")
+                            except sqlite3.OperationalError as e:
+                                # Column may already exist (e.g., fresh database)
+                                if "duplicate column" in str(e).lower():
+                                    logger.debug(f"[DB] Column already exists, skipping: {e}")
+                                else:
+                                    raise
+
+                        # Record migration
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
+                            (migration_version,),
+                        )
+                        logger.info(f"[DB] Migration v{migration_version} complete")
+
+                # Ensure current version is recorded for fresh databases
+                if current_version == 0:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
+                        (self.SCHEMA_VERSION,),
+                    )
+
+                logger.info(
+                    f"[DB] Initialized: {self.config.db_path} (schema v{self.SCHEMA_VERSION})"
+                )
                 return True
 
         except Exception as e:

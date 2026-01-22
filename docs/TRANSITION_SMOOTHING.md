@@ -713,11 +713,163 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 - [ ] Per-channel WB smoothing (red and blue could have different speeds)
 - [ ] Sunset/sunrise detection for optimized transition timing
 - [ ] Store day WB reference persistently between restarts
-- [ ] Machine learning to predict optimal WB for given lux level
 
 ---
 
 ## Changelog
+
+### 2026-01-20 - Mode Transition Fix Iteration 2 (Gain Reduction + Throttling)
+
+**Problem Identified (from 2026-01-20 slitscan):**
+- Morning dip (~08:08-08:11): Night mode could reduce exposure but NOT gain
+- When exposure hit floor (12s), brightness continued climbing (145→153→170)
+- Evening flash (~16:33-16:37): 8% gain ramps still caused overshoot (62→120)
+
+**Fix 1b: Night Mode Gain Reduction at Dawn:**
+- When exposure is near floor (≤ 13.2s = 110% of 12s floor) AND brightness > 150
+- Reduce gain proportionally: `gain = gain * (120/brightness)^0.5`
+- Uses sqrt for gentler reduction (since brightness ~ gain × exposure)
+- Minimum gain 2.0 prevents complete darkness
+
+**Fix 2a: Slower Base Ramps:**
+- Reduced from gain 0.08/exposure 0.05 to gain 0.04/exposure 0.03
+- Spreads transition over ~20-30 minutes instead of ~15-20
+
+**Fix 2b: Brightness Throttling When Entering Night:**
+- Night target brightness is 80 (lower than day's 120)
+- When brightness > 64 (80% of target), throttle ramp speed
+- Throttle formula: `throttle = max(0.3, 1.0 - (brightness/80 - 0.8) * 2)`
+- At brightness 64: 100% speed, at brightness 80+: 30% speed
+- Prevents overshoot by slowing as brightness approaches target
+
+**Expected Results:**
+- Morning: brightness stays 110-150, no drop below 100
+- Evening: brightness stays 60-90, no spike above 110
+
+### 2026-01-15 - Arctic Twilight Severe Underexposure Fix
+
+**Problem Identified:**
+- Images going nearly black (brightness ~17) during Arctic winter afternoon/evening
+- Exposure stuck at 141ms when it should be 600ms+
+- Emergency factor capped at 1.40 (40%) when 4x+ correction was needed
+- Root cause: Exposure interpolation (15% per frame) too slow for rapid Arctic light changes
+
+**Root Cause Analysis:**
+The lux calculation from test shots was accurate - it correctly detected light dropping from 1154 → 125 lux. However:
+1. Target exposure formula gave correct 0.6s for lux 125
+2. But log-space interpolation at 15% per frame takes 5+ minutes to reach target
+3. Arctic winter light drops faster than interpolation can track
+4. Emergency factor cap of 1.5x was far too low for the 4x+ correction needed
+5. Result: Exposure lagged severely behind rapidly dropping light
+
+**The Fix - Increased Emergency Correction Capacity:**
+
+| Setting | Before | After |
+|---------|--------|-------|
+| Emergency factor cap | 1.5x | **4.0x** |
+| EMERGENCY_LOW_FACTOR | 1.4x | **2.0x** |
+| New CRITICAL_LOW zone | - | **4.0x** for brightness < 40 |
+
+```python
+# New brightness zones
+class BrightnessZones:
+    EMERGENCY_LOW = 60      # 100% increase (was 40%)
+    CRITICAL_LOW = 40       # 300% increase (Arctic twilight) - NEW
+
+    EMERGENCY_LOW_FACTOR = 2.0   # Was 1.4
+    CRITICAL_LOW_FACTOR = 4.0    # NEW
+```
+
+**Why this design is safe:**
+- Asymmetric: aggressive on underexposure (up to 4x), conservative on overexposure (max 50% reduction)
+- Factors are still smoothed over multiple frames (no sudden jumps)
+- Only triggers at severe underexposure (brightness < 60 or < 40)
+- Higher cap allows system to catch up during rapid Arctic light changes
+
+**Test Coverage:**
+- Added `test_critical_low_factor` for new CRITICAL_LOW zone
+- Updated `test_emergency_low_factor` for new 2.0x factor
+- Added assertion for CRITICAL_LOW_FACTOR > EMERGENCY_LOW_FACTOR
+
+### 2026-01-14 - Smoothed Emergency Factor (Anti-Oscillation Fix)
+
+**Problem Identified:**
+- Visible flickering in slitscan during bright daytime (between 11:00-12:00)
+- Database showed exposure alternating between 14.2ms and 15.7ms every frame
+- Brightness oscillating between 173 and 187 around the 180 emergency threshold
+
+**Root Cause Analysis:**
+The emergency brightness factor used hard thresholds that caused instant on/off toggling:
+1. Frame at brightness 187 (> 180) → emergency factor 0.7 → 30% exposure reduction
+2. Next frame at brightness 173 (< 180) → emergency factor 1.0 → no reduction
+3. Exposure rises → brightness rises to 187 → factor 0.7 again
+4. Perfect oscillation pattern that never settles
+
+**The Fix - Smoothed Emergency Factor:**
+Instead of hard threshold switching, the emergency factor now changes gradually:
+
+```python
+# Old behavior (oscillation-prone):
+if brightness > 180: return 0.7
+else: return 1.0
+
+# New behavior (smooth):
+target_factor = 0.7 if brightness > 180 else 1.0
+self._smoothed_emergency_factor += speed * (target_factor - self._smoothed_emergency_factor)
+return self._smoothed_emergency_factor
+```
+
+**Key Design Decisions:**
+- **Asymmetric speed**: Applies corrections faster (2x) when brightness worsening, relaxes slower (0.5x) when improving
+- **Gradual change**: Factor moves towards target over several frames instead of jumping
+- **Prevents reversal oscillation**: Slow relaxation prevents immediate reversal when brightness crosses threshold
+- **State variable**: `_smoothed_emergency_factor` persists between frames
+
+**New State Variables:**
+```python
+self._smoothed_emergency_factor: float = 1.0  # Current smoothed factor
+self._emergency_factor_speed: float = 0.15    # Base interpolation speed
+```
+
+### 2026-01-13 - Brightness Correction Applied to Sequential Ramping
+
+**Problem Identified:**
+- Images stayed consistently dark (brightness ~35 vs target ~120) on one camera
+- Logs showed `correction=4.000` (maximum) but exposure didn't change
+- Other camera with identical software/config worked perfectly
+- Root cause: brightness correction factor was never applied to sequential ramping results
+
+**The Bug:**
+- Sequential ramping calculates exposure from seed values (captured during day mode auto-exposure)
+- The `_brightness_correction_factor` was only applied in `_calculate_target_exposure_from_lux()`
+- But transition mode with `sequential_ramping: true` uses `_calculate_sequential_ramping()` instead
+- This function returned exposure without any brightness correction applied
+- Result: feedback system detected underexposure, calculated correction, but it was ignored
+
+**The Fix:**
+- Apply brightness correction factor AND emergency factor to sequential ramping results
+- Added after sequential ramping calculation, before EV safety clamp
+- Clamped to valid exposure range (min_exposure to max_exposure)
+
+**Code Changes:**
+```python
+# After sequential ramping calculates target_exposure:
+if self._brightness_correction_factor != 1.0:
+    corrected_exposure = target_exposure * self._brightness_correction_factor
+    corrected_exposure = max(min_exp, min(max_exp, corrected_exposure))
+    target_exposure = corrected_exposure
+
+# Also apply emergency factor for severe underexposure
+emergency_factor = self._get_emergency_brightness_factor(self._last_brightness)
+if emergency_factor != 1.0:
+    target_exposure *= emergency_factor
+    target_exposure = max(min_exp, min(max_exp, target_exposure))
+```
+
+**Why it only affected one camera:**
+- Different camera sensors have different sensitivity
+- The seed values from auto-exposure happened to work for the "good" camera
+- The other camera needed brightness correction that was being ignored
 
 ### 2026-01-10 - EV Safety Clamp Single-Apply Fix
 

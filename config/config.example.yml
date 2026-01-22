@@ -633,3 +633,21 @@ barentswatch:
 
   # Path to ships_current.json from pi-overlay-data service
   ships_file: "/www/pi-overlay-data/data/ships_current.json"
+
+# Tide Data Overlay
+# Shows tide information in the overlay (from pi-overlay-data service)
+tide:
+  # Enable/disable tide overlay
+  enabled: false
+
+  # Path to tide.json from pi-overlay-data service
+  tide_file: "/www/pi-overlay-data/data/tide.json"
+
+# Aurora Data Overlay
+# Shows aurora/space weather information in the overlay (from pi-overlay-data service)
+aurora:
+  # Enable/disable aurora overlay
+  enabled: false
+
+  # Path to aurora.json from pi-overlay-data service
+  aurora_file: "/www/pi-overlay-data/data/aurora.json"

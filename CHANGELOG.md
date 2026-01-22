@@ -5,6 +5,217 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-01-17
+
+### Fixed
+- **Day mode brightness oscillation**: Brightness was ranging 77-163 instead of target 105-135
+  - Root cause: Config too loose + ML trained on bad data (only 21% of captures in good range)
+  - Tightened `brightness_tolerance` from 60 to 25 (triggers feedback at 95-145)
+  - Increased `brightness_feedback_strength` from 0.05 to 0.15 (3x faster corrections)
+  - Increased `exposure_transition_speed` from 0.08 to 0.15 (~2x faster)
+  - Increased `fast_rampup_speed` from 0.20 to 0.40 (faster underexposure recovery)
+  - Increased `fast_rampdown_speed` from 0.20 to 0.35 (faster overexposure correction)
+
+### Changed
+- **ML state reset procedure documented**: When ML is trained on bad data, delete `ml_state/ml_state_v2.json` and restart
+  - ML automatically retrains from only good samples (brightness 105-135) in database
+  - Database is never deleted - all historical data preserved
+  - Added troubleshooting section to `docs/ML_EXPOSURE_SYSTEM.md` and `docs/CLAUDE.md`
+
+### Documentation
+- Added "Day Mode Brightness Oscillation" troubleshooting to `docs/CLAUDE.md`
+- Added "ML Trained on Bad Data" troubleshooting to `docs/ML_EXPOSURE_SYSTEM.md`
+- Updated `docs/NEXT_SESSION_CONTEXT.md` with fix details
+
+## [1.3.0] - 2026-01-16
+
+### Changed
+
+#### ML-First Exposure with Smart Safety
+- **Philosophy change**: Trust ML predictions for smooth transitions, with graduated safety mechanisms
+- **Higher ML trust**: Initial trust increased from 0.5 to 0.70, max trust from 0.8 to 0.90
+- **Tighter training range**: Good brightness range narrowed from 100-140 to 105-135 for higher quality ML data
+
+#### Bucket Interpolation for ML Data Gaps
+- **New**: ML v2 now interpolates between adjacent buckets when exact match unavailable
+- **Fills data gaps**: Addresses missing data in 0.0-0.5 lux (deep night) and 5-20 lux (transition zone)
+- Uses logarithmic interpolation in both lux and exposure space
+- Reduced confidence (70%) for interpolated predictions
+
+#### Sustained Drift Correction (Replaces Per-Frame Feedback)
+- **New**: `SustainedDriftCorrector` class only corrects after 3+ consecutive frames of consistent error
+- Prevents frame-to-frame oscillation that caused brightness flickering
+- Gradual decay back to neutral when error pattern breaks
+- Max 30% correction per update, capped at 0.5x-2.0x range
+
+#### Graduated Trust Reduction
+- **New**: `get_brightness_adjusted_trust()` method reduces ML trust as brightness deviates from target
+- Severe cases (brightness < 50 or > 200): Force formula (trust = 0)
+- Warning zones: Graduated reduction (50-70 brightness ramps from 0% to 100% trust)
+
+#### Rapid Light Change Detection
+- **New**: `get_lux_stability_trust()` method reduces trust during sunrise/sunset transitions
+- Detects rate of change in log-lux space
+- Above 0.3 log-lux/minute: Up to 50% trust reduction
+- Helps formula adapt faster during rapid Arctic light changes
+
+#### Simplified Safety Clamps
+- Removed intermediate emergency zones (WARNING_HIGH, WARNING_LOW, etc.)
+- Now only applies hard corrections for extreme cases:
+  - Brightness > 220: Force 30% exposure reduction
+  - Brightness < 35: Force 80% exposure increase
+- Philosophy: Small brightness variations (70-170) are acceptable if curve is smooth
+
+#### Proactive P95 Highlight Protection
+- **New**: `get_p95_highlight_factor()` method prevents highlight clipping BEFORE it happens
+- Based on Raspberry Pi Camera Algorithm Guide's histogram constraint concept
+- Monitors p95 (95th percentile brightness) and reduces exposure proactively:
+  - p95 < 200: No adjustment (highlights have headroom)
+  - p95 200-220: Gentle reduction (0.95-1.0x exposure)
+  - p95 220-240: Moderate reduction (0.85-0.95x exposure)
+  - p95 > 240: Aggressive reduction (0.70-0.85x exposure)
+- Especially useful for sunrise sky blowout, Aurora bright peaks, and high-contrast scenes
+
+### Config Changes (v1.3.0)
+```yaml
+ml_exposure:
+  initial_trust_v2: 0.70    # Was 0.5
+  max_trust: 0.90           # Was 0.8
+  good_brightness_min: 105  # Was 100
+  good_brightness_max: 135  # Was 140
+
+transition_mode:
+  brightness_feedback_strength: 0.05  # Was 0.2 - very gentle
+  brightness_tolerance: 60            # Was 40 - wider tolerance
+  exposure_transition_speed: 0.08     # Was 0.10 - slower for smoothness
+  fast_rampdown_speed: 0.20           # Was 0.50 - much gentler
+  fast_rampup_speed: 0.20             # Was 0.50 - much gentler
+```
+
+**Note**: These v1.3.0 values were further tuned in v1.3.1 - see above for current recommended values.
+
+### Technical Details
+- **Expected outcome**: Smooth transitions without oscillation
+- **Brightness target**: 70-170 range acceptable if curve is smooth (no banding in slitscan)
+- **Drift corrections should be rare**: Only for systematic ML prediction errors
+- **ML data gaps filled**: Interpolation provides predictions even for untrained lux zones
+
+## [1.2.2] - 2026-01-15
+
+### Fixed
+- **Critical: Severe underexposure during Arctic winter twilight**
+  - Root cause: Exposure interpolation (15% per frame) too slow for rapid Arctic light changes, combined with emergency factor cap (1.5x) being far too low
+  - Symptoms: Images going nearly black (brightness ~17 instead of target ~120) during afternoon/evening at high latitudes
+  - The lux calculation was accurate (correctly detecting 1154 → 125 lux), but exposure couldn't catch up
+  - At 30-second intervals, log-space interpolation takes 5+ minutes to reach target exposure
+  - Emergency factor was capped at 1.5x when 4x+ correction was needed
+
+### Changed
+- **Increased emergency factor cap from 1.5x to 4.0x** - allows much faster recovery from severe underexposure
+- **Increased EMERGENCY_LOW_FACTOR from 1.4x to 2.0x** - 100% exposure increase for brightness < 60
+- **Added new CRITICAL_LOW brightness zone** - 300% exposure increase for brightness < 40 (Arctic twilight conditions)
+
+### Technical Details
+- Emergency factor asymmetric by design: aggressive on underexposure (up to 4x), conservative on overexposure (max 50% reduction)
+- New zone thresholds:
+  - EMERGENCY_LOW: brightness < 60 → 2.0x correction (was 1.4x)
+  - CRITICAL_LOW: brightness < 40 → 4.0x correction (new)
+- Factors still smoothed over multiple frames to prevent flickering
+- Only affects severe underexposure scenarios - normal operation unchanged
+
+### Why this only affected Arctic locations
+- At 68°N in January, daylight lasts only 2-3 hours with rapid light changes
+- Sun barely rises above horizon during polar twilight period
+- Light drops much faster than at lower latitudes
+- Standard exposure interpolation designed for temperate latitudes couldn't keep up
+
+### Added
+- New test `test_critical_low_factor` for CRITICAL_LOW zone
+- Updated test assertions for new EMERGENCY_LOW_FACTOR value
+
+## [1.2.1] - 2026-01-14
+
+### Fixed
+- **Critical: Brightness correction not applied in transition mode with sequential ramping**
+  - Root cause: `_brightness_correction_factor` was only applied in `_calculate_target_exposure_from_lux()`, but sequential ramping bypassed this function entirely
+  - Symptoms: Images stayed dark (brightness ~35 instead of target ~120) even with correction factor at maximum (4.0x)
+  - The feedback system correctly detected underexposure but corrections were never applied
+  - Fix: Apply both brightness correction factor AND emergency brightness factor to sequential ramping results
+  - This affects cameras where auto-exposure seed values don't match the actual scene brightness (e.g., different sensor sensitivity)
+
+- **Daytime flickering caused by emergency factor oscillation**
+  - Root cause: Emergency brightness factor used hard thresholds (180) causing on/off toggling every frame
+  - Symptoms: Exposure bouncing between ~14ms and ~16ms every frame, visible as flickering in slitscan
+  - Pattern: brightness 187 → factor 0.7 → exposure drops → brightness 173 → factor 1.0 → exposure rises → repeat
+  - Fix: Replaced hard threshold with smoothed emergency factor that gradually moves towards target
+  - Applies corrections faster (2x speed) when brightness worsening, relaxes slower (0.5x speed) when improving
+  - Prevents oscillation by not instantly reverting correction when brightness crosses threshold
+
+### Technical Details
+- Sequential ramping calculates exposure from seed values (captured during day mode auto-exposure)
+- If the seed exposure produces dark images on a particular camera, the brightness feedback system detects this
+- Previously, the correction factor was calculated but never applied to the transition mode exposure
+- Now, correction is applied immediately after sequential ramping calculation, before EV safety clamp
+- Emergency factor also applied for severe underexposure (brightness < 60)
+
+### Why this only affected some cameras
+- Different cameras have different sensor sensitivity
+- The "other camera" happened to have seed values that produced correct brightness
+- This camera's seeds produced dark images, requiring the correction that was being ignored
+
+## [1.2.0] - 2026-01-12
+
+### Changed
+- **ML v2 Integration Complete**: `auto_timelapse.py` now uses ML v2 instead of v1
+  - ML v2 is database-driven and only learns from good frames (brightness 100-140)
+  - Passes `sun_elevation` to predictions for Arctic-aware time periods
+  - Requires database to be enabled (fails gracefully if not)
+  - Removes frame-by-frame learning (v1's `learn_from_frame()`) - prevents perpetuating bad exposures
+  - Higher initial trust (0.5) since it's trained only on proven good data
+
+### Deprecated
+- **ML v1** (`src/ml_exposure.py`): No longer used by `auto_timelapse.py`
+  - Kept for reference but not imported
+  - Old state file `ml_state/ml_state.json` can be safely deleted
+
+### Added
+- New tests for ML v2 integration in `tests/test_auto_timelapse.py`
+  - `test_ml_v2_disabled_by_default`
+  - `test_ml_v2_requires_database`
+  - `test_ml_v2_disabled_without_database`
+
+### Documentation
+- Updated `ML.md` to reflect v2 integration and v1 deprecation
+
+## [1.1.0] - 2026-01-11
+
+### Added
+- **Arctic-Aware ML v2**: Solar elevation-based time periods instead of clock hours
+  - Uses sun elevation to determine night/twilight/day periods
+  - Works correctly year-round at any latitude (including polar night and midnight sun)
+  - Falls back to clock-based periods if sun_elevation not available
+  - New period definitions: night (< -12°), twilight (-12° to 0°), day (> 0°)
+
+- **Aurora Frame Support in ML Training**: High-contrast night frames now included
+  - Standard frames: brightness 100-140 (target exposure)
+  - Aurora/night frames: brightness 30-90 with p95 > 150 at lux < 5
+  - Prevents rejecting valid aurora/star photography
+
+- **Database Migration System**: Auto-migrates schema on startup
+  - Schema version tracking in `schema_version` table
+  - Migration v2: Adds `sun_elevation` column
+  - No manual steps required when pulling new code to other cameras
+  - Gracefully handles "duplicate column" errors for fresh databases
+
+### Changed
+- Bumped database schema version from 1 to 2
+- ML v2 now uses `sun_elevation` from database when available
+- Updated `bootstrap_ml_v2.py` with Arctic-aware period detection
+
+### Documentation
+- Updated `ML.md` with Arctic-aware features, aurora support, and migration system
+- Added version history to ML documentation
+
 ## [1.0.9] - 2026-01-11
 
 ### Added
@@ -42,11 +253,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New documentation: `docs/ML_EXPOSURE_SYSTEM.md`
   - 43 tests in `tests/test_ml_exposure.py`
 
-- **ML Solar Patterns Graph**: Visualization of learned light patterns
-  - Shows lux by time of day for each learned day
+- **Daily Solar Patterns Graph**: Visualization of light patterns from database
+  - Shows lux curves by time of day for each recent day (last 14 days)
   - Displays daily midday light levels with trend line
-  - Tracks polar winter recovery (+100 lux/day trend visible)
-  - Generated at `graphs/ml_solar_patterns.png`
+  - Tracks polar winter recovery
+  - Generated at `graphs/daily_solar_patterns.png` via `db_graphs.py`
 
 - **Fast Underexposure Ramp-Up**: Symmetric to existing overexposure ramp-down
   - Triggers when brightness < 70 (warning) or < 50 (critical)

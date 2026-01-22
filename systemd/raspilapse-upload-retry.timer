@@ -1,0 +1,13 @@
+[Unit]
+Description=Raspilapse Upload Retry Timer
+Documentation=https://github.com/ekstremedia/raspilapse
+Requires=raspilapse-upload-retry.service
+
+[Timer]
+# Run every 30 minutes to process failed uploads
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

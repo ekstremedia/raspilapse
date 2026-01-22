@@ -26,8 +26,10 @@ if project_root not in sys.path:
 
 try:
     from src.logging_config import get_logger
+    from src.upload_service import UploadService
 except ModuleNotFoundError:
     from logging_config import get_logger
+    from upload_service import UploadService
 
 
 def load_config(config_path: str) -> dict:
@@ -343,22 +345,35 @@ Examples:
             print(f"  Slitscan: {slitscan_path}")
             print(f"  To: {upload_config.get('url', 'unknown')}")
         else:
-            success = upload_to_server(
+            # Use UploadService for upload with retry queue support
+            upload_service = UploadService(config, args.config)
+            date_str = target_date.strftime("%Y-%m-%d")
+
+            success, error, _response = upload_service.upload_to_server(
                 video_path=video_path,
                 keogram_path=keogram_path,
                 slitscan_path=slitscan_path,
-                date=target_date.strftime("%Y-%m-%d"),
-                upload_config=upload_config,
-                camera_id=camera_id,
-                logger=logger,
+                date=date_str,
             )
 
-            if not success:
-                logger.error("Upload failed")
-                print("Error: Upload failed")
-                return 1
-
-            logger.info("Upload completed successfully")
+            if success:
+                logger.info("Upload completed successfully")
+            else:
+                # Queue for retry - don't fail the script since video was created
+                queue_id = upload_service.queue_upload(
+                    video_path=str(video_path),
+                    keogram_path=str(keogram_path) if keogram_path else None,
+                    slitscan_path=str(slitscan_path) if slitscan_path else None,
+                    video_date=date_str,
+                )
+                if queue_id:
+                    upload_service.mark_upload_failed(queue_id, error or "Unknown error")
+                    logger.warning(f"Upload failed, queued for retry (id={queue_id}): {error}")
+                    print(f"Warning: Upload failed, queued for retry: {error}")
+                else:
+                    logger.error(f"Upload failed and could not queue for retry: {error}")
+                    print(f"Error: Upload failed: {error}")
+                    return 1
     elif args.no_upload:
         print("Skipping upload (--no-upload)")
     else:

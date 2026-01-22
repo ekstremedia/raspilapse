@@ -557,7 +557,7 @@ python3 src/status.py -c config/custom.yml
 ```
 
 **Output Example:**
-```
+```text
 ============================================================
   RASPILAPSE STATUS
 ============================================================
@@ -668,9 +668,9 @@ python3 src/analyze_timelapse.py -c config/custom.yml
 
 5. **`overview.png`** - 4-panel summary of all key metrics
 
-6. **`ml_solar_patterns.png`** - ML learned light patterns
-   - Lux by time of day for each learned day
-   - Daily midday light levels with trend
+6. **`daily_solar_patterns.png`** - Daily light patterns from database
+   - Lux curves by time of day for each recent day (14 days)
+   - Daily midday light levels with trend (polar winter recovery)
 
 7. **`timelapse_analysis_24h.xlsx`** - Excel file with:
    - **Raw Data**: Every image with timestamp, lux, exposure, gain, temp, etc.
@@ -703,89 +703,102 @@ The script intelligently matches JPG files with their corresponding `_metadata.j
 
 ---
 
-## ML-Based Adaptive Exposure System
+## Direct Brightness Control (Recommended)
 
 ### Overview
-A lightweight machine learning system that continuously learns and improves timelapse exposure settings. Designed for Raspberry Pi with minimal compute requirements.
+
+A simple, physics-based exposure control system that replaced the complex ML approach on 2026-01-18. Uses direct proportional feedback to maintain target brightness.
+
+### Why Direct Control?
+
+The ML-based system had multiple smoothing layers that fought each other:
+- Formula + ML blend + drift correction + interpolation
+- Even with "64% emergency increase", actual exposure only changed ~10% per frame
+- Took 10+ frames (5+ minutes) to recover from brightness errors
+
+Direct control converges in 3-5 frames using simple physics.
 
 ### How It Works
-The system runs automatically as part of `auto_timelapse.py`:
 
-1. **Every frame**: Learns from capture metadata (lux, exposure, brightness)
-2. **Before capture**: Predicts optimal exposure based on learned patterns
-3. **Blending**: ML predictions blended with formula based on trust level
-
-### Components
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    ML Exposure Predictor                     │
-├─────────────────────────────────────────────────────────────┤
-│  1. Solar Pattern Memory    - Expected lux by time/day      │
-│  2. Lux-Exposure Mapper     - Optimal exposure per lux      │
-│  3. Trend Predictor         - Anticipate light changes      │
-│  4. Correction Memory       - What brightness fixes worked  │
-└─────────────────────────────────────────────────────────────┘
+```text
+ratio = target_brightness / actual_brightness
+new_exposure = current_exposure × ratio^damping
 ```
 
-### Trust System
-- **Initial trust**: 0% (formula only)
-- **Increment**: +0.1% per good prediction (brightness 100-140)
-- **Maximum**: 80% (formula always has 20% influence)
-
-Formula: `final = trust × ML + (1-trust) × formula`
-
-### Aurora-Safe Learning
-The ML system accepts two types of "good" frames for learning:
-
-1. **Standard Day/Twilight**: Mean brightness 105-135 (near target 120)
-2. **High-Contrast Night** (Aurora/Stars):
-   - Lux < 10 (night conditions)
-   - Mean brightness 30-105 (dark sky)
-   - Percentile 95 > 150 (bright highlights from Aurora/stars)
-
-This prevents the system from rejecting valid night photography where the overall image is dark but contains bright Aurora or stars.
-
-### Files
-| File | Purpose |
-|------|---------|
-| `src/ml_exposure.py` | Main ML predictor class |
-| `src/bootstrap_ml.py` | Bootstrap from historical data |
-| `src/graph_ml_patterns.py` | Generate solar pattern visualization |
-| `ml_state/ml_state.json` | Persisted learned state |
-| `docs/ML_EXPOSURE_SYSTEM.md` | Full documentation |
+**Example with damping=0.5 (conservative):**
+- Frame 1: brightness=75, target=120, ratio=1.6
+- Correction: 1.6^0.5 = 1.26x (26% increase)
+- Frame 2: brightness≈95, ratio=1.26, correction=1.12x
+- Frame 3: brightness≈107, ratio=1.12, correction=1.06x
+- Frame 4: brightness≈113, converging...
 
 ### Configuration
+
 ```yaml
 # config/config.yml
 adaptive_timelapse:
-  ml_exposure:
-    enabled: true           # ML active
-    shadow_mode: false      # Use predictions (not just log)
-    initial_trust: 0.0      # Start with formula only
-    max_trust: 0.8          # Cap ML influence at 80%
+  # Direct brightness feedback (recommended - replaces ML)
+  direct_brightness_control: true
+  brightness_damping: 0.5  # 0.5=conservative, 0.7=balanced, 0.8=aggressive
+
+  # Target brightness (0-255)
+  transition_mode:
+    target_brightness: 120
 ```
 
-### Commands
+### Behavior by Mode
+
+| Mode | Exposure | Gain | Notes |
+|------|----------|------|-------|
+| Day | Direct feedback | Fixed 1.0 | Fast convergence to target |
+| Transition | Direct feedback | Ramps when exposure >80% max | Shutter-first, then gain |
+| Night | Direct feedback if bright | Coordinated ramp on entry | Prevents transition artifacts |
+
+### Mode Transition Smoothing (2026-01-20, iteration 2)
+
+Four fixes prevent brightness artifacts at mode boundaries:
+
+**Night Mode Brightness Feedback (dawn)**:
+- When brightness > 140 (overexposed at dawn), night mode reduces exposure
+- Uses same physics-based feedback as day/transition modes
+- Minimum 60% max exposure (12s) to prevent over-reduction
+
+**Night Mode Gain Reduction (dawn, NEW)**:
+- When exposure hits floor (12s) AND brightness still > 150, also reduce gain
+- Uses sqrt-based reduction: `gain = gain * (120/brightness)^0.5`
+- Minimum gain 2.0 prevents complete darkness
+- Prevents brightness climbing when exposure can't go lower
+
+**Coordinated Ramps When Entering Night (evening)**:
+- Detects entry: current gain < 50% of target
+- Slower base ramps: gain 0.04 (4%/frame), exposure 0.03 (3%/frame)
+- Spreads transition over ~20-30 minutes for imperceptible blending
+
+**Brightness Throttling When Entering Night (NEW)**:
+- When brightness > 64 (80% of night target 80), throttles ramp speed
+- Throttle ranges from 100% at brightness 64 to 30% at brightness 80+
+- Prevents overshoot from combined exposure+gain increase
+
+### Verification
+
 ```bash
-# Bootstrap from historical data
-python src/bootstrap_ml.py --days 7
+# Check direct control is active
+journalctl -u raspilapse | grep "DirectFB"
 
-# View learned patterns
-python src/bootstrap_ml.py --show-table
+# Monitor convergence
+python scripts/db_stats.py 5m
+# Should see brightness converging to 105-135 range
 
-# Generate visualization
-python src/graph_ml_patterns.py
+# Example log output:
+# [DirectFB] brightness=75, target=120, ratio=1.60, change=1.26x, exp: 0.04s → 0.05s
 ```
 
-### Polar Location Adaptation
-At 68.7°N latitude, the system handles:
-- **January**: Polar twilight, very short days
-- **March**: Days lengthening ~7 min/day
-- **May-July**: 24-hour sun (midnight sun)
-- **September**: Days shortening rapidly
+### Rollback to ML
 
-Solar patterns indexed by day-of-year automatically adapt to seasonal changes.
+If needed, disable direct control to use legacy ML system:
+```yaml
+direct_brightness_control: false  # or remove the line
+```
 
 ---
 
@@ -826,6 +839,18 @@ brightness_mean/median/std, brightness_p5/p25/p75/p95,
 underexposed_pct, overexposed_pct,
 weather_temperature/humidity/wind_speed/wind_gust/rain/pressure,
 system_cpu_temp, system_load_1min/5min/15min
+```
+
+### Migrations
+Database auto-migrates on startup. No manual steps required.
+
+- **Schema v1**: Initial schema
+- **Schema v2**: Added `sun_elevation` column for Arctic-aware ML
+
+When pulling new code to cameras with older databases:
+```text
+[DB] Applying migration v2: Add sun_elevation column for Arctic-aware ML
+[DB] Migration v2 complete
 ```
 
 ### Usage Examples
@@ -879,3 +904,49 @@ print(db.get_statistics())
 - Save metadata with captures (timestamp, settings)
 - Implement graceful shutdown on interrupts
 - **For long exposures (>5s)**: Always set FrameDurationLimits and disable AWB
+
+---
+
+## Troubleshooting: Day Mode Brightness Oscillation
+
+### Symptoms
+- Day mode brightness oscillates wildly (e.g., 77-163 instead of target 105-135)
+- Images appear too dark or too bright compared to other cameras
+- Problem recurs even after config adjustments
+
+### Root Causes
+
+1. **Brightness Tolerance Too Wide**
+   - If `brightness_tolerance: 60` with `target_brightness: 120`, acceptable range is 60-180
+   - Actual brightness 77-163 falls "within tolerance" - no feedback triggered
+
+2. **Feedback Strength Too Weak**
+   - `brightness_feedback_strength: 0.05` means only 5% corrections
+   - System can't correct fast enough
+
+3. **Slow Ramp Speeds**
+   - `exposure_transition_speed: 0.08` = only 8% change per frame
+   - Takes 12+ frames to reach target exposure
+
+### Solution: Config Tuning
+
+#### Step 1: Tighten Config Parameters
+```yaml
+# config/config.yml - transition_mode section
+brightness_tolerance: 25          # Was 60 - triggers at 95-145 instead of 60-180
+brightness_feedback_strength: 0.15  # Was 0.05 - 3x faster corrections
+exposure_transition_speed: 0.15   # Was 0.08 - ~2x faster adjustments
+fast_rampdown_speed: 0.35         # Was 0.20 - faster overexposure correction
+fast_rampup_speed: 0.40           # Was 0.20 - faster underexposure recovery
+```
+
+#### Step 2: Verify
+```bash
+# Monitor brightness after restart
+python scripts/db_stats.py 30m
+
+# Expected: brightness converging to 105-135 range within ~10 frames
+```
+
+### Important Notes
+- Run `python scripts/db_stats.py 1h` during midday to verify fix

@@ -1,0 +1,15 @@
+[Unit]
+Description=Raspilapse Upload Retry Service
+Documentation=https://github.com/ekstremedia/raspilapse
+After=network.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/raspilapse
+ExecStart=/usr/bin/python3 /home/pi/raspilapse/src/retry_uploads.py
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

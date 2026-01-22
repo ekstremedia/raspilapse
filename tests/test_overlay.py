@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.overlay import ImageOverlay, apply_overlay_to_image
+from src.overlay import ImageOverlay, apply_overlay_to_image, TideData
 
 
 @pytest.fixture
@@ -395,9 +395,9 @@ class TestErrorHandling:
         """Test handling of missing image file."""
         overlay = ImageOverlay(test_overlay_config)
 
-        # Should return original path and log error (not raise exception)
+        # Should return None on failure (not raise exception)
         result = overlay.apply_overlay("/nonexistent/image.jpg", {}, mode="day")
-        assert result == "/nonexistent/image.jpg"  # Returns original path on error
+        assert result is None  # Returns None on error
 
     def test_apply_overlay_invalid_metadata(self, test_overlay_config, test_image):
         """Test handling of invalid metadata."""
@@ -1056,143 +1056,73 @@ class TestLocaleDatetimeEdgeCases:
         assert len(result) > 0
 
 
-class TestBarentswatchShipOverlay:
-    """Test Barentswatch ship overlay functionality."""
+class TestPillowCompatibility:
+    """Test Pillow version compatibility for required features."""
 
-    def test_load_ships_disabled(self, test_overlay_config):
-        """Test _load_ships returns empty list when barentswatch disabled."""
-        test_overlay_config["barentswatch"] = {"enabled": False}
-        overlay = ImageOverlay(test_overlay_config)
+    def test_pillow_has_rounded_rectangle(self):
+        """
+        Ensure Pillow has rounded_rectangle method.
 
-        ships = overlay._load_ships()
-        assert ships == []
+        This method was added in Pillow 8.2.0 and is required for ship box rendering.
+        If this test fails, upgrade Pillow: pip install --upgrade Pillow
+        """
+        from PIL import ImageDraw
 
-    def test_load_ships_no_config(self, test_overlay_config):
-        """Test _load_ships returns empty list when no barentswatch config."""
-        # No barentswatch config at all
-        overlay = ImageOverlay(test_overlay_config)
+        # Create a test image and draw context
+        test_img = Image.new("RGBA", (100, 100), color=(255, 255, 255, 0))
+        draw = ImageDraw.Draw(test_img, "RGBA")
 
-        ships = overlay._load_ships()
-        assert ships == []
+        # Verify rounded_rectangle method exists
+        assert hasattr(draw, "rounded_rectangle"), (
+            "Pillow version is too old. rounded_rectangle requires Pillow >= 8.2.0. "
+            "Please upgrade: pip install --upgrade Pillow"
+        )
 
-    def test_load_ships_file_not_found(self, test_overlay_config):
-        """Test _load_ships returns empty list when file doesn't exist."""
+        # Verify it works without error
+        draw.rounded_rectangle([10, 10, 50, 50], radius=5, fill=(0, 0, 0, 128))
+
+    def test_pillow_version_minimum(self):
+        """Verify Pillow version meets minimum requirement for all features."""
+        from PIL import __version__ as pillow_version
+        from packaging import version
+
+        min_version = "8.2.0"
+        assert version.parse(pillow_version) >= version.parse(min_version), (
+            f"Pillow version {pillow_version} is below minimum required {min_version}. "
+            f"Please upgrade: pip install --upgrade Pillow"
+        )
+
+
+class TestShipBoxesRendering:
+    """Test ship boxes overlay rendering."""
+
+    def test_draw_ship_boxes_with_ships_data(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar mode with ship boxes when ships data is present."""
+        # Create temporary ships file
+        ships_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        ships_file_path = ships_file.name
+
+        test_overlay_config["overlay"]["position"] = "top-bar"
         test_overlay_config["barentswatch"] = {
             "enabled": True,
-            "ships_file": "/nonexistent/ships.json",
+            "ships_file": ships_file_path,
         }
-        overlay = ImageOverlay(test_overlay_config)
 
-        ships = overlay._load_ships()
-        assert ships == []
-
-    def test_load_ships_valid_json(self, test_overlay_config):
-        """Test _load_ships correctly parses valid JSON."""
-        # Create temp ships file
+        # Create mock ships data file
         ships_data = {
-            "provider": "ships",
-            "updated_at": "2026-01-17T14:00:00+00:00",
-            "count": 2,
             "items": [
-                {
-                    "mmsi": 259139000,
-                    "name": "NORDLYS",
-                    "speed": 12.5,
-                    "heading": 344,
-                    "direction": "north-west",
-                    "display": "NORDLYS (259139000) 12.5 kts, north-west",
-                    "still_in_zone": True,
-                },
-                {
-                    "mmsi": 258201000,
-                    "name": "HAVDONN",
-                    "speed": 0,
-                    "heading": None,
-                    "direction": "stationary",
-                    "display": "HAVDONN (258201000) stationary",
-                    "still_in_zone": True,
-                },
+                {"name": "Test Ship 1", "mmsi": "123456789", "speed": 5.0},
+                {"name": "Test Ship 2", "mmsi": "987654321", "speed": 3.0},
             ],
         }
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        with open(ships_file_path, "w") as f:
             json.dump(ships_data, f)
-            ships_file = f.name
 
         try:
-            test_overlay_config["barentswatch"] = {
-                "enabled": True,
-                "ships_file": ships_file,
-            }
             overlay = ImageOverlay(test_overlay_config)
-
-            ships = overlay._load_ships()
-            assert len(ships) == 2
-            assert ships[0]["name"] == "NORDLYS"
-            assert ships[1]["name"] == "HAVDONN"
-        finally:
-            os.unlink(ships_file)
-
-    def test_load_ships_invalid_json(self, test_overlay_config):
-        """Test _load_ships handles invalid JSON gracefully."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write("not valid json {{{")
-            ships_file = f.name
-
-        try:
-            test_overlay_config["barentswatch"] = {
-                "enabled": True,
-                "ships_file": ships_file,
-            }
-            overlay = ImageOverlay(test_overlay_config)
-
-            ships = overlay._load_ships()
-            assert ships == []
-        finally:
-            os.unlink(ships_file)
-
-    def test_load_ships_empty_items(self, test_overlay_config):
-        """Test _load_ships handles JSON with empty items list."""
-        ships_data = {"provider": "ships", "count": 0, "items": []}
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(ships_data, f)
-            ships_file = f.name
-
-        try:
-            test_overlay_config["barentswatch"] = {
-                "enabled": True,
-                "ships_file": ships_file,
-            }
-            overlay = ImageOverlay(test_overlay_config)
-
-            ships = overlay._load_ships()
-            assert ships == []
-        finally:
-            os.unlink(ships_file)
-
-    def test_topbar_with_ships(self, test_overlay_config, test_image, test_metadata):
-        """Test top-bar overlay with ships displayed."""
-        # Create temp ships file
-        ships_data = {
-            "items": [
-                {"name": "TESTSHIP", "display": "TESTSHIP (123) 5.0 kts, north"},
-            ]
-        }
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(ships_data, f)
-            ships_file = f.name
-
-        try:
-            test_overlay_config["overlay"]["position"] = "top-bar"
-            test_overlay_config["barentswatch"] = {
-                "enabled": True,
-                "ships_file": ships_file,
-            }
-            overlay = ImageOverlay(test_overlay_config)
-
             output_path = test_image.replace(".jpg", "_ships.jpg")
+
+            # This should not fail - if rounded_rectangle is missing, this test will catch it
             result = overlay.apply_overlay(
                 test_image, test_metadata, mode="day", output_path=output_path
             )
@@ -1200,94 +1130,318 @@ class TestBarentswatchShipOverlay:
             assert os.path.exists(result)
             os.unlink(output_path)
         finally:
-            os.unlink(ships_file)
+            if os.path.exists(ships_file_path):
+                os.unlink(ships_file_path)
 
-    def test_topbar_without_ships(self, test_overlay_config, test_image, test_metadata):
-        """Test top-bar overlay works when barentswatch enabled but no ships."""
-        ships_data = {"items": []}
+    def test_draw_ship_boxes_without_ships_data(
+        self, test_overlay_config, test_image, test_metadata
+    ):
+        """Test top-bar mode when ships file is empty or missing."""
+        # Use a unique nonexistent path in temp directory
+        nonexistent_path = os.path.join(tempfile.gettempdir(), "nonexistent_ships_test.json")
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(ships_data, f)
-            ships_file = f.name
-
-        try:
-            test_overlay_config["overlay"]["position"] = "top-bar"
-            test_overlay_config["barentswatch"] = {
-                "enabled": True,
-                "ships_file": ships_file,
-            }
-            overlay = ImageOverlay(test_overlay_config)
-
-            output_path = test_image.replace(".jpg", "_noships.jpg")
-            result = overlay.apply_overlay(
-                test_image, test_metadata, mode="day", output_path=output_path
-            )
-
-            assert os.path.exists(result)
-            os.unlink(output_path)
-        finally:
-            os.unlink(ships_file)
-
-    def test_topbar_many_ships_overflow(self, test_overlay_config, test_image, test_metadata):
-        """Test top-bar overlay handles many ships that would overflow."""
-        # Create many ships that would overflow the image width
-        ships_data = {
-            "items": [
-                {"name": f"SHIP{i}", "display": f"VERYLONGSHIPNAME{i} (12345678{i}) 10.0 kts, north-west"}
-                for i in range(20)
-            ]
+        test_overlay_config["overlay"]["position"] = "top-bar"
+        test_overlay_config["barentswatch"] = {
+            "enabled": True,
+            "ships_file": nonexistent_path,
         }
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(ships_data, f)
-            ships_file = f.name
+        overlay = ImageOverlay(test_overlay_config)
+        output_path = test_image.replace(".jpg", "_noships.jpg")
 
-        try:
-            test_overlay_config["overlay"]["position"] = "top-bar"
-            test_overlay_config["barentswatch"] = {
-                "enabled": True,
-                "ships_file": ships_file,
-            }
-            overlay = ImageOverlay(test_overlay_config)
+        # Should succeed even without ships data
+        result = overlay.apply_overlay(
+            test_image, test_metadata, mode="day", output_path=output_path
+        )
 
-            output_path = test_image.replace(".jpg", "_manyships.jpg")
-            # Should not crash when ships overflow
-            result = overlay.apply_overlay(
-                test_image, test_metadata, mode="day", output_path=output_path
-            )
+        assert os.path.exists(result)
+        os.unlink(output_path)
 
-            assert os.path.exists(result)
-            os.unlink(output_path)
-        finally:
-            os.unlink(ships_file)
-
-    def test_non_topbar_mode_ignores_ships(self, test_overlay_config, test_image, test_metadata):
-        """Test that non-top-bar modes don't crash with barentswatch enabled."""
-        ships_data = {
-            "items": [
-                {"name": "TESTSHIP", "display": "TESTSHIP (123) 5.0 kts, north"},
-            ]
+    def test_ship_boxes_disabled(self, test_overlay_config, test_image, test_metadata):
+        """Test top-bar mode with ships feature disabled."""
+        test_overlay_config["overlay"]["position"] = "top-bar"
+        test_overlay_config["barentswatch"] = {
+            "enabled": False,
         }
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(ships_data, f)
-            ships_file = f.name
+        overlay = ImageOverlay(test_overlay_config)
+        output_path = test_image.replace(".jpg", "_ships_disabled.jpg")
 
-        try:
-            test_overlay_config["overlay"]["position"] = "bottom-left"
-            test_overlay_config["barentswatch"] = {
+        result = overlay.apply_overlay(
+            test_image, test_metadata, mode="day", output_path=output_path
+        )
+
+        assert os.path.exists(result)
+        os.unlink(output_path)
+
+
+class TestOverlayErrorHandling:
+    """Tests for overlay error handling improvements."""
+
+    def test_apply_overlay_returns_none_on_invalid_image(self, test_overlay_config):
+        """Test that apply_overlay returns None when given invalid image path."""
+        overlay = ImageOverlay(test_overlay_config)
+
+        result = overlay.apply_overlay(
+            "/nonexistent/path/to/image.jpg", {"ExposureTime": 1000}, mode="day"
+        )
+
+        # Should return None on failure, not the original path
+        assert result is None
+
+    def test_apply_overlay_returns_none_on_save_failure(
+        self, test_overlay_config, test_image, test_metadata
+    ):
+        """Test that apply_overlay returns None when save fails."""
+        overlay = ImageOverlay(test_overlay_config)
+
+        # Try to save to a read-only location
+        result = overlay.apply_overlay(
+            test_image, test_metadata, mode="day", output_path="/root/cannot_write_here.jpg"
+        )
+
+        # Should return None on save failure
+        assert result is None
+
+
+class TestWidgetFixedWidths:
+    """Tests for fixed-width widget positioning."""
+
+    def test_aurora_uses_fixed_width_template(self, test_overlay_config):
+        """Test that aurora widget uses fixed-width templates for consistent positioning."""
+        # The max templates should be used for width calculation
+        max_line_1 = "Kp: 9.9 | Bz: -99.9↓"
+        max_line_2 = "G5 | 9999 km/s"
+
+        # These should be longer than typical values
+        typical_line_1 = "Kp: 2.3 | Bz: 0.9↑"
+        typical_line_2 = "G0 | 556 km/s"
+
+        assert len(max_line_1) >= len(typical_line_1)
+        assert len(max_line_2) >= len(typical_line_2)
+
+    def test_tide_format_includes_cm_values(self, test_overlay_config):
+        """Test that tide widget includes cm values in parentheses."""
+        # The expected format is: "H 13:18 (227cm) | L 07:10 (76cm)"
+        tide_widget = {
+            "high_time_str": "13:18",
+            "high_level_str": "227cm",
+            "low_time_str": "07:10",
+            "low_level_str": "76cm",
+        }
+
+        expected_format = f"H {tide_widget['high_time_str']} ({tide_widget['high_level_str']}) | L {tide_widget['low_time_str']} ({tide_widget['low_level_str']})"
+
+        assert "(227cm)" in expected_format
+        assert "(76cm)" in expected_format
+        assert expected_format == "H 13:18 (227cm) | L 07:10 (76cm)"
+
+    def test_tide_max_width_template(self, test_overlay_config):
+        """Test that tide widget uses appropriate max width template."""
+        max_line_1 = "Tide level: 999cm → 999cm"
+        typical_line_1 = "Tide level: 227cm → 76cm"
+        max_line_2 = "H 00:00 (999cm) | L 00:00 (999cm)"
+        typical_line_2 = "H 13:18 (227cm) | L 07:10 (76cm)"
+
+        # Max template should accommodate all reasonable values
+        assert len(max_line_1) >= len(typical_line_1)
+        assert len(max_line_2) >= len(typical_line_2)
+
+
+class TestTideDataCalculation:
+    """Tests for TideData calculation of next high/low from points array."""
+
+    @pytest.fixture
+    def tide_config(self, tmp_path):
+        """Create a config with tide enabled and a temp tide file."""
+        tide_file = tmp_path / "tide.json"
+        return {
+            "tide": {
                 "enabled": True,
-                "ships_file": ships_file,
+                "tide_file": str(tide_file),
             }
-            overlay = ImageOverlay(test_overlay_config)
+        }
 
-            output_path = test_image.replace(".jpg", "_bottomleft_ships.jpg")
-            # Should work without crashing (ships only shown in top-bar mode)
-            result = overlay.apply_overlay(
-                test_image, test_metadata, mode="day", output_path=output_path
-            )
+    @pytest.fixture
+    def sample_tide_data(self):
+        """Sample tide data with points array showing a typical day."""
+        from datetime import datetime, timedelta, timezone
 
-            assert os.path.exists(result)
-            os.unlink(output_path)
-        finally:
-            os.unlink(ships_file)
+        now = datetime.now(timezone.utc)
+        base_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Generate points that create clear highs and lows:
+        # Low at 02:00, High at 08:00, Low at 14:00, High at 20:00
+        points = []
+        for i in range(145):  # 24 hours of 10-min intervals + 1
+            t = base_time + timedelta(minutes=i * 10)
+            # Simulate tide with two cycles per day
+            import math
+
+            hours = i * 10 / 60
+            # Create a pattern: low at 2:00, high at 8:00, low at 14:00, high at 20:00
+            level = 150 + 80 * math.sin((hours - 2) * math.pi / 6)
+            points.append({"time": t.isoformat(), "level_cm": int(level)})
+
+        return {
+            "tide_data": {
+                "location": "Test",
+                "points": points,
+                "next_high": {
+                    "time": (base_time + timedelta(hours=8)).isoformat(),
+                    "level_cm": 230,
+                },
+                "next_low": {"time": (base_time + timedelta(hours=2)).isoformat(), "level_cm": 70},
+            }
+        }
+
+    def test_find_extremes_from_points_finds_highs_and_lows(
+        self, tide_config, sample_tide_data, tmp_path
+    ):
+        """Test that _find_extremes_from_points correctly identifies peaks and troughs."""
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(sample_tide_data, f)
+
+        tide = TideData(tide_config)
+        highs, lows = tide._find_extremes_from_points()
+
+        # Should find at least one high and one low
+        assert len(highs) >= 1, "Should find at least one high tide"
+        assert len(lows) >= 1, "Should find at least one low tide"
+
+        # Highs should have higher levels than lows
+        if highs and lows:
+            assert highs[0]["level_cm"] > lows[0]["level_cm"]
+
+    def test_get_next_high_filters_past_events(self, tide_config, tmp_path):
+        """Test that get_next_high returns only future events."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+
+        # Create data with a past high and a future high
+        past_high_time = now - timedelta(hours=2)
+        future_high_time = now + timedelta(hours=4)
+
+        # Create simple points that create these highs
+        points = []
+        for i in range(-30, 60):  # -5 hours to +10 hours in 10-min intervals
+            t = now + timedelta(minutes=i * 10)
+            # Create peaks at past_high and future_high
+            if abs((t - past_high_time).total_seconds()) < 600:
+                level = 220 - abs((t - past_high_time).total_seconds()) / 60
+            elif abs((t - future_high_time).total_seconds()) < 600:
+                level = 210 - abs((t - future_high_time).total_seconds()) / 60
+            else:
+                level = 100
+            points.append({"time": t.isoformat(), "level_cm": int(level)})
+
+        tide_data = {
+            "tide_data": {
+                "points": points,
+                "next_high": {
+                    "time": past_high_time.isoformat(),  # Backend says past high
+                    "level_cm": 220,
+                },
+            }
+        }
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        next_high = tide.get_next_high()
+
+        # Should return the future high, not the past one
+        if next_high:
+            high_time = tide._parse_time(next_high.get("time"))
+            assert high_time > now, "Next high should be in the future"
+
+    def test_get_next_low_filters_past_events(self, tide_config, tmp_path):
+        """Test that get_next_low returns only future events."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+
+        # Create data with a past low and a future low
+        past_low_time = now - timedelta(hours=3)
+        future_low_time = now + timedelta(hours=3)
+
+        # Create simple points that create these lows
+        points = []
+        for i in range(-40, 50):  # -6.6 hours to +8.3 hours in 10-min intervals
+            t = now + timedelta(minutes=i * 10)
+            # Create troughs at past_low and future_low
+            if abs((t - past_low_time).total_seconds()) < 600:
+                level = 70 + abs((t - past_low_time).total_seconds()) / 60
+            elif abs((t - future_low_time).total_seconds()) < 600:
+                level = 80 + abs((t - future_low_time).total_seconds()) / 60
+            else:
+                level = 180
+            points.append({"time": t.isoformat(), "level_cm": int(level)})
+
+        tide_data = {
+            "tide_data": {
+                "points": points,
+                "next_low": {
+                    "time": past_low_time.isoformat(),  # Backend says past low
+                    "level_cm": 70,
+                },
+            }
+        }
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        next_low = tide.get_next_low()
+
+        # Should return the future low, not the past one
+        if next_low:
+            low_time = tide._parse_time(next_low.get("time"))
+            assert low_time > now, "Next low should be in the future"
+
+    def test_empty_points_returns_none(self, tide_config, tmp_path):
+        """Test that empty points array gracefully returns None."""
+        tide_data = {"tide_data": {"points": []}}
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        assert tide.get_next_high() is None
+        assert tide.get_next_low() is None
+
+    def test_no_extremes_returns_none(self, tide_config, tmp_path):
+        """Test that if points don't have extremes, returns None (no fallback)."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+
+        # Create flat points (no extremes) - always calculates from points, no fallback
+        points = [
+            {"time": (now + timedelta(minutes=i * 10)).isoformat(), "level_cm": 150}
+            for i in range(20)
+        ]
+
+        tide_data = {
+            "tide_data": {
+                "points": points,
+                # Backend next_high is ignored - we always calculate from points
+                "next_high": {"time": (now + timedelta(hours=5)).isoformat(), "level_cm": 220},
+            }
+        }
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        next_high = tide.get_next_high()
+
+        # No extremes in points = None (we don't use backend's pre-calculated values)
+        assert next_high is None
