@@ -802,115 +802,6 @@ direct_brightness_control: false  # or remove the line
 
 ---
 
-## ML-Based Adaptive Exposure System (Legacy)
-
-### Overview
-A lightweight machine learning system that continuously learns and improves timelapse exposure settings. Designed for Raspberry Pi with minimal compute requirements.
-
-### How It Works
-The system runs automatically as part of `auto_timelapse.py`:
-
-1. **Every frame**: Learns from capture metadata (lux, exposure, brightness)
-2. **Before capture**: Predicts optimal exposure based on learned patterns
-3. **Blending**: ML predictions blended with formula based on trust level
-
-### Components
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                    ML Exposure Predictor                     │
-├─────────────────────────────────────────────────────────────┤
-│  1. Solar Pattern Memory    - Expected lux by time/day      │
-│  2. Lux-Exposure Mapper     - Optimal exposure per lux      │
-│  3. Trend Predictor         - Anticipate light changes      │
-│  4. Correction Memory       - What brightness fixes worked  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Trust System
-- **Initial trust**: 0% (formula only)
-- **Increment**: +0.1% per good prediction (brightness 100-140)
-- **Maximum**: 80% (formula always has 20% influence)
-
-Formula: `final = trust × ML + (1-trust) × formula`
-
-### Aurora-Safe Learning
-The ML system accepts two types of "good" frames for learning:
-
-1. **Standard Day/Twilight**: Mean brightness 105-135 (near target 120)
-2. **High-Contrast Night** (Aurora/Stars):
-   - Lux < 10 (night conditions)
-   - Mean brightness 30-105 (dark sky)
-   - Percentile 95 > 150 (bright highlights from Aurora/stars)
-
-This prevents the system from rejecting valid night photography where the overall image is dark but contains bright Aurora or stars.
-
-### Files
-| File | Purpose |
-|------|---------|
-| `src/ml_exposure_v2.py` | ML v2 predictor (database-trained, arctic-aware) |
-| `src/ml_exposure.py` | Legacy ML v1 predictor class |
-| `src/bootstrap_ml_v2.py` | Bootstrap v2 from database |
-| `src/graph_ml_patterns.py` | Generate daily solar pattern visualization from database |
-| `ml_state/ml_state_v2.json` | ML v2 persisted state |
-| `docs/ML_EXPOSURE_SYSTEM.md` | Full documentation |
-
-### Configuration
-```yaml
-# config/config.yml
-adaptive_timelapse:
-  ml_exposure:
-    enabled: true           # ML active
-    shadow_mode: false      # Use predictions (not just log)
-    initial_trust: 0.0      # Start with formula only
-    max_trust: 0.8          # Cap ML influence at 80%
-```
-
-### Commands
-```bash
-# Bootstrap ML v2 from database (auto-retrains daily)
-python src/bootstrap_ml_v2.py
-
-# Generate daily solar patterns graph (last 14 days from database)
-python src/graph_ml_patterns.py --days 14
-
-# Or run all graphs including solar patterns via db_graphs.py
-python scripts/db_graphs.py
-```
-
-### Polar Location Adaptation
-At 68.7°N latitude, the system handles:
-- **January**: Polar twilight, very short days
-- **March**: Days lengthening ~7 min/day
-- **May-July**: 24-hour sun (midnight sun)
-- **September**: Days shortening rapidly
-
-Solar patterns indexed by day-of-year automatically adapt to seasonal changes.
-
-### ML v2 (Arctic-Aware Database-Driven)
-
-Enhanced ML that trains only on good frames from the database:
-
-| File | Purpose |
-|------|---------|
-| `src/ml_exposure_v2.py` | Database-driven ML predictor |
-| `src/bootstrap_ml_v2.py` | Bootstrap from database |
-| `ml_state/ml_state_v2.json` | Persisted state |
-| `ML.md` | Full ML documentation |
-
-**Arctic-Aware Time Periods** (uses sun elevation, not clock):
-- Night: sun < -12° (astronomical night)
-- Twilight: sun -12° to 0° (civil + nautical)
-- Day: sun > 0° (above horizon)
-
-**Commands:**
-```bash
-python src/bootstrap_ml_v2.py           # Bootstrap from database
-python src/bootstrap_ml_v2.py --analyze # Just show statistics
-```
-
----
-
 ## SQLite Database Storage
 
 Historical capture data storage for analysis, graphs, and exposure planning.
@@ -1037,11 +928,7 @@ print(db.get_statistics())
    - `exposure_transition_speed: 0.08` = only 8% change per frame
    - Takes 12+ frames to reach target exposure
 
-4. **ML Trained on Bad Data**
-   - If most historical captures have bad brightness, ML learns bad patterns
-   - Self-reinforcing problem: bad predictions → bad captures → bad training
-
-### Solution: Config Tuning + ML Reset
+### Solution: Config Tuning
 
 #### Step 1: Tighten Config Parameters
 ```yaml
@@ -1053,28 +940,7 @@ fast_rampdown_speed: 0.35         # Was 0.20 - faster overexposure correction
 fast_rampup_speed: 0.40           # Was 0.20 - faster underexposure recovery
 ```
 
-#### Step 2: Reset ML State (if ML trained on bad data)
-```bash
-# Check training data quality
-python3 -c "
-import sqlite3
-conn = sqlite3.connect('data/timelapse.db')
-c = conn.cursor()
-c.execute('''SELECT COUNT(*) as total,
-    SUM(CASE WHEN brightness_mean BETWEEN 105 AND 135 THEN 1 ELSE 0 END) as good
-    FROM captures WHERE mode = 'day' AND timestamp > datetime('now', '-7 days')''')
-total, good = c.fetchone()
-pct = (100.0 * (good or 0) / total) if total > 0 else 0
-print(f'Day mode: {total} captures, {good or 0} good (105-135), {pct:.1f}%')
-"
-
-# If <50% good data, reset ML state:
-rm ml_state/ml_state_v2.json
-sudo systemctl restart raspilapse
-# ML will retrain automatically from only good samples in database
-```
-
-#### Step 3: Verify
+#### Step 2: Verify
 ```bash
 # Monitor brightness after restart
 python scripts/db_stats.py 30m
@@ -1083,7 +949,4 @@ python scripts/db_stats.py 30m
 ```
 
 ### Important Notes
-- **Database is preserved** - only ML state file is deleted
-- ML automatically filters for good brightness (105-135) when training
-- Even with few good samples, ML learns correct patterns
 - Run `python scripts/db_stats.py 1h` during midday to verify fix

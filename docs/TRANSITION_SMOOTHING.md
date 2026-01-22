@@ -713,7 +713,6 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 - [ ] Per-channel WB smoothing (red and blue could have different speeds)
 - [ ] Sunset/sunrise detection for optimized transition timing
 - [ ] Store day WB reference persistently between restarts
-- [ ] Machine learning to predict optimal WB for given lux level
 
 ---
 
