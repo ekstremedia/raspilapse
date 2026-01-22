@@ -1,0 +1,186 @@
+location:
+  latitude: 68.7
+  longitude: 15.4
+  timezone: Europe/Oslo
+  civil_twilight_threshold: -6
+camera:
+  resolution:
+    width: 3840
+    height: 2160
+  transforms:
+    horizontal_flip: false
+    vertical_flip: false
+  controls:
+    af_mode: 0
+    lens_position: 0
+output:
+  directory: /var/www/html/images
+  filename_pattern: '{name}_%Y_%m_%d_%H_%M_%S.jpg'
+  project_name: kringelen_nord
+  quality: 75
+  organize_by_date: true
+  date_format: '%Y/%m/%d'
+  symlink_latest:
+    enabled: true
+    path: /var/www/html/status.jpg
+video:
+  directory: /var/www/html/videos
+  organize_by_date: true
+  date_format: '%Y/%m'
+  filename_pattern: '{name}_{start_date}_to_{end_date}.mp4'
+  codec:
+    name: libx264
+    pixel_format: yuv420p
+    preset: fast
+    threads: 2
+    crf: 25
+  fps: 25
+  deflicker: true
+  deflicker_size: 10
+  default_start_time: '05:00'
+  default_end_time: '05:00'
+timelapse:
+  interval: 3
+  num_frames: 0
+  stabilization_delay: 2
+adaptive_timelapse:
+  enabled: true
+  reference_lux: 3.8
+  direct_brightness_control: true
+  brightness_damping: 0.5
+  interval: 30
+  num_frames: 0
+  light_thresholds:
+    night: 3
+    day: 80
+  night_mode:
+    max_exposure_time: 20
+    analogue_gain: 6
+    awb_enable: false
+    colour_gains:
+      - 1.83
+      - 2.02
+  day_mode:
+    exposure_time: 0.01
+    analogue_gain: 1
+    fixed_colour_gains:
+      - 2.5
+      - 1.6
+    awb_enable: true
+  transition_mode:
+    smooth_transition: true
+    sequential_ramping: true
+    lux_smoothing_factor: 0.3
+    hysteresis_frames: 3
+    wb_transition_speed: 0.15
+    gain_transition_speed: 0.1
+    exposure_transition_speed: 0.08
+    smooth_wb_in_day_mode: true
+    smooth_exposure_in_day_mode: true
+    brightness_feedback_enabled: true
+    target_brightness: 120
+    brightness_tolerance: 60
+    brightness_feedback_strength: 0.05
+    fast_rampdown_speed: 0.2
+    fast_rampup_speed: 0.2
+    critical_rampdown_speed: 0.7
+    lux_change_threshold: 3
+    ev_safety_clamp_enabled: true
+  test_shot:
+    enabled: true
+    exposure_time: 0.2
+    analogue_gain: 1
+    frequency: 1
+  diagnostics:
+    enabled: true
+  ml_exposure:
+    enabled: true
+    initial_trust_v2: 0.7
+    max_trust: 0.9
+    good_brightness_min: 105
+    good_brightness_max: 135
+  database:
+    enabled: true
+    path: data/timelapse.db
+system:
+  create_directories: true
+  save_metadata: true
+  metadata_filename: '{name}_%Y_%m_%d_%H_%M_%S_metadata.json'
+  metadata_folder: metadata
+overlay:
+  enabled: true
+  font:
+    family: DejaVuSans-Bold.ttf
+    size_ratio: 0.02
+    color:
+      - 255
+      - 255
+      - 255
+      - 255
+  background:
+    enabled: true
+    color:
+      - 0
+      - 0
+      - 30
+      - 70
+    padding: 0.6
+  position: top-bar
+  custom_position:
+    x: 5
+    'y': 95
+  margin: 10
+  content:
+    line_1_left: '{camera_name}'
+    line_1_right: '{temp}, humidity: {humidity}, wind: {wind} {wind_dir}, rain: {rain} '
+    line_2_left: '{date} {time}'
+    line_2_right: '{exposure}, {iso}, lux: {lux} - CPU: {cpu_temp}, disk: {disk_free}'
+  camera_name: Kringelen, nord
+  datetime:
+    localized: true
+    locale: nb_NO.UTF-8
+    show_seconds: false
+    date_format: '%Y-%m-%d'
+    time_format: '%H:%M'
+  layout:
+    line_spacing: 1.2
+    section_spacing: false
+    bottom_padding_multiplier: 0.7
+logging:
+  enabled: true
+  level: WARNING
+  log_file: logs/{script}.log
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  date_format: '%Y-%m-%d %H:%M:%S'
+  console: true
+  max_size_mb: 10
+  backup_count: 5
+graphs:
+  directory: graphs
+  width: 14
+  height: 8
+  dpi: 150
+  default_hours: 24
+video_upload:
+  enabled: true
+  url: https://ekstremedia.no/api/piVideo/store
+  api_key: ''
+  camera_id: kringelen_nord
+weather:
+  enabled: true
+  endpoint: https://ekstremedia.no/api/netatmo/stations/2c4735da-abbe-425e-a2ba-1006e786554c
+  cache_duration: 300
+  timeout: 5
+database:
+  enabled: true
+  path: data/timelapse.db
+  create_directories: true
+barentswatch:
+  enabled: true
+  ships_file: /home/pi/pi-overlay-data/data/ships_current.json
+tide:
+  enabled: true
+  tide_file: /home/pi/pi-overlay-data/data/tide.json
+aurora:
+  enabled: true
+  aurora_file: /home/pi/pi-overlay-data/data/aurora.json

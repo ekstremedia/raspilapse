@@ -349,7 +349,7 @@ Examples:
             upload_service = UploadService(config, args.config)
             date_str = target_date.strftime("%Y-%m-%d")
 
-            success, error, response = upload_service.upload_to_server(
+            success, error, _response = upload_service.upload_to_server(
                 video_path=video_path,
                 keogram_path=keogram_path,
                 slitscan_path=slitscan_path,
@@ -373,6 +373,7 @@ Examples:
                 else:
                     logger.error(f"Upload failed and could not queue for retry: {error}")
                     print(f"Error: Upload failed: {error}")
+                    return 1
     elif args.no_upload:
         print("Skipping upload (--no-upload)")
     else:

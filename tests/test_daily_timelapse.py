@@ -796,11 +796,14 @@ class TestMainCLI:
             ],
         )
 
-        with patch("daily_timelapse.requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 500
-            mock_response.text = "Server Error"
-            mock_post.return_value = mock_response
+        # Mock UploadService since the code now uses it instead of direct requests
+        with patch("daily_timelapse.UploadService") as mock_upload_service_class:
+            mock_service = MagicMock()
+            mock_upload_service_class.return_value = mock_service
+            # Simulate upload failure
+            mock_service.upload_to_server.return_value = (False, "Server Error", None)
+            # Simulate queue failure (returns None) to trigger return 1
+            mock_service.queue_upload.return_value = None
 
             result = main()
 
