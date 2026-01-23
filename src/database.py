@@ -572,6 +572,57 @@ class CaptureDatabase:
             logger.warning(f"[DB] Failed to query by lux: {e}")
             return []
 
+    def get_last_capture(self, camera_id: Optional[str] = None) -> Optional[Dict]:
+        """
+        Get the most recent capture from the database.
+
+        Useful for seeding exposure settings on startup after a reboot/restart.
+        Only returns captures with valid exposure data and good brightness (not overexposed).
+
+        Args:
+            camera_id: Optional camera filter (defaults to configured camera)
+
+        Returns:
+            Dictionary with capture data, or None if no valid capture found
+        """
+        if not self.config.enabled:
+            return None
+
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return None
+
+                cursor = conn.cursor()
+
+                # Use configured camera_id if not specified
+                cam_id = camera_id or self.config.camera_id
+
+                # Get the most recent capture with valid exposure data and good brightness
+                # Exclude overexposed frames (brightness > 180 or overexposed_pct > 10)
+                cursor.execute(
+                    """
+                    SELECT * FROM captures
+                    WHERE camera_id = ?
+                    AND exposure_time_us IS NOT NULL
+                    AND analogue_gain IS NOT NULL
+                    AND (brightness_mean IS NULL OR brightness_mean < 180)
+                    AND (overexposed_pct IS NULL OR overexposed_pct < 10)
+                    ORDER BY unix_timestamp DESC
+                    LIMIT 1
+                """,
+                    (cam_id,),
+                )
+
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
+
+        except Exception as e:
+            logger.warning(f"[DB] Failed to get last capture: {e}")
+            return None
+
     def get_statistics(self) -> Dict:
         """
         Get database statistics.

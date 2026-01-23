@@ -626,3 +626,115 @@ class TestEdgeCases:
             sun_elevation=-18.0,  # Astronomical twilight
         )
         assert result is True
+
+
+class TestGetLastCapture:
+    """Test get_last_capture method for startup seeding."""
+
+    def test_get_last_capture_empty_db(self, db_config):
+        """Test returns None when database is empty."""
+        db = CaptureDatabase(db_config)
+        result = db.get_last_capture()
+        assert result is None
+
+    def test_get_last_capture_returns_most_recent(self, db_config):
+        """Test returns the most recent capture."""
+        db = CaptureDatabase(db_config)
+
+        # Store two captures
+        db.store_capture(
+            image_path="/test/image1.jpg",
+            metadata={
+                "capture_timestamp": "2025-01-10T12:00:00",
+                "ExposureTime": 1000,
+                "AnalogueGain": 1.0,
+            },
+            mode="day",
+            brightness_metrics={"mean_brightness": 120.0, "overexposed_percent": 0.0},
+        )
+        db.store_capture(
+            image_path="/test/image2.jpg",
+            metadata={
+                "capture_timestamp": "2025-01-10T12:30:00",
+                "ExposureTime": 2000,
+                "AnalogueGain": 1.5,
+            },
+            mode="day",
+            brightness_metrics={"mean_brightness": 118.0, "overexposed_percent": 0.0},
+        )
+
+        result = db.get_last_capture()
+        assert result is not None
+        assert result["exposure_time_us"] == 2000
+        assert result["analogue_gain"] == 1.5
+
+    def test_get_last_capture_excludes_overexposed(self, db_config):
+        """Test excludes captures with high brightness or overexposure."""
+        db = CaptureDatabase(db_config)
+
+        # Store a good capture first
+        db.store_capture(
+            image_path="/test/good.jpg",
+            metadata={
+                "capture_timestamp": "2025-01-10T12:00:00",
+                "ExposureTime": 1000,
+                "AnalogueGain": 1.0,
+            },
+            mode="day",
+            brightness_metrics={"mean_brightness": 120.0, "overexposed_percent": 0.0},
+        )
+
+        # Store an overexposed capture (more recent)
+        db.store_capture(
+            image_path="/test/overexposed.jpg",
+            metadata={
+                "capture_timestamp": "2025-01-10T12:30:00",
+                "ExposureTime": 5000,
+                "AnalogueGain": 2.0,
+            },
+            mode="day",
+            brightness_metrics={"mean_brightness": 250.0, "overexposed_percent": 95.0},
+        )
+
+        result = db.get_last_capture()
+        assert result is not None
+        # Should return the good capture, not the overexposed one
+        assert result["exposure_time_us"] == 1000
+        assert result["brightness_mean"] == 120.0
+
+    def test_get_last_capture_requires_exposure_data(self, db_config):
+        """Test excludes captures without exposure data."""
+        db = CaptureDatabase(db_config)
+
+        # Store capture without exposure data
+        db.store_capture(
+            image_path="/test/no_exposure.jpg",
+            metadata={"capture_timestamp": "2025-01-10T12:00:00"},
+            mode="day",
+        )
+
+        # Store capture with exposure data
+        db.store_capture(
+            image_path="/test/with_exposure.jpg",
+            metadata={
+                "capture_timestamp": "2025-01-10T11:00:00",  # Earlier
+                "ExposureTime": 1500,
+                "AnalogueGain": 1.2,
+            },
+            mode="day",
+            brightness_metrics={"mean_brightness": 115.0, "overexposed_percent": 0.0},
+        )
+
+        result = db.get_last_capture()
+        assert result is not None
+        assert result["exposure_time_us"] == 1500
+
+    def test_get_last_capture_disabled(self):
+        """Test returns None when database is disabled."""
+        config = {
+            "database": {"enabled": False},
+            "output": {"project_name": "test"},
+        }
+        db = CaptureDatabase(config)
+        result = db.get_last_capture()
+        assert result is None

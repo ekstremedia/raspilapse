@@ -399,9 +399,85 @@ class AdaptiveTimelapse:
                     f"[DB] Initialized: {stats.get('db_path', 'unknown')}, "
                     f"captures={stats.get('total_captures', 0)}"
                 )
+                # Seed exposure settings from last capture to prevent brightness flash on restart
+                self._seed_from_last_capture()
         except Exception as e:
             logger.warning(f"[DB] Failed to initialize database: {e}")
             self._database = None
+
+    def _seed_from_last_capture(self):
+        """
+        Seed exposure settings from the last database capture.
+
+        This prevents the "brightness flash" that occurs after a reboot or service restart
+        where the first few frames are severely over/underexposed because the system
+        starts with no knowledge of the previous exposure settings.
+
+        Called during initialization after the database is ready.
+        """
+        if self._database is None:
+            return
+
+        try:
+            last_capture = self._database.get_last_capture()
+            if last_capture is None:
+                logger.debug("[Startup] No previous capture found in database")
+                return
+
+            # Extract exposure settings from last capture
+            exposure_us = last_capture.get("exposure_time_us")
+            analogue_gain = last_capture.get("analogue_gain")
+            colour_gains_r = last_capture.get("colour_gains_r")
+            colour_gains_b = last_capture.get("colour_gains_b")
+            last_mode = last_capture.get("mode")
+            last_brightness = last_capture.get("brightness_mean")
+            last_lux = last_capture.get("lux")
+
+            seeded = False
+
+            # Seed exposure time
+            if exposure_us is not None and exposure_us > 0:
+                self._last_exposure_time = exposure_us / 1_000_000  # Convert to seconds
+                self._seed_exposure = self._last_exposure_time
+                seeded = True
+
+            # Seed analogue gain
+            if analogue_gain is not None and analogue_gain > 0:
+                self._last_analogue_gain = analogue_gain
+                self._seed_gain = analogue_gain
+                seeded = True
+
+            # Seed white balance
+            if colour_gains_r is not None and colour_gains_b is not None:
+                self._last_colour_gains = (colour_gains_r, colour_gains_b)
+                self._seed_wb_gains = (colour_gains_r, colour_gains_b)
+                seeded = True
+
+            # Seed brightness for feedback loop
+            if last_brightness is not None:
+                self._last_brightness = last_brightness
+
+            # Seed lux for mode determination
+            if last_lux is not None:
+                self._smoothed_lux = last_lux
+
+            # Seed mode
+            if last_mode is not None:
+                self._last_mode = last_mode
+
+            if seeded:
+                logger.info(
+                    f"[Startup] Seeded from last capture: "
+                    f"exposure={self._last_exposure_time:.4f}s, "
+                    f"gain={self._last_analogue_gain:.2f}, "
+                    f"WB=[{self._last_colour_gains[0]:.2f}, {self._last_colour_gains[1]:.2f}], "
+                    f"mode={last_mode}, brightness={last_brightness:.1f}"
+                )
+            else:
+                logger.debug("[Startup] Last capture had no usable exposure data")
+
+        except Exception as e:
+            logger.warning(f"[Startup] Failed to seed from last capture: {e}")
 
     def _get_sun_elevation(self) -> Optional[float]:
         """
@@ -1578,6 +1654,15 @@ class AdaptiveTimelapse:
         night_max = adaptive_config["night_mode"]["max_exposure_time"]
 
         # Handle missing or invalid brightness
+        # If we have seeded exposure but no brightness yet (startup), use seeded exposure
+        if (
+            actual_brightness is None or actual_brightness < 1
+        ) and self._last_exposure_time is not None:
+            logger.warning(
+                f"[DirectFB] No brightness data yet, using seeded exposure {self._last_exposure_time:.4f}s"
+            )
+            return self._last_exposure_time
+
         if actual_brightness is None or actual_brightness < 1:
             actual_brightness = 1  # Prevent division by zero
 
@@ -2761,6 +2846,24 @@ class AdaptiveTimelapse:
                         # Calculate lux from test shot image brightness
                         # This is more reliable than camera's metadata lux estimate
                         raw_lux = self.calculate_lux(test_image_path, test_metadata)
+
+                        # === STARTUP SATURATED TEST SHOT DETECTION ===
+                        # On first frame after reboot/restart, the camera ISP may not apply
+                        # settings correctly, resulting in a saturated test shot.
+                        # If we have seeded values from the database, use those instead.
+                        if self.frame_count == 0:
+                            test_brightness = self._analyze_image_brightness(test_image_path)
+                            if test_brightness:
+                                test_mean = test_brightness.get("mean_brightness", 128)
+                                if test_mean > 250 and self._seed_exposure is not None:
+                                    # Test shot is saturated AND we have seeded values
+                                    # Use seeded lux instead of calculated lux
+                                    if self._smoothed_lux is not None:
+                                        logger.warning(
+                                            f"[Startup] First test shot saturated ({test_mean:.1f}/255) - "
+                                            f"using seeded lux={self._smoothed_lux:.1f} instead of calculated={raw_lux:.1f}"
+                                        )
+                                        raw_lux = self._smoothed_lux
 
                         # Apply proactive exposure correction based on test shot brightness
                         # This helps prevent overexposure during rapid light changes

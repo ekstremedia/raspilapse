@@ -2555,13 +2555,14 @@ class TestDirectBrightnessControl:
         assert new_exposure <= 20.0  # Clamped to max
 
     def test_handles_none_brightness(self, direct_control_config_file):
-        """Test handles None brightness gracefully."""
+        """Test handles None brightness gracefully by using seeded exposure."""
         timelapse = AdaptiveTimelapse(direct_control_config_file)
         timelapse._last_exposure_time = 0.1
 
-        # Should treat None as 1 (minimum)
+        # When brightness is None but we have seeded exposure, use seeded value
+        # This prevents bad first frames after reboot/restart
         new_exposure = timelapse._calculate_exposure_from_brightness(None, lux=500)
-        assert new_exposure > 0.1  # Should increase (treating as very dark)
+        assert new_exposure == 0.1  # Should use seeded exposure
 
     def test_damping_affects_correction_strength(self, direct_control_config_file):
         """Test different damping values affect correction strength."""
