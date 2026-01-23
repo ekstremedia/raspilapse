@@ -407,7 +407,9 @@ class TideData:
         Find all high and low tides from the points array.
 
         Analyzes the points to find local maxima (highs) and minima (lows)
-        by detecting where the tide changes direction.
+        by detecting where the tide changes direction. Handles slack tide
+        plateaus (consecutive points with same level_cm) by using trend
+        analysis and selecting the middle point of each plateau.
 
         Returns:
             Tuple of (highs_list, lows_list) where each item is
@@ -424,23 +426,45 @@ class TideData:
         highs = []
         lows = []
 
-        # Look for direction changes in the tide level
-        for i in range(1, len(points) - 1):
-            prev_level = points[i - 1].get("level_cm", 0)
+        # First, identify runs of consecutive same-level points (plateaus)
+        # and find the trend before and after each plateau
+        i = 0
+        while i < len(points):
             curr_level = points[i].get("level_cm", 0)
-            next_level = points[i + 1].get("level_cm", 0)
 
-            # High tide: level was rising, now falling
-            if curr_level >= prev_level and curr_level > next_level:
-                # Verify it's a significant peak (not just noise)
-                if curr_level - prev_level >= 0 and curr_level - next_level > 0:
-                    highs.append({"time": points[i].get("time"), "level_cm": curr_level})
+            # Find the extent of this plateau (points with same level)
+            plateau_start = i
+            while i < len(points) and points[i].get("level_cm", 0) == curr_level:
+                i += 1
+            plateau_end = i - 1  # Last index with same level
 
-            # Low tide: level was falling, now rising
-            if curr_level <= prev_level and curr_level < next_level:
-                # Verify it's a significant trough
-                if prev_level - curr_level >= 0 and next_level - curr_level > 0:
-                    lows.append({"time": points[i].get("time"), "level_cm": curr_level})
+            # Use middle point of plateau for timing
+            plateau_mid = (plateau_start + plateau_end) // 2
+
+            # Find trend before plateau (look back for a different level)
+            trend_before = None
+            for j in range(plateau_start - 1, -1, -1):
+                prev_level = points[j].get("level_cm", 0)
+                if prev_level != curr_level:
+                    trend_before = "rising" if curr_level > prev_level else "falling"
+                    break
+
+            # Find trend after plateau (look forward for a different level)
+            trend_after = None
+            for j in range(plateau_end + 1, len(points)):
+                next_level = points[j].get("level_cm", 0)
+                if next_level != curr_level:
+                    trend_after = "falling" if curr_level > next_level else "rising"
+                    break
+
+            # Detect extremes based on trend changes
+            if trend_before and trend_after:
+                # High tide: was rising, now falling
+                if trend_before == "rising" and trend_after == "falling":
+                    highs.append({"time": points[plateau_mid].get("time"), "level_cm": curr_level})
+                # Low tide: was falling, now rising
+                elif trend_before == "falling" and trend_after == "rising":
+                    lows.append({"time": points[plateau_mid].get("time"), "level_cm": curr_level})
 
         return highs, lows
 

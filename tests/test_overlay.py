@@ -1445,3 +1445,87 @@ class TestTideDataCalculation:
 
         # No extremes in points = None (we don't use backend's pre-calculated values)
         assert next_high is None
+
+    def test_find_extremes_handles_slack_tide_plateaus(self, tide_config, tmp_path):
+        """Test that _find_extremes_from_points correctly handles slack tide plateaus.
+
+        Near peaks and troughs, consecutive points can have the same level_cm value
+        due to rounding (the tide moves slowly at extremes). The algorithm should:
+        1. Detect trend changes across plateaus, not just adjacent values
+        2. Use the middle point of the plateau as the extreme time
+        """
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        base_time = now - timedelta(hours=1)
+
+        # Create data with plateaus at extremes (simulating slack tides)
+        # Pattern: rising -> plateau at 200 (high) -> falling -> plateau at 50 (low) -> rising
+        points = []
+
+        # Rising phase: 100 -> 150 -> 180 -> 190 -> 195 -> 198 -> 199
+        rising = [100, 120, 140, 160, 180, 190, 195, 198, 199]
+        for i, level in enumerate(rising):
+            t = base_time + timedelta(minutes=i * 10)
+            points.append({"time": t.isoformat(), "level_cm": level})
+
+        # Plateau at high (slack tide) - 5 points with same value
+        plateau_high_start = len(points)
+        for i in range(5):
+            t = base_time + timedelta(minutes=(len(points)) * 10)
+            points.append({"time": t.isoformat(), "level_cm": 200})
+        plateau_high_end = len(points) - 1
+
+        # Falling phase: 199 -> 195 -> 190 -> 180 -> ... -> 51
+        falling = [199, 195, 190, 180, 160, 140, 120, 100, 80, 60, 51]
+        for level in falling:
+            t = base_time + timedelta(minutes=(len(points)) * 10)
+            points.append({"time": t.isoformat(), "level_cm": level})
+
+        # Plateau at low (slack tide) - 5 points with same value
+        plateau_low_start = len(points)
+        for i in range(5):
+            t = base_time + timedelta(minutes=(len(points)) * 10)
+            points.append({"time": t.isoformat(), "level_cm": 50})
+        plateau_low_end = len(points) - 1
+
+        # Rising again: 51 -> 60 -> 80 -> 100
+        rising_again = [51, 60, 80, 100, 120]
+        for level in rising_again:
+            t = base_time + timedelta(minutes=(len(points)) * 10)
+            points.append({"time": t.isoformat(), "level_cm": level})
+
+        tide_data = {"tide_data": {"points": points}}
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        highs, lows = tide._find_extremes_from_points()
+
+        # Should find exactly one high and one low
+        assert len(highs) == 1, f"Should find exactly one high tide, found {len(highs)}"
+        assert len(lows) == 1, f"Should find exactly one low tide, found {len(lows)}"
+
+        # The high should be at level 200
+        assert highs[0]["level_cm"] == 200, f"High level should be 200, got {highs[0]['level_cm']}"
+
+        # The low should be at level 50
+        assert lows[0]["level_cm"] == 50, f"Low level should be 50, got {lows[0]['level_cm']}"
+
+        # The high time should be in the middle of the plateau
+        # plateau_high_start=9, plateau_high_end=13, middle index = 11
+        expected_high_mid = (plateau_high_start + plateau_high_end) // 2
+        expected_high_time = points[expected_high_mid]["time"]
+        assert highs[0]["time"] == expected_high_time, (
+            f"High time should be middle of plateau ({expected_high_time}), "
+            f"got {highs[0]['time']}"
+        )
+
+        # The low time should be in the middle of the low plateau
+        expected_low_mid = (plateau_low_start + plateau_low_end) // 2
+        expected_low_time = points[expected_low_mid]["time"]
+        assert lows[0]["time"] == expected_low_time, (
+            f"Low time should be middle of plateau ({expected_low_time}), " f"got {lows[0]['time']}"
+        )
