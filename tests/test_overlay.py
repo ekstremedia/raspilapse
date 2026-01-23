@@ -1529,3 +1529,113 @@ class TestTideDataCalculation:
         assert lows[0]["time"] == expected_low_time, (
             f"Low time should be middle of plateau ({expected_low_time}), " f"got {lows[0]['time']}"
         )
+
+    def test_find_extremes_without_plateaus(self, tide_config, tmp_path):
+        """Test _find_extremes_from_points with unique values (no plateaus).
+
+        Each point has a different level_cm, testing the single-point plateau case
+        where plateau_start == plateau_end.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        base_time = now - timedelta(hours=1)
+
+        # All unique values: rising to 200, then falling to 50, then rising
+        levels = [100, 120, 140, 160, 180, 200, 180, 160, 140, 120, 100, 80, 60, 50, 60, 80, 100]
+        points = []
+        for i, level in enumerate(levels):
+            t = base_time + timedelta(minutes=i * 10)
+            points.append({"time": t.isoformat(), "level_cm": level})
+
+        tide_data = {"tide_data": {"points": points}}
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        highs, lows = tide._find_extremes_from_points()
+
+        assert len(highs) == 1, f"Should find one high, found {len(highs)}"
+        assert len(lows) == 1, f"Should find one low, found {len(lows)}"
+        assert highs[0]["level_cm"] == 200
+        assert lows[0]["level_cm"] == 50
+
+    def test_find_extremes_at_data_boundaries(self, tide_config, tmp_path):
+        """Test that extremes at the very start or end of data are not detected.
+
+        When an extreme would be at the boundary, there's no trend_before or
+        trend_after, so it should be skipped.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        base_time = now - timedelta(hours=1)
+
+        # Data starts at a high and ends at a low - neither should be detected
+        # as extremes since we can't determine the trend on one side
+        levels = [200, 180, 160, 140, 120, 100, 80, 60, 50]
+        points = []
+        for i, level in enumerate(levels):
+            t = base_time + timedelta(minutes=i * 10)
+            points.append({"time": t.isoformat(), "level_cm": level})
+
+        tide_data = {"tide_data": {"points": points}}
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        highs, lows = tide._find_extremes_from_points()
+
+        # No extremes should be found - start/end don't have both trend_before and trend_after
+        assert len(highs) == 0, f"Should find no highs (boundary case), found {len(highs)}"
+        assert len(lows) == 0, f"Should find no lows (boundary case), found {len(lows)}"
+
+    def test_find_extremes_multiple_cycles(self, tide_config, tmp_path):
+        """Test detecting multiple high and low tides across several cycles."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        base_time = now - timedelta(hours=2)
+
+        # Two complete cycles: low->high->low->high->low
+        points = []
+        # First low at 50
+        for level in [80, 60, 50, 60, 80]:
+            t = base_time + timedelta(minutes=len(points) * 10)
+            points.append({"time": t.isoformat(), "level_cm": level})
+        # First high at 200
+        for level in [120, 160, 200, 160, 120]:
+            t = base_time + timedelta(minutes=len(points) * 10)
+            points.append({"time": t.isoformat(), "level_cm": level})
+        # Second low at 40
+        for level in [80, 50, 40, 50, 80]:
+            t = base_time + timedelta(minutes=len(points) * 10)
+            points.append({"time": t.isoformat(), "level_cm": level})
+        # Second high at 210
+        for level in [140, 180, 210, 180, 140]:
+            t = base_time + timedelta(minutes=len(points) * 10)
+            points.append({"time": t.isoformat(), "level_cm": level})
+        # Trailing points
+        for level in [100, 80]:
+            t = base_time + timedelta(minutes=len(points) * 10)
+            points.append({"time": t.isoformat(), "level_cm": level})
+
+        tide_data = {"tide_data": {"points": points}}
+
+        tide_file = tmp_path / "tide.json"
+        with open(tide_file, "w") as f:
+            json.dump(tide_data, f)
+
+        tide = TideData(tide_config)
+        highs, lows = tide._find_extremes_from_points()
+
+        assert len(highs) == 2, f"Should find 2 highs, found {len(highs)}"
+        assert len(lows) == 2, f"Should find 2 lows, found {len(lows)}"
+        assert highs[0]["level_cm"] == 200
+        assert highs[1]["level_cm"] == 210
+        assert lows[0]["level_cm"] == 50
+        assert lows[1]["level_cm"] == 40
