@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
+from matplotlib.ticker import FuncFormatter
 import numpy as np
 
 
@@ -113,7 +113,7 @@ def create_solar_pattern_graph(db_path: str, output_path: str, days: int = 14):
 
     # Set up the figure with dark theme
     plt.style.use("dark_background")
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+    fig, ax1 = plt.subplots(figsize=(14, 8))
 
     # Sort days chronologically
     sorted_days = sorted(daily_data.keys())
@@ -121,7 +121,34 @@ def create_solar_pattern_graph(db_path: str, output_path: str, days: int = 14):
     # Color map for different days - use a nice gradient
     colors = plt.cm.plasma(np.linspace(0.15, 0.85, len(sorted_days)))
 
-    # === Top plot: Lux by time of day for each day ===
+    # Calculate daylight duration per day from sun_elevation data
+    # Find first and last time when sun is above horizon
+    daylight_durations = {}  # day_key -> duration in minutes
+    for day_key in sorted_days:
+        day = daily_data[day_key]
+        times = day["times"]
+        elevations = day["sun_elevations"]
+        if not elevations:
+            continue
+
+        # Sort by time
+        sorted_idx = np.argsort(times)
+        times_sorted = [times[j] for j in sorted_idx]
+        elev_sorted = [elevations[j] for j in sorted_idx]
+
+        # Find sunrise (first time elevation >= 0) and sunset (last time)
+        sunrise = None
+        sunset = None
+        for t, e in zip(times_sorted, elev_sorted):
+            if e is not None and e >= 0:
+                if sunrise is None:
+                    sunrise = t
+                sunset = t
+
+        if sunrise is not None and sunset is not None:
+            daylight_durations[day_key] = (sunset - sunrise) * 60  # in minutes
+
+    # === Plot lux by time of day for each day ===
     for i, day_key in enumerate(sorted_days):
         day = daily_data[day_key]
         times = day["times"]
@@ -148,22 +175,95 @@ def create_solar_pattern_graph(db_path: str, output_path: str, days: int = 14):
         else:
             lux_smooth = lux
 
-        # Format label as "Jan 15"
+        # Format label with daylight change
         date_obj = datetime.strptime(day_key, "%Y-%m-%d")
         label = date_obj.strftime("%b %d")
+
+        # Show total daylight duration for each day
+        if day_key in daylight_durations:
+            total_mins = daylight_durations[day_key]
+            hours = int(total_mins // 60)
+            mins = int(total_mins % 60)
+            label = f"{label} ({hours}h{mins:02d}m)"
 
         ax1.plot(times, lux_smooth, color=colors[i], label=label, linewidth=1.8, alpha=0.85)
 
     ax1.set_xlabel("Hour of Day", fontsize=11)
     ax1.set_ylabel("Light Level (lux)", fontsize=11)
-    ax1.set_title(
-        f"Daily Light Patterns (Last {len(sorted_days)} Days)", fontsize=13, fontweight="bold"
-    )
     ax1.set_xlim(0, 24)
     ax1.set_xticks(range(0, 25, 2))
-    ax1.set_yscale("symlog", linthresh=1)
-    ax1.legend(loc="upper right", fontsize=8, ncol=3, framealpha=0.7)
+    ax1.set_yscale("symlog", linthresh=0.1)
+    ax1.set_ylim(0.05, 100000)
+    ax1.set_yticks([0.1, 1, 10, 100, 1000, 10000, 100000])
+    ax1.yaxis.set_major_formatter(
+        FuncFormatter(lambda x, _: f"{int(x):,}" if x >= 1 else f"{x:.1f}")
+    )
+    legend = ax1.legend(
+        loc="upper right",
+        fontsize=7,
+        ncol=2,
+        framealpha=0.7,
+        title="Date (Daylight)",
+        title_fontsize=8,
+    )
+    legend.get_title().set_color("white")
     ax1.grid(True, alpha=0.3)
+
+    # Calculate sunrise/sunset range from the daylight calculation we already did
+    sunrise_times = []
+    sunset_times = []
+    for day_key in sorted_days:
+        day = daily_data[day_key]
+        times = day["times"]
+        elevations = day["sun_elevations"]
+        if not elevations or None in elevations:
+            continue
+        sorted_idx = np.argsort(times)
+        times_sorted = [times[j] for j in sorted_idx]
+        elev_sorted = [elevations[j] for j in sorted_idx]
+        for j in range(1, len(elev_sorted)):
+            if elev_sorted[j - 1] is not None and elev_sorted[j] is not None:
+                if elev_sorted[j - 1] < 0 and elev_sorted[j] >= 0:
+                    sunrise_times.append(times_sorted[j])
+                if elev_sorted[j - 1] >= 0 and elev_sorted[j] < 0:
+                    sunset_times.append(times_sorted[j])
+
+    # Add sunrise/sunset info at top
+    if sunrise_times and sunset_times:
+        earliest_sunrise = min(sunrise_times)
+        latest_sunrise = max(sunrise_times)
+        earliest_sunset = min(sunset_times)
+        latest_sunset = max(sunset_times)
+
+        def fmt_time(decimal_hours):
+            h = int(decimal_hours)
+            m = int((decimal_hours - h) * 60)
+            return f"{h:02d}:{m:02d}"
+
+        sun_text = f"Sunrise: {fmt_time(earliest_sunrise)} - {fmt_time(latest_sunrise)}    Sunset: {fmt_time(earliest_sunset)} - {fmt_time(latest_sunset)}"
+        ax1.text(
+            0.5,
+            1.02,
+            sun_text,
+            transform=ax1.transAxes,
+            fontsize=9,
+            ha="center",
+            va="bottom",
+            color="#ffcc66",
+        )
+
+    # Add title at top
+    ax1.text(
+        0.5,
+        1.07,
+        f"Daily Light Patterns (Last {len(sorted_days)} Days)",
+        transform=ax1.transAxes,
+        fontsize=13,
+        fontweight="bold",
+        ha="center",
+        va="bottom",
+        color="white",
+    )
 
     # Add twilight zone shading (approximate for 68°N winter)
     ax1.axvspan(0, 8, alpha=0.08, color="blue")
@@ -184,59 +284,6 @@ def create_solar_pattern_graph(db_path: str, output_path: str, days: int = 14):
         ax1.axhline(y=lux_val, color=color, linestyle=":", linewidth=1, alpha=0.4)
         ax1.text(24.1, lux_val, f" {label}", fontsize=7, va="center", alpha=0.6, color=color)
 
-    # === Bottom plot: Daily midday light levels with trend ===
-    midday_lux = []
-    day_dates = []
-
-    for day_key in sorted_days:
-        day = daily_data[day_key]
-        times = day["times"]
-        lux = day["lux"]
-
-        # Get lux values around midday (10:00-14:00)
-        midday_values = [lux[j] for j in range(len(times)) if 10 <= times[j] <= 14]
-
-        if midday_values:
-            midday_lux.append(np.mean(midday_values))
-            day_dates.append(datetime.strptime(day_key, "%Y-%m-%d"))
-
-    if midday_lux and len(midday_lux) > 1:
-        # Create bar chart
-        bar_colors = plt.cm.plasma(np.linspace(0.15, 0.85, len(midday_lux)))
-        ax2.bar(day_dates, midday_lux, color=bar_colors, alpha=0.8, width=0.8)
-
-        ax2.set_xlabel("Date", fontsize=11)
-        ax2.set_ylabel("Average Midday Lux (10:00-14:00)", fontsize=11)
-        ax2.set_title(
-            "Daily Midday Light Levels (Polar Winter Recovery)", fontsize=13, fontweight="bold"
-        )
-        ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-        ax2.xaxis.set_major_locator(mdates.DayLocator())
-        plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha="right")
-        ax2.grid(True, alpha=0.3, axis="y")
-        ax2.set_yscale("symlog", linthresh=1)
-
-        # Add trend line
-        if len(midday_lux) > 2:
-            x_numeric = np.arange(len(midday_lux))
-            z = np.polyfit(x_numeric, np.log10(np.array(midday_lux) + 1), 1)
-
-            # Calculate daily change
-            first_val = midday_lux[0]
-            last_val = midday_lux[-1]
-            days_span = len(midday_lux)
-            if first_val > 1:  # Require meaningful baseline for trend
-                pct_change = ((last_val / first_val) ** (1 / days_span) - 1) * 100
-                trend_label = f"Trend: {pct_change:+.1f}%/day"
-            else:
-                trend_label = "Trend"
-
-            # Fit exponential trend
-            p = np.poly1d(z)
-            trend_y = 10 ** p(x_numeric) - 1
-            ax2.plot(day_dates, trend_y, "r--", linewidth=2.5, label=trend_label, alpha=0.9)
-            ax2.legend(loc="upper left", fontsize=10)
-
     # Add statistics text
     total_points = sum(len(daily_data[d]["times"]) for d in daily_data)
 
@@ -246,18 +293,21 @@ def create_solar_pattern_graph(db_path: str, output_path: str, days: int = 14):
         f"  Total captures: {total_points:,}\n"
         f"  Date range: {sorted_days[0]} to {sorted_days[-1]}"
     )
-    fig.text(
-        0.02,
-        0.02,
+    ax1.text(
+        0.01,
+        0.99,
         stats_text,
-        fontsize=9,
+        transform=ax1.transAxes,
+        fontsize=7,
         family="monospace",
-        verticalalignment="bottom",
+        verticalalignment="top",
+        horizontalalignment="left",
+        linespacing=1.3,
         bbox=dict(boxstyle="round", facecolor="black", alpha=0.7),
     )
 
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="black", edgecolor="none")
+    plt.subplots_adjust(left=0.08, right=0.92, top=0.88, bottom=0.08)
+    plt.savefig(output_path, dpi=150, facecolor="black", edgecolor="none")
     plt.close()
 
     print(f"    Saved: {output_path}")
