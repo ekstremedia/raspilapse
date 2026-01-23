@@ -950,3 +950,63 @@ python scripts/db_stats.py 30m
 
 ### Important Notes
 - Run `python scripts/db_stats.py 1h` during midday to verify fix
+
+---
+
+## Troubleshooting: Startup Brightness Flash (v1.3.2)
+
+### Symptoms
+- First frame(s) after reboot or `systemctl restart raspilapse` are severely overexposed
+- Brightness reads 250+ (nearly white) on first capture
+- Overexposed percentage is 90%+ on first frame
+- Takes 5-10 frames (2.5-5 minutes) to recover to normal brightness
+
+### Root Cause
+On startup, the system had no memory of previous exposure settings:
+1. `_last_exposure_time` was None
+2. Test shot (0.1s, gain 1.0) runs, but camera ISP doesn't stabilize immediately on cold start
+3. First test shot comes back saturated (brightness 254)
+4. System calculates wrong lux from saturated image
+5. Wrong lux leads to wrong exposure calculation for actual capture
+
+### Solution (Implemented in v1.3.2)
+The system now seeds exposure settings from the last database capture on startup:
+
+**Database method `get_last_capture()`:**
+- Retrieves most recent capture with valid exposure data
+- Excludes overexposed frames (brightness > 180 or overexposed_pct > 10%)
+- Returns exposure_time, gain, white balance, brightness, lux, mode
+
+**Startup seeding `_seed_from_last_capture()`:**
+- Called during initialization after database is ready
+- Seeds `_last_exposure_time`, `_last_analogue_gain`, `_last_colour_gains`
+- Seeds `_last_brightness`, `_smoothed_lux`, `_last_mode`
+
+**Saturated test shot detection:**
+- On frame 0, checks if test shot brightness > 250
+- If saturated AND we have seeded lux, uses seeded lux instead of calculated
+
+### Verification
+```bash
+# Restart service and check logs
+sudo systemctl restart raspilapse
+journalctl -u raspilapse -f
+
+# Should see:
+# [Startup] Seeded from last capture: exposure=0.0022s, gain=1.12, WB=[2.50, 1.60], mode=day, brightness=118.6
+```
+
+### Before/After Comparison
+
+| Metric | Before Fix | After Fix |
+|--------|-----------|-----------|
+| First frame brightness | 254 | 118 |
+| First frame overexposed % | 97.65% | 0% |
+| Frames to recover | 7+ (~3.5 min) | 0 (immediate) |
+
+### Related Log Messages
+```
+[Startup] Seeded from last capture: exposure=X.XXXXs, gain=X.XX, WB=[X.XX, X.XX], mode=X, brightness=XXX.X
+[Startup] First test shot saturated (XXX.X/255) - using seeded lux=XXX.X instead of calculated=XXXX.X
+[DirectFB] No brightness data yet, using seeded exposure X.XXXXs
+```

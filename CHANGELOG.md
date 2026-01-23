@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-01-23
+
+### Fixed
+- **Startup brightness flash after reboot/restart**: First frame(s) after reboot were severely overexposed (254 brightness, 97% clipped)
+  - Root cause: On startup, `_last_exposure_time` was None, and the test shot was saturated due to camera ISP needing time to stabilize
+  - Added `get_last_capture()` database method to retrieve the most recent valid capture (excludes overexposed frames)
+  - Added `_seed_from_last_capture()` to initialize exposure settings from database on startup
+  - Now seeds: `_last_exposure_time`, `_last_analogue_gain`, `_last_colour_gains`, `_last_brightness`, `_smoothed_lux`, `_last_mode`
+  - Added safety check: if brightness is None but seeded exposure exists, use seeded exposure
+  - Added saturated test shot detection on first frame - uses seeded lux if available
+
+### Before/After
+- **Before**: First frame brightness 254, 97.65% overexposed, took 7+ frames (3.5+ min) to recover
+- **After**: First frame brightness 118.55, 0% overexposed, immediately on target
+
+### Log Messages
+- `[Startup] Seeded from last capture: exposure=X.XXXXs, gain=X.XX, WB=[X.XX, X.XX], mode=X, brightness=XXX.X`
+- `[Startup] First test shot saturated (XXX.X/255) - using seeded lux=XXX.X instead of calculated=XXXX.X`
+- `[DirectFB] No brightness data yet, using seeded exposure X.XXXXs`
+
 ## [1.3.1] - 2026-01-17
 
 ### Fixed

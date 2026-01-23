@@ -5,6 +5,42 @@ The adaptive timelapse automatically adjusts camera settings based on ambient li
 
 ---
 
+## Startup Seeding (v1.3.2)
+
+On startup or service restart, the system seeds exposure settings from the last database capture to prevent brightness flash.
+
+### Why This Is Needed
+Without seeding, the first frame(s) after reboot can be severely overexposed because:
+1. `_last_exposure_time` starts as None
+2. The camera ISP may not apply test shot settings correctly on cold start
+3. Saturated test shots (254 brightness) cause wrong lux calculation
+
+### What Gets Seeded
+From the last valid capture in the database:
+- `_last_exposure_time` - Previous exposure in seconds
+- `_last_analogue_gain` - Previous gain/ISO
+- `_last_colour_gains` - Previous white balance (R, B)
+- `_last_brightness` - Previous frame brightness
+- `_smoothed_lux` - Previous lux reading
+- `_last_mode` - Previous light mode (day/night/transition)
+
+### Log Messages
+```
+[Startup] Seeded from last capture: exposure=0.0022s, gain=1.12, WB=[2.50, 1.60], mode=day, brightness=118.6
+```
+
+If the first test shot is saturated but we have seeded values:
+```
+[Startup] First test shot saturated (254.8/255) - using seeded lux=1773.0 instead of calculated=5000.0
+```
+
+### Safety Checks
+1. **Excludes bad captures**: Only seeds from captures with brightness < 180 and overexposed_pct < 10%
+2. **Requires exposure data**: Only seeds if exposure_time_us and analogue_gain are present
+3. **Saturated test shot detection**: On frame 0, if test shot brightness > 250 and we have seeded lux, use seeded lux
+
+---
+
 ## Capture Flow (Per Frame)
 
 ### Step 1: Test Shot (Light Measurement)
