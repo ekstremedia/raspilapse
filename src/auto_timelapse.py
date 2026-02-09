@@ -520,7 +520,7 @@ class AdaptiveTimelapse:
         if is_polar_day:
             logger.debug(
                 f"[Polar] Civil twilight override: Sun={sun_elev:.1f}° > {self._civil_twilight_threshold}° "
-                f"(forcing Day mode despite lux={lux:.1f if lux else 'N/A'})"
+                f"(forcing Day mode despite lux={f'{lux:.1f}' if lux is not None else 'N/A'})"
             )
         return is_polar_day
 
