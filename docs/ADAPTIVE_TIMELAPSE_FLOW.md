@@ -325,7 +325,11 @@ Each captured frame includes diagnostic information in the metadata JSON to help
 | `interpolated_exposure_ms` | What was sent to camera (after smoothing) |
 | `target_gain` / `interpolated_gain` | Same for ISO/gain |
 | `transition_position` | 0.0-1.0 position in transition (null if not) |
+| `target_brightness` | Current dynamic brightness target (may be boosted on overcast days) |
+| `base_target_brightness` | Base target before overcast boost (default 120) |
+| `overcast_boost_active` | True when contrast-aware boost is raising the target |
 | `brightness.mean_brightness` | Average image brightness (0-255) |
+| `brightness.std_brightness` | Standard deviation - low values indicate overcast/flat scenes |
 | `brightness.underexposed_percent` | % of too-dark pixels |
 | `brightness.overexposed_percent` | % of too-bright pixels |
 

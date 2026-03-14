@@ -357,6 +357,29 @@ adaptive_timelapse:
     # ev_safety_clamp_enabled: false - Disable for scenes with street lamps, etc.
     ev_safety_clamp_enabled: true
 
+  # === HDR MODE ===
+  # Enables ISP tone-mapped HDR (SingleExposure mode) during daytime.
+  # On Pi 5 (pisp): enables real HDR with ISP tone mapping for better dynamic range.
+  # On Pi 4 (vc4): effectively a no-op (logged but ignored by hardware).
+  # Night mode always uses HDR Off to preserve aurora/star captures.
+  hdr:
+    enabled: true
+    day_mode: "SingleExposure"    # HDR mode for day/transition (SingleExposure or Off)
+    night_mode: "Off"             # HDR mode for night (always Off for long exposures)
+
+  # === CONTRAST-AWARE BRIGHTNESS TARGET (Overcast Boost) ===
+  # On overcast days, images have low contrast (low std deviation) and look
+  # flat/dark at the normal target of 120. This boosts the brightness target
+  # when contrast is low, making overcast images brighter.
+  # On sunny days (high contrast), the target stays at the base value.
+  # In night mode, always uses the base target to protect aurora/star captures.
+  brightness_target:
+    base: 120                     # Base brightness target (0-255)
+    overcast_boost: 15            # Max boost added when contrast is low
+    max_target: 140               # Absolute cap for boosted target
+    contrast_threshold_low: 25    # Below this std = full boost (overcast)
+    contrast_threshold_high: 40   # Above this std = no boost (sunny)
+
   # Test shot settings (used to measure light levels)
   test_shot:
     # Take a test shot before each capture to measure light

@@ -250,3 +250,38 @@ cd /home/pi/raspilapse
 git pull
 sudo systemctl restart raspilapse
 ```
+
+---
+
+## What Changed (2026-03-14)
+
+### Problem: Dark Overcast Daytime Images
+On overcast days, images appeared dark/murky despite high lux (887-1774). The feedback loop converged to target 120/255 which looks fine on sunny days (high contrast) but flat and dark on overcast days (low contrast, uniformly grey).
+
+### Solution: Contrast-Aware Brightness Targeting
+The brightness target is now dynamic based on `std_brightness` (standard deviation of pixel values):
+- **Sunny (std > 40)**: target stays at 120 (unchanged)
+- **Overcast (std < 25)**: target rises to 135 (boosted by 15)
+- **Between**: linear interpolation for smooth transitions
+- **Night mode**: always base target (protects aurora/stars)
+
+With damping=0.5, a target change from 120→135 converges smoothly in 4-5 frames (~120-150s). No flickering.
+
+### HDR Mode (Future-Proofed for Pi 5)
+Added `HdrMode` control to camera settings:
+- DAY/TRANSITION: `SingleExposure` (ISP tone mapping)
+- NIGHT: `Off` (incompatible with long exposures)
+- On Pi 4 (vc4): no-op (logged gracefully)
+- On Pi 5 (pisp): enables real HDR
+
+### Verification
+```bash
+# Check overcast boost in logs
+journalctl -u raspilapse | grep "Overcast"
+
+# Check HDR status
+journalctl -u raspilapse | grep "HDR"
+
+# Monitor brightness targets
+python scripts/db_stats.py 1h
+```

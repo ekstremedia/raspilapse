@@ -237,6 +237,35 @@ class AdaptiveTimelapse:
             "brightness_feedback_strength", 0.3
         )
 
+        # Contrast-aware brightness target config (overcast boost)
+        adaptive_config = self.config.get("adaptive_timelapse", {})
+        bt_config = adaptive_config.get("brightness_target", {})
+        self._base_target_brightness = bt_config.get("base", 120)
+        self._overcast_boost = bt_config.get("overcast_boost", 15)
+        self._max_target_brightness = bt_config.get("max_target", 140)
+        self._contrast_threshold_low = bt_config.get("contrast_threshold_low", 25)
+        self._contrast_threshold_high = bt_config.get("contrast_threshold_high", 40)
+
+        # HDR config
+        hdr_config = adaptive_config.get("hdr", {})
+        self._hdr_enabled = hdr_config.get("enabled", False)
+        self._hdr_day_mode = hdr_config.get("day_mode", "SingleExposure")
+        self._hdr_night_mode = hdr_config.get("night_mode", "Off")
+        self._hdr_enum_available = False
+        if self._hdr_enabled:
+            try:
+                import libcamera
+
+                self._hdr_mode_enum = libcamera.controls.HdrModeEnum
+                self._hdr_enum_available = True
+                logger.info(
+                    f"[HDR] Enabled: day={self._hdr_day_mode}, night={self._hdr_night_mode}"
+                )
+            except (ImportError, AttributeError):
+                logger.info(
+                    "[HDR] HdrModeEnum not available (Pi 4/vc4) - HDR controls will be no-op"
+                )
+
         # Fast ramp-down speed for overexposure correction (default 0.30 = 3x normal speed)
         self._fast_rampdown_speed = transition_config.get("fast_rampdown_speed", 0.30)
         # Critical ramp-down speed for severe overexposure (default 0.70 = very aggressive)
@@ -856,6 +885,50 @@ class AdaptiveTimelapse:
             )
 
         return self._brightness_correction_factor
+
+    def _get_dynamic_target_brightness(self, std_brightness: float) -> int:
+        """
+        Calculate dynamic brightness target based on image contrast (std deviation).
+
+        On overcast days, images have low contrast (low std_brightness) and look
+        flat/dark at the normal target of 120. This method boosts the target up to
+        max_target when contrast is low, making overcast images brighter.
+
+        On sunny days (high contrast), the target stays at the base value.
+        In NIGHT mode, always returns the base target to protect aurora/star captures.
+
+        Args:
+            std_brightness: Standard deviation of image brightness (0-255 scale).
+                           High values (~50) = sunny/contrasty, low values (~20) = overcast/flat.
+
+        Returns:
+            Dynamic brightness target (base to max_target).
+        """
+        # Always use base target in night mode (protects aurora/star captures)
+        if self._last_mode == LightMode.NIGHT:
+            return self._base_target_brightness
+
+        # If std_brightness is missing or invalid, return base target
+        if std_brightness is None or std_brightness < 0:
+            return self._base_target_brightness
+
+        low = self._contrast_threshold_low  # Below this = full boost (overcast)
+        high = self._contrast_threshold_high  # Above this = no boost (sunny)
+
+        if std_brightness >= high:
+            # High contrast (sunny) - no boost
+            return self._base_target_brightness
+        elif std_brightness <= low:
+            # Low contrast (overcast) - full boost
+            boosted = self._base_target_brightness + self._overcast_boost
+            return min(boosted, self._max_target_brightness)
+        else:
+            # Linear interpolation between thresholds
+            # At low threshold: full boost, at high threshold: no boost
+            t = (std_brightness - low) / (high - low)
+            boost = self._overcast_boost * (1.0 - t)
+            boosted = self._base_target_brightness + boost
+            return min(int(round(boosted)), self._max_target_brightness)
 
     def _get_rampdown_speed(self) -> float:
         """
@@ -2478,6 +2551,21 @@ class AdaptiveTimelapse:
                 smooth_gains = self._interpolate_colour_gains(target_gains)
                 settings["ColourGains"] = smooth_gains
 
+        # Add HDR mode control if enabled
+        if self._hdr_enabled and self._hdr_enum_available:
+            try:
+                if mode == LightMode.NIGHT:
+                    hdr_mode_value = getattr(self._hdr_mode_enum, self._hdr_night_mode, None)
+                else:
+                    # DAY and TRANSITION use day HDR mode
+                    hdr_mode_value = getattr(self._hdr_mode_enum, self._hdr_day_mode, None)
+
+                if hdr_mode_value is not None:
+                    settings["HdrMode"] = hdr_mode_value
+                    logger.debug(f"[HDR] Set HdrMode={hdr_mode_value} for {mode} mode")
+            except Exception as e:
+                logger.debug(f"[HDR] Could not set HdrMode: {e}")
+
         return settings
 
     def take_test_shot(self) -> Tuple[str, Dict]:
@@ -2671,6 +2759,10 @@ class AdaptiveTimelapse:
                 self._brightness_correction_factor, 4
             )
             diagnostics["target_brightness"] = self._target_brightness
+            diagnostics["base_target_brightness"] = self._base_target_brightness
+            diagnostics["overcast_boost_active"] = (
+                self._target_brightness > self._base_target_brightness
+            )
             if self._last_brightness is not None:
                 diagnostics["last_brightness"] = round(self._last_brightness, 2)
             if self._last_p95 is not None:
@@ -2981,6 +3073,19 @@ class AdaptiveTimelapse:
                                 brightness_metrics = self._analyze_image_brightness(image_path)
                             if brightness_metrics:
                                 actual_brightness = brightness_metrics.get("mean_brightness")
+
+                                # Dynamic target: boost brightness on overcast days
+                                std_brightness = brightness_metrics.get("std_brightness")
+                                old_target = self._target_brightness
+                                self._target_brightness = self._get_dynamic_target_brightness(
+                                    std_brightness
+                                )
+                                if self._target_brightness != old_target:
+                                    logger.info(
+                                        f"[Overcast] Dynamic target: {old_target} → {self._target_brightness} "
+                                        f"(std_brightness={std_brightness:.1f})"
+                                    )
+
                                 self._apply_brightness_feedback(actual_brightness)
                                 # Track p95 for proactive highlight protection
                                 self._last_p95 = brightness_metrics.get("percentile_95")

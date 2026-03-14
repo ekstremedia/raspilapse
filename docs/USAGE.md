@@ -250,6 +250,14 @@ adaptive_timelapse:
     night: 3    # Adjust these
     day: 80
   reference_lux: 3.8  # Target brightness control
+
+  # Overcast days look dark? Adjust contrast-aware boost:
+  brightness_target:
+    base: 120               # Base target brightness
+    overcast_boost: 15      # Boost for overcast (low contrast) scenes
+    max_target: 140         # Absolute cap
+    contrast_threshold_low: 25   # Full boost below this std
+    contrast_threshold_high: 40  # No boost above this std
 ```
 
 ## File Locations

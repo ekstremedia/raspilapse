@@ -178,7 +178,9 @@ class ImageCapture:
                         frame_duration_us,
                         frame_duration_us,
                     )
-                    controls_to_apply["NoiseReductionMode"] = 0  # Keep pipeline light
+                    # Don't disable noise reduction when HDR is active (ISP NR needed)
+                    if "HdrMode" not in controls_to_apply:
+                        controls_to_apply["NoiseReductionMode"] = 0  # Keep pipeline light
                     logger.debug(
                         f"Set FrameDurationLimits to {frame_duration_us}µs for {exposure_us}µs exposure"
                     )
@@ -290,6 +292,12 @@ class ImageCapture:
         if "ExposureValue" in controls:
             control_map["ExposureValue"] = controls["ExposureValue"]
 
+        # HDR mode support (snake_case and PascalCase)
+        if "hdr_mode" in controls:
+            control_map["HdrMode"] = controls["hdr_mode"]
+        if "HdrMode" in controls:
+            control_map["HdrMode"] = controls["HdrMode"]
+
         return control_map
 
     def _apply_controls(self, controls: Dict):
@@ -390,7 +398,9 @@ class ImageCapture:
             exposure_us = control_map["ExposureTime"]
             frame_duration_us = exposure_us + 100_000
             control_map["FrameDurationLimits"] = (frame_duration_us, frame_duration_us)
-            control_map["NoiseReductionMode"] = 0  # Keep pipeline light
+            # Don't disable noise reduction when HDR is active (ISP NR needed)
+            if "HdrMode" not in control_map:
+                control_map["NoiseReductionMode"] = 0  # Keep pipeline light
             logger.debug(
                 f"Updated FrameDurationLimits to {frame_duration_us}µs for {exposure_us}µs exposure"
             )

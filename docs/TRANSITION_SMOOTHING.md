@@ -100,6 +100,20 @@ transition_mode:
   # How fast correction adjusts (0.0-1.0, lower = smoother)
   brightness_feedback_strength: 0.2
 
+  # === HDR MODE ===
+  hdr:
+    enabled: true
+    day_mode: "SingleExposure"    # Day/transition HDR mode
+    night_mode: "Off"             # Night HDR mode (always Off)
+
+  # === CONTRAST-AWARE BRIGHTNESS TARGET (Overcast Boost) ===
+  brightness_target:
+    base: 120                     # Base target brightness
+    overcast_boost: 15            # Max boost when contrast is low
+    max_target: 140               # Absolute cap for boosted target
+    contrast_threshold_low: 25    # Below this std = full boost
+    contrast_threshold_high: 40   # Above this std = no boost
+
 test_shot:
   enabled: true
   exposure_time: 0.1
@@ -254,7 +268,11 @@ Real-time brightness correction that analyzes each captured image and gradually 
 
 **How it works:**
 1. After each capture, analyze actual mean brightness (0-255)
-2. Compare to target brightness (default: 120)
+2. Calculate dynamic target brightness based on image contrast (std deviation):
+   - Sunny (std > 40): target stays at base (120)
+   - Overcast (std < 25): target boosted up to base + overcast_boost (135)
+   - Between thresholds: linear interpolation
+   - Night mode: always uses base target (protects aurora/star captures)
 3. If outside tolerance (±40), calculate correction factor
 4. Apply correction factor to next frame's target exposure
 5. Correction changes VERY gradually (0.2 per frame) for smoothness
@@ -709,6 +727,8 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 - [x] Proactive exposure correction based on test shot brightness (implemented 2026-01-08)
 - [x] Rapid lux change detection (implemented 2026-01-08)
 - [x] Fast ramp-up for underexposure (symmetric to ramp-down) (implemented 2026-01-10)
+- [x] Contrast-aware brightness targeting for overcast days (implemented 2026-03-14)
+- [x] HDR mode support (SingleExposure for day, Off for night) (implemented 2026-03-14)
 - [ ] Adaptive WB transition speed based on lux rate of change
 - [ ] Per-channel WB smoothing (red and blue could have different speeds)
 - [ ] Sunset/sunrise detection for optimized transition timing
@@ -717,6 +737,47 @@ for f in sorted(glob.glob('/var/www/html/images/2025/12/23/*_metadata.json'))[-1
 ---
 
 ## Changelog
+
+### 2026-03-14 - Contrast-Aware Brightness Targeting + HDR Support
+
+**Problem Identified:**
+- On overcast days, daytime images appear dark and murky despite high lux readings (887-1774)
+- Brightness feedback loop converges to target 120/255, which looks fine on sunny days (high contrast) but flat and dark on overcast days (low contrast, uniformly grey)
+
+**Fix 1: Contrast-Aware Dynamic Target (`_get_dynamic_target_brightness`)**
+- Uses `std_brightness` from lores metrics as a contrast indicator
+- Sunny day (std ~50): target stays at 120 (unchanged)
+- Overcast day (std ~20): target rises to 135 (+15 boost)
+- Linear interpolation between thresholds (25-40) for smooth transitions
+- Night mode always uses base target (protects aurora/star captures)
+- With damping=0.5, a target change from 120→135 converges in 4-5 frames (~120-150s)
+
+**Configuration:**
+```yaml
+brightness_target:
+  base: 120                     # Base brightness target
+  overcast_boost: 15            # Max boost for low-contrast scenes
+  max_target: 140               # Absolute cap
+  contrast_threshold_low: 25    # Below = full boost (overcast)
+  contrast_threshold_high: 40   # Above = no boost (sunny)
+```
+
+**Fix 2: HDR Mode Support (future-proofed for Pi 5)**
+- Adds `HdrMode` control to camera settings
+- DAY/TRANSITION: `SingleExposure` HDR (ISP tone mapping)
+- NIGHT: `Off` (long exposures incompatible with HDR)
+- On Pi 4 (vc4): no-op (HdrModeEnum not available, logged gracefully)
+- On Pi 5 (pisp): enables real ISP tone-mapped HDR
+- When HDR active, NoiseReductionMode is not forced to 0 (ISP NR needed for HDR)
+
+**Diagnostics:**
+- New fields in metadata: `base_target_brightness`, `overcast_boost_active`
+- Log messages prefixed with `[Overcast]` when target changes
+- Log messages prefixed with `[HDR]` for HDR mode status
+
+**Test Coverage:**
+- 15 new tests in `tests/test_overcast_brightness.py`
+- Covers sunny/overcast/interpolation/night mode/edge cases/config defaults
 
 ### 2026-01-20 - Mode Transition Fix Iteration 2 (Gain Reduction + Throttling)
 
