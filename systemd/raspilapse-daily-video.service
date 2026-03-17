@@ -20,4 +20,6 @@ RemainAfterExit=no
 TimeoutStartSec=infinity
 
 [Install]
-WantedBy=multi-user.target
+# This service is triggered by raspilapse-daily-video.timer, not started directly on boot.
+# Do not enable this service directly; enable the timer instead.
+WantedBy=
