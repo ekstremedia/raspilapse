@@ -349,6 +349,14 @@ Examples:
             upload_service = UploadService(config, args.config)
             date_str = target_date.strftime("%Y-%m-%d")
 
+            # Check if already successfully uploaded (e.g. by retry_uploads after a reboot)
+            existing = upload_service.get_upload_by_date(date_str)
+            if existing and existing["status"] == "success":
+                logger.info(f"Upload for {date_str} already completed successfully, skipping")
+                print(f"Upload already completed for {date_str}, skipping")
+                print("\n=== Done ===")
+                return 0
+
             success, error, _response = upload_service.upload_to_server(
                 video_path=video_path,
                 keogram_path=keogram_path,
@@ -358,6 +366,14 @@ Examples:
 
             if success:
                 logger.info("Upload completed successfully")
+                # Record success in queue so retry_uploads won't re-upload this date
+                upload_service.record_upload_success(
+                    video_path=str(video_path),
+                    keogram_path=str(keogram_path) if keogram_path else None,
+                    slitscan_path=str(slitscan_path) if slitscan_path else None,
+                    video_date=date_str,
+                    server_response=_response,
+                )
             else:
                 # Queue for retry - don't fail the script since video was created
                 queue_id = upload_service.queue_upload(

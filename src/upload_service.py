@@ -626,6 +626,87 @@ class UploadService:
 
         return results
 
+    def get_upload_by_date(self, date: str) -> Optional[Dict]:
+        """
+        Get an upload queue entry by date.
+
+        Args:
+            date: Date string (YYYY-MM-DD)
+
+        Returns:
+            Upload record or None
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return None
+
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM upload_queue WHERE video_date = ?", (date,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+
+        except Exception as e:
+            self.logger.warning(f"[Upload] Failed to get upload for date {date}: {e}")
+            return None
+
+    def record_upload_success(
+        self,
+        video_path: str,
+        keogram_path: Optional[str],
+        slitscan_path: Optional[str],
+        video_date: str,
+        server_response: Optional[str] = None,
+    ) -> bool:
+        """
+        Record a direct upload success in the queue.
+
+        Prevents retry_uploads from re-uploading a file that was already
+        successfully uploaded directly by daily_timelapse.
+
+        Args:
+            video_path: Path to video file
+            keogram_path: Optional path to keogram
+            slitscan_path: Optional path to slitscan
+            video_date: Date string (YYYY-MM-DD)
+            server_response: Optional server response
+
+        Returns:
+            True if successful
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return False
+
+                cursor = conn.cursor()
+                # Ensure a row exists for this date (no-op if already there)
+                cursor.execute(
+                    """INSERT OR IGNORE INTO upload_queue
+                       (video_date, video_path, keogram_path, slitscan_path,
+                        status, created_at)
+                       VALUES (?, ?, ?, ?, 'success', datetime('now'))""",
+                    (video_date, video_path, keogram_path, slitscan_path),
+                )
+                # Mark as success regardless of current state
+                cursor.execute(
+                    """UPDATE upload_queue
+                       SET status = 'success',
+                           completed_at = datetime('now'),
+                           server_response = ?,
+                           last_error = NULL
+                       WHERE video_date = ?""",
+                    (server_response, video_date),
+                )
+                conn.commit()
+
+                self.logger.info(f"[Upload] Recorded direct upload success for {video_date}")
+                return True
+
+        except Exception as e:
+            self.logger.error(f"[Upload] Failed to record upload success: {e}")
+            return False
+
     def get_queue_stats(self) -> Dict[str, int]:
         """
         Get upload queue statistics.
