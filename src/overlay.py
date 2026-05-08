@@ -406,9 +406,11 @@ class TideData:
         """
         Find all high and low tides from the points array.
 
-        Analyzes the points to find local maxima (highs) and minima (lows)
-        by detecting where the tide changes direction. Uses a wider window
-        and validation to avoid detecting noise/plateaus as separate extremes.
+        Walks the series tracking direction (rising/falling). An extreme is
+        emitted only when direction actually reverses; plateaus on a slope
+        (e.g. 149,149,149 then 150) are NOT extremes — only plateaus where
+        the direction before differs from the direction after qualify, and
+        the midpoint of such a plateau is reported as the extreme.
 
         Returns:
             Tuple of (highs_list, lows_list) where each item is
@@ -419,115 +421,84 @@ class TideData:
             return [], []
 
         points = data.get("points", [])
-        if len(points) < 7:
+        if len(points) < 3:
             return [], []
 
-        # Collect all candidate extremes with a wider analysis window
-        candidate_highs = []
-        candidate_lows = []
+        min_amplitude_cm = 5  # reject reversals smaller than this vs. previous extreme
 
-        # Use a window of 2 points on each side (20 min with 10-min data)
-        # This allows detecting extremes closer to data boundaries while still
-        # having enough context to filter out single-point noise
-        window = 2
+        highs: List[Dict] = []
+        lows: List[Dict] = []
 
-        for i in range(window, len(points) - window):
+        # Track the previous accepted opposite extreme for amplitude filtering.
+        last_extreme_level: Optional[int] = None  # level of previous accepted extreme
+        last_extreme_kind: Optional[str] = None  # "high" or "low"
+
+        # State for the current monotonic run.
+        # run_start is the index where the current run (or pending plateau) began.
+        # prev_dir is the direction (1 rising, -1 falling, 0 unknown) leading INTO the current point.
+        run_start = 0
+        prev_dir = 0  # direction of the most recent strict change
+
+        def emit(kind: str, idx: int) -> None:
+            nonlocal last_extreme_level, last_extreme_kind
+            level = points[idx].get("level_cm", 0)
+            if last_extreme_level is not None and last_extreme_kind != kind:
+                if abs(level - last_extreme_level) < min_amplitude_cm:
+                    return
+            entry = {"time": points[idx].get("time"), "level_cm": level}
+            if kind == "high":
+                highs.append(entry)
+            else:
+                lows.append(entry)
+            last_extreme_level = level
+            last_extreme_kind = kind
+
+        for i in range(1, len(points)):
+            prev_level = points[i - 1].get("level_cm", 0)
             curr_level = points[i].get("level_cm", 0)
-            curr_time = points[i].get("time")
 
-            # Get levels in window before and after
-            before = [points[j].get("level_cm", 0) for j in range(i - window, i)]
-            after = [points[j].get("level_cm", 0) for j in range(i + 1, i + window + 1)]
+            if curr_level > prev_level:
+                cur_dir = 1
+            elif curr_level < prev_level:
+                cur_dir = -1
+            else:
+                cur_dir = 0  # plateau
 
-            # Local maximum: current is higher than or equal to all in window
-            # AND actually higher than at least some points on at least one side
-            # (handles plateaus where one side continues at same level)
-            if all(curr_level >= b for b in before) and all(curr_level >= a for a in after):
-                if curr_level > min(before) or curr_level > min(after):
-                    candidate_highs.append({"time": curr_time, "level_cm": curr_level})
-
-            # Local minimum: current is lower than or equal to all in window
-            # AND actually lower than at least some points on at least one side
-            if all(curr_level <= b for b in before) and all(curr_level <= a for a in after):
-                if curr_level < max(before) or curr_level < max(after):
-                    candidate_lows.append({"time": curr_time, "level_cm": curr_level})
-
-        # Now filter to keep only significant extremes
-        # Real tides are typically 5-7 hours apart, but use relaxed thresholds
-        # to handle test data while still rejecting noise (e.g., 1cm dip 20 min apart)
-        min_separation_minutes = 30  # At least 30 min apart (rejects 20-min noise)
-        min_height_diff_cm = 5  # At least 5cm difference (rejects 1cm noise)
-
-        highs = []
-        lows = []
-
-        # For each high, check if there's a corresponding low that makes sense
-        for h in candidate_highs:
-            h_time = self._parse_time(h.get("time"))
-            if h_time is None:
+            if cur_dir == 0:
+                # Continuing a plateau; run_start stays at the start of the plateau.
                 continue
 
-            # Skip if too close to already-accepted high (same plateau)
-            too_close = False
-            for existing in highs:
-                existing_time = self._parse_time(existing.get("time"))
-                if existing_time:
-                    diff_minutes = abs((h_time - existing_time).total_seconds() / 60)
-                    # Skip if within 60 min AND at similar level (same plateau)
-                    if diff_minutes < 60 and abs(h["level_cm"] - existing["level_cm"]) <= 5:
-                        too_close = True
-                        break
-            if too_close:
+            if prev_dir == 0:
+                # First strict move; nothing to emit yet.
+                run_start = i - 1
+                prev_dir = cur_dir
                 continue
 
-            # Check if there's a valid low that pairs with this high
-            for low in candidate_lows:
-                low_time = self._parse_time(low.get("time"))
-                if low_time is None:
-                    continue
-
-                time_diff = abs((h_time - low_time).total_seconds() / 3600)
-                height_diff = abs(h["level_cm"] - low["level_cm"])
-
-                if time_diff * 60 >= min_separation_minutes and height_diff >= min_height_diff_cm:
-                    highs.append(h)
-                    break
-
-        # Similarly filter lows
-        for low in candidate_lows:
-            low_time = self._parse_time(low.get("time"))
-            if low_time is None:
+            if cur_dir == prev_dir:
+                # Same direction: extend the run, plateau resolved as continuation.
+                run_start = i - 1
                 continue
 
-            # Skip if too close to already-accepted low (same plateau)
-            too_close = False
-            for existing in lows:
-                existing_time = self._parse_time(existing.get("time"))
-                if existing_time:
-                    diff_minutes = abs((low_time - existing_time).total_seconds() / 60)
-                    # Skip if within 60 min AND at similar level (same plateau)
-                    if diff_minutes < 60 and abs(low["level_cm"] - existing["level_cm"]) <= 5:
-                        too_close = True
-                        break
-            if too_close:
-                continue
+            # Direction reversed between the previous strict move and this one.
+            # The extreme is at the midpoint of the plateau (or the single peak
+            # point if no plateau). prev_dir was the direction up to the
+            # plateau; cur_dir is the direction leaving it.
+            plateau_end = i - 1  # last index at the plateau level
+            plateau_start = plateau_end
+            plateau_level = points[plateau_end].get("level_cm", 0)
+            while (
+                plateau_start > 0 and points[plateau_start - 1].get("level_cm", 0) == plateau_level
+            ):
+                plateau_start -= 1
+            mid_idx = (plateau_start + plateau_end) // 2
 
-            # Check if there's a valid high that pairs with this low
-            for h in candidate_highs:
-                h_time = self._parse_time(h.get("time"))
-                if h_time is None:
-                    continue
+            if prev_dir == 1 and cur_dir == -1:
+                emit("high", mid_idx)
+            elif prev_dir == -1 and cur_dir == 1:
+                emit("low", mid_idx)
 
-                time_diff = abs((h_time - low_time).total_seconds() / 3600)
-                height_diff = abs(h["level_cm"] - low["level_cm"])
-
-                if time_diff * 60 >= min_separation_minutes and height_diff >= min_height_diff_cm:
-                    lows.append(low)
-                    break
-
-        # Sort by time
-        highs.sort(key=lambda x: x.get("time", ""))
-        lows.sort(key=lambda x: x.get("time", ""))
+            run_start = i - 1
+            prev_dir = cur_dir
 
         return highs, lows
 
@@ -614,9 +585,11 @@ class TideData:
         return ("unknown", None, None)
 
     def format_time(self, dt: Optional[datetime]) -> str:
-        """Format datetime as HH:MM."""
+        """Format datetime as HH:MM in local time."""
         if dt is None:
             return "--:--"
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
         return dt.strftime("%H:%M")
 
     def format_tide_compact(self) -> str:
