@@ -737,9 +737,9 @@ class AuroraData:
 
         return {
             "kp": kp,
-            "kp_str": f"{kp:.1f}" if isinstance(kp, float) else str(kp),
+            "kp_str": f"{kp:.1f}" if isinstance(kp, (int, float)) else "N/A",
             "bz": bz,
-            "bz_str": f"{bz:.1f}" if isinstance(bz, float) else str(bz),
+            "bz_str": f"{bz:.1f}" if isinstance(bz, (int, float)) else "N/A",
             "bz_status": bz_status,
             "bz_arrow": self.get_bz_arrow(bz_status),
             "speed": speed,
