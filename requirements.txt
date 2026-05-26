@@ -18,3 +18,7 @@ astral>=3.2
 
 # HTTP requests for weather API
 requests>=2.28.0
+
+# Streaming multipart uploads for the daily video POST (keeps ~300 MB
+# bodies off the heap; plain requests.post(files=…) buffers everything)
+requests-toolbelt>=1.0.0
