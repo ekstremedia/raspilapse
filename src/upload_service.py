@@ -599,6 +599,10 @@ class UploadService:
                 if conn is None:
                     return 0
                 cursor = conn.cursor()
+                # last_attempt_at is always written by production code via
+                # SQLite's `datetime('now')` (UTC, "YYYY-MM-DD HH:MM:SS"),
+                # so the threshold here uses the same clock for an
+                # apples-to-apples lexicographic compare.
                 cursor.execute(
                     """UPDATE upload_queue
                        SET status = 'pending'

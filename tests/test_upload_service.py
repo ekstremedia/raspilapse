@@ -699,6 +699,113 @@ class TestProcessRetryQueue:
             assert len(results["errors"]) == 1
 
 
+class TestResetStaleUploadingRows:
+    """Test _reset_stale_uploading_rows recovery helper."""
+
+    @staticmethod
+    def _set_uploading(service, queue_id, sql_age):
+        """Mark a row 'uploading' with last_attempt_at = SQLite `datetime('now', sql_age)`.
+
+        Production writes last_attempt_at via SQLite's datetime('now'), so the
+        tests use the same clock + format (UTC, space-separated) to avoid the
+        lexicographic-compare pitfalls of mixing Python isoformat()'s 'T' with
+        SQLite's space separator.
+        """
+        with service._get_connection() as conn:
+            cursor = conn.cursor()
+            if sql_age is None:
+                cursor.execute(
+                    "UPDATE upload_queue SET status='uploading', last_attempt_at=NULL WHERE id=?",
+                    (queue_id,),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE upload_queue SET status='uploading', "
+                    "last_attempt_at=datetime('now', ?) WHERE id=?",
+                    (sql_age, queue_id),
+                )
+            conn.commit()
+
+    def test_resets_old_uploading_row(self, upload_config, temp_video_file):
+        """An 'uploading' row older than the staleness window goes back to 'pending'."""
+        service = UploadService(upload_config)
+        queue_id = service.queue_upload(temp_video_file, None, None, "2026-05-23")
+        self._set_uploading(service, queue_id, "-2 hours")
+
+        n = service._reset_stale_uploading_rows(stale_after_minutes=30)
+        assert n == 1
+
+        with service._get_connection() as conn:
+            row = conn.execute("SELECT status FROM upload_queue WHERE id=?", (queue_id,)).fetchone()
+        assert row["status"] == "pending"
+
+    def test_leaves_recent_uploading_row(self, upload_config, temp_video_file):
+        """A fresh 'uploading' row stays put — its upload is still in flight."""
+        service = UploadService(upload_config)
+        queue_id = service.queue_upload(temp_video_file, None, None, "2026-05-24")
+        self._set_uploading(service, queue_id, "-2 minutes")
+
+        n = service._reset_stale_uploading_rows(stale_after_minutes=30)
+        assert n == 0
+
+        with service._get_connection() as conn:
+            row = conn.execute("SELECT status FROM upload_queue WHERE id=?", (queue_id,)).fetchone()
+        assert row["status"] == "uploading"
+
+    def test_resets_uploading_with_null_last_attempt(self, upload_config, temp_video_file):
+        """An 'uploading' row with no last_attempt_at is always considered stale."""
+        service = UploadService(upload_config)
+        queue_id = service.queue_upload(temp_video_file, None, None, "2026-05-25")
+        self._set_uploading(service, queue_id, None)
+
+        n = service._reset_stale_uploading_rows(stale_after_minutes=30)
+        assert n == 1
+
+        with service._get_connection() as conn:
+            row = conn.execute("SELECT status FROM upload_queue WHERE id=?", (queue_id,)).fetchone()
+        assert row["status"] == "pending"
+
+    def test_does_not_touch_other_statuses(self, upload_config, temp_video_file):
+        """Rows in 'pending' / 'success' / 'failed' are untouched."""
+        service = UploadService(upload_config)
+        ids = [
+            service.queue_upload(temp_video_file, None, None, f"2026-05-{20+i}") for i in range(3)
+        ]
+        with service._get_connection() as conn:
+            conn.execute("UPDATE upload_queue SET status='success' WHERE id=?", (ids[1],))
+            conn.execute("UPDATE upload_queue SET status='failed' WHERE id=?", (ids[2],))
+            conn.commit()
+
+        n = service._reset_stale_uploading_rows(stale_after_minutes=30)
+        assert n == 0
+
+        with service._get_connection() as conn:
+            statuses = {
+                row["id"]: row["status"]
+                for row in conn.execute(
+                    "SELECT id, status FROM upload_queue WHERE id IN (?,?,?)", ids
+                ).fetchall()
+            }
+        assert statuses[ids[0]] == "pending"
+        assert statuses[ids[1]] == "success"
+        assert statuses[ids[2]] == "failed"
+
+    def test_called_at_start_of_process_retry_queue(self, upload_config, temp_video_file):
+        """process_retry_queue() picks up a previously-stranded 'uploading' row."""
+        service = UploadService(upload_config)
+        queue_id = service.queue_upload(temp_video_file, None, None, "2026-05-23")
+        self._set_uploading(service, queue_id, "-2 hours")
+
+        with patch("src.upload_service.requests.post") as mock_post:
+            mock_post.return_value = Mock(status_code=200, text='{"status": "ok"}')
+            results = service.process_retry_queue(force=True)
+
+        assert results["success"] == 1
+        with service._get_connection() as conn:
+            row = conn.execute("SELECT status FROM upload_queue WHERE id=?", (queue_id,)).fetchone()
+        assert row["status"] == "success"
+
+
 class TestDatabasePathResolution:
     """Test database path resolution."""
 
