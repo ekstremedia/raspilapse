@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+from requests_toolbelt import MultipartEncoder
 
 # Add project root to path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -206,15 +207,20 @@ class UploadService:
         self.logger.info(f"[Upload] Video: {video_path}")
         self.logger.info(f"[Upload] Date: {date}")
 
-        files = {}
         file_handles = []
+        fields = []
 
         try:
+            # Form fields first
+            fields.append(("title", Path(video_path).name))
+            fields.append(("date", date))
+            fields.append(("camera_id", self.camera_id))
+
             # Open video file
             if video_path and Path(video_path).exists():
                 f = open(video_path, "rb")
                 file_handles.append(f)
-                files["video"] = f
+                fields.append(("video", (Path(video_path).name, f, "video/mp4")))
             else:
                 return False, f"Video file not found: {video_path}", None
 
@@ -222,31 +228,28 @@ class UploadService:
             if keogram_path and Path(keogram_path).exists():
                 f = open(keogram_path, "rb")
                 file_handles.append(f)
-                files["keogram"] = f
+                fields.append(("keogram", (Path(keogram_path).name, f, "image/jpeg")))
                 self.logger.info(f"[Upload] Keogram: {keogram_path}")
 
             # Open slitscan if exists
             if slitscan_path and Path(slitscan_path).exists():
                 f = open(slitscan_path, "rb")
                 file_handles.append(f)
-                files["slitscan"] = f
+                fields.append(("slitscan", (Path(slitscan_path).name, f, "image/jpeg")))
                 self.logger.info(f"[Upload] Slitscan: {slitscan_path}")
 
-            # Prepare request
-            data = {
-                "title": Path(video_path).name,
-                "date": date,
-                "camera_id": self.camera_id,
-            }
+            encoder = MultipartEncoder(fields=fields)
+            file_names = [name for name, val in fields if isinstance(val, tuple)]
+            self.logger.info(f"[Upload] Uploading files: {file_names} ({encoder.len} bytes)")
 
             headers = {
                 "Authorization": f"Bearer {api_key}",
+                "Content-Type": encoder.content_type,
             }
 
-            self.logger.info(f"[Upload] Uploading files: {list(files.keys())}")
-
-            # Send POST request
-            response = requests.post(url, files=files, data=data, headers=headers, timeout=300)
+            # Stream the body so we don't buffer hundreds of MB in memory.
+            # timeout=(connect, read); read is the socket idle timeout.
+            response = requests.post(url, data=encoder, headers=headers, timeout=(30, 3600))
 
             if response.status_code == 200:
                 self.logger.info("[Upload] Upload successful!")
@@ -558,12 +561,14 @@ class UploadService:
                 if conn:
                     cursor = conn.cursor()
                     cursor.execute(
-                        "UPDATE upload_queue SET status = 'uploading' WHERE id = ?",
+                        "UPDATE upload_queue SET status = 'uploading', last_attempt_at = datetime('now') WHERE id = ?",
                         (upload_id,),
                     )
                     conn.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            # Non-fatal: the upload itself can still proceed, but log so a DB issue
+            # doesn't go unnoticed. _reset_stale_uploading_rows handles recovery.
+            self.logger.warning(f"[Upload] Could not mark upload {upload_id} as 'uploading': {e}")
 
         # Attempt upload
         video_path = Path(upload["video_path"])
@@ -581,6 +586,40 @@ class UploadService:
             self.mark_upload_failed(upload_id, error)
             return False, error or "Unknown error"
 
+    def _reset_stale_uploading_rows(self, stale_after_minutes: int = 30) -> int:
+        """
+        Reset rows stuck in status='uploading' back to 'pending' so they're retried.
+
+        retry_single_upload() marks a row 'uploading' before the POST. If the process
+        dies between that mark and the final mark-success/failed (typically a reboot),
+        the row would otherwise be invisible to get_pending_uploads() forever.
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return 0
+                cursor = conn.cursor()
+                cursor.execute(
+                    """UPDATE upload_queue
+                       SET status = 'pending'
+                       WHERE status = 'uploading'
+                         AND (
+                              last_attempt_at IS NULL
+                              OR last_attempt_at < datetime('now', ?)
+                         )""",
+                    (f"-{stale_after_minutes} minutes",),
+                )
+                n = cursor.rowcount
+                conn.commit()
+                if n:
+                    self.logger.warning(
+                        f"[Upload] Reset {n} stale 'uploading' row(s) back to 'pending'"
+                    )
+                return n
+        except Exception as e:
+            self.logger.warning(f"[Upload] Failed to reset stale uploading rows: {e}")
+            return 0
+
     def process_retry_queue(self, force: bool = False) -> Dict[str, Any]:
         """
         Process all uploads due for retry.
@@ -592,6 +631,10 @@ class UploadService:
             Summary dict with processed, success, failed counts
         """
         results = {"processed": 0, "success": 0, "failed": 0, "skipped": 0, "errors": []}
+
+        # Recover rows stranded in 'uploading' status (e.g. by the reboot cron at 13:00
+        # firing between mark-uploading and the final mark-success/failed).
+        self._reset_stale_uploading_rows(stale_after_minutes=30)
 
         pending = self.get_pending_uploads()
         self.logger.info(f"[Upload] Processing retry queue: {len(pending)} pending uploads")

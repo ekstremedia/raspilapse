@@ -66,7 +66,7 @@ class CaptureDatabase:
         SCHEMA_VERSION: Current database schema version
     """
 
-    SCHEMA_VERSION = 3  # Bumped for upload_queue table
+    SCHEMA_VERSION = 4  # Bumped for upload_queue retry composite index
 
     # Migration definitions: version -> (description, SQL statements)
     MIGRATIONS = {
@@ -96,6 +96,13 @@ class CaptureDatabase:
                     server_response TEXT
                 )""",
                 "CREATE INDEX IF NOT EXISTS idx_upload_queue_status ON upload_queue(status)",
+            ],
+        ),
+        4: (
+            "Add composite index for retry-queue scans",
+            [
+                "CREATE INDEX IF NOT EXISTS idx_upload_queue_status_retry "
+                "ON upload_queue(status, next_retry_at)",
             ],
         ),
     }

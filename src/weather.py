@@ -39,7 +39,7 @@ class WeatherData:
         self._cache_time: Optional[datetime] = None
 
         if self.enabled:
-            logger.info("Weather data fetcher initialized")
+            logger.debug("Weather data fetcher initialized")
         else:
             logger.debug("Weather data fetcher disabled")
 

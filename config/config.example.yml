@@ -590,10 +590,10 @@ logging:
   console: true
 
   # Maximum log file size in MB (0 = unlimited)
-  max_size_mb: 10
+  max_size_mb: 5
 
   # Number of backup log files to keep
-  backup_count: 5
+  backup_count: 2
 
 # Analysis and Graphs Settings
 graphs:

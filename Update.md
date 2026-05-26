@@ -4,6 +4,70 @@ Dated entries describing changes that landed in this repo. After `git pull` on a
 
 ---
 
+## 2026-05-26 — Logging cleanup
+
+### TL;DR
+
+```bash
+cd ~/raspilapse
+git pull
+# Merge the new rotation cap into your local config.yml (gitignored):
+#   under logging:
+#     max_size_mb: 5
+#     backup_count: 2
+sudo systemctl restart raspilapse.service
+
+# One-off cleanup of the bloated logs/ directory:
+rm logs/script_name.log logs/test_script.log logs/daily_timelapse_cron.log 2>/dev/null
+rm logs/*.log.[1-9] 2>/dev/null
+: > logs/auto_timelapse.log
+: > logs/capture_image.log
+: > logs/weather.log
+: > logs/overlay.log
+```
+
+### What changed
+
+The `logs/` directory had grown to ~230 MB across 34 files, almost all of it repetitive INFO chatter from the capture loop (camera init/close, "Overlay initialized", "Weather data fetcher initialized" — fired twice per ~30 s cycle). Real signal was buried.
+
+| File | Change |
+|------|--------|
+| `src/overlay.py:801` | `Overlay initialized` → DEBUG |
+| `src/weather.py:42` | `Weather data fetcher initialized` → DEBUG |
+| `src/capture_image.py` | Camera lifecycle (init/start/resolution/started/init complete/closing) and per-frame overlay application → DEBUG. Only `Image captured successfully: <path>` stays at INFO. |
+| `src/auto_timelapse.py` | `Initializing camera for timelapse...` → DEBUG. `Taking test shot to measure light levels...` → DEBUG. `[Proactive] Very bright test shot ...` (fired every daylight cycle) → DEBUG. `[Overcast] Dynamic target: X→Y` now only INFO when `|delta| ≥ 5`, else DEBUG. |
+| `config/config.yml` and `config/config.example.yml` | `max_size_mb: 10 → 5`, `backup_count: 5 → 2`. Per-logger ceiling drops from 60 MB to 15 MB. |
+
+### Before / after
+
+| Metric | Before | After |
+|--------|--------|-------|
+| `logs/` total size | **230 MB** | **1.5 MB** (after one-off cleanup; ~25 MB steady state) |
+| Files in `logs/` | 34 | 11 |
+| `auto_timelapse.log` per-cycle INFO lines | 8–9 | 1 (`Frame captured: …`) + mode/exposure summary |
+| `capture_image.log` per-cycle INFO lines | 14–16 (test + actual) | 1 (`Image captured successfully: …`) |
+| `weather.log` per-cycle INFO lines | 4 | 0 (only errors/warnings) |
+| `overlay.log` per-cycle INFO lines | 2 | 0 (only locale warning at boot) |
+| Per-day log lines (capture path) | ~50,000 | ~6,000 |
+| Rotation cap per logger | 60 MB (5 × 10 MB) | 15 MB (2 × 5 MB) |
+| Orphan log files | 3 (1.2 MB + 2×0 B) | 0 |
+
+To get the verbose chatter back temporarily for debugging, flip `logging.level` to `"DEBUG"` in `config/config.yml` and restart — the lines are still there, just suppressed at INFO.
+
+### Verify
+
+```bash
+# After restart, wait ~5 min, then:
+for f in auto_timelapse capture_image weather overlay; do
+  echo "$f.log: $(grep -c INFO logs/$f.log) INFO lines"
+done
+
+# Expect: auto_timelapse ~10/5min, capture_image ~10/5min, weather=0, overlay=0
+ls -lh logs/
+```
+
+---
+
 ## 2026-05-26 — Streaming uploads, reboot-safety, DB index
 
 ### TL;DR

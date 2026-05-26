@@ -798,7 +798,7 @@ class ImageOverlay:
             except Exception as e:
                 logger.warning(f"Could not load ship icon: {e}")
 
-        logger.info("Overlay initialized")
+        logger.debug("Overlay initialized")
 
     def _load_ships(self) -> List[Dict]:
         """

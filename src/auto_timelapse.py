@@ -370,7 +370,7 @@ class AdaptiveTimelapse:
         # Skip ML when using direct brightness control
         adaptive_config = self.config.get("adaptive_timelapse", {})
         if adaptive_config.get("direct_brightness_control", False):
-            logger.info("[ML v2] Skipped - using direct brightness control instead")
+            logger.debug("[ML v2] Skipped - using direct brightness control instead")
             self._ml_enabled = False
             return
 
@@ -994,7 +994,7 @@ class AdaptiveTimelapse:
                 reduction = 0.8  # 20% reduction (was 30%)
                 self._brightness_correction_factor *= reduction
                 self._brightness_correction_factor = max(0.3, self._brightness_correction_factor)
-                logger.info(
+                logger.debug(
                     f"[Proactive] Very bright test shot ({test_brightness:.1f}) - "
                     f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
                 )
@@ -2575,7 +2575,7 @@ class AdaptiveTimelapse:
         Returns:
             Tuple of (image_path, metadata)
         """
-        logger.info("Taking test shot to measure light levels...")
+        logger.debug("Taking test shot to measure light levels...")
 
         test_config = self.config["adaptive_timelapse"]["test_shot"]
 
@@ -3030,7 +3030,7 @@ class AdaptiveTimelapse:
 
                 # Initialize camera on first frame or if it was closed
                 if capture is None:
-                    logger.info("Initializing camera for timelapse...")
+                    logger.debug("Initializing camera for timelapse...")
                     capture = ImageCapture(self.camera_config)
                     capture.initialize_camera(manual_controls=settings)
                     last_mode = mode
@@ -3059,6 +3059,9 @@ class AdaptiveTimelapse:
                     # Apply brightness feedback for butter-smooth transitions
                     # Uses lores stream brightness (from capture.last_brightness_metrics)
                     # which avoids disk I/O and overlay contamination
+                    # Initialize so it's defined when feedback is disabled — otherwise
+                    # the later store_capture() call would NameError and be swallowed.
+                    brightness_metrics = None
                     brightness_feedback_enabled = (
                         self.config.get("adaptive_timelapse", {})
                         .get("transition_mode", {})
@@ -3081,10 +3084,18 @@ class AdaptiveTimelapse:
                                     std_brightness
                                 )
                                 if self._target_brightness != old_target:
-                                    logger.info(
-                                        f"[Overcast] Dynamic target: {old_target} → {self._target_brightness} "
-                                        f"(std_brightness={std_brightness:.1f})"
-                                    )
+                                    # Only log when the adjustment is meaningful — most
+                                    # ticks move the target by ±1 and just spam INFO.
+                                    if abs(self._target_brightness - old_target) >= 5:
+                                        logger.info(
+                                            f"[Overcast] Dynamic target: {old_target} → {self._target_brightness} "
+                                            f"(std_brightness={std_brightness:.1f})"
+                                        )
+                                    else:
+                                        logger.debug(
+                                            f"[Overcast] Dynamic target: {old_target} → {self._target_brightness} "
+                                            f"(std_brightness={std_brightness:.1f})"
+                                        )
 
                                 self._apply_brightness_feedback(actual_brightness)
                                 # Track p95 for proactive highlight protection
@@ -3102,30 +3113,30 @@ class AdaptiveTimelapse:
 
                     # Update day WB reference from actual capture metadata
                     # This allows us to learn good daylight WB values for smooth transitions
-                    # Also store for Holy Grail seeding when entering transition
-                    if metadata_path and mode == LightMode.DAY:
+                    # Read the per-frame metadata JSON once and reuse for both the
+                    # WB-reference update and the DB store below.
+                    capture_metadata = None
+                    if metadata_path:
                         try:
                             import json
 
                             with open(metadata_path, "r") as f:
                                 capture_metadata = json.load(f)
+                        except Exception as e:
+                            logger.debug(f"Could not read capture metadata: {e}")
+
+                    # Also store for Holy Grail seeding when entering transition
+                    if capture_metadata is not None and mode == LightMode.DAY:
+                        try:
                             self._update_day_wb_reference(capture_metadata)
-                            # Store for Holy Grail seeding
                             self._last_day_capture_metadata = capture_metadata
                         except Exception as e:
-                            logger.debug(f"Could not read capture metadata for WB reference: {e}")
+                            logger.debug(f"Could not apply WB reference: {e}")
 
                     # Store capture in database for historical analysis
                     if self._database is not None:
                         try:
-                            # Load metadata if not already loaded
-                            import json
-
-                            if metadata_path:
-                                with open(metadata_path, "r") as f:
-                                    db_metadata = json.load(f)
-                            else:
-                                db_metadata = {}
+                            db_metadata = capture_metadata if capture_metadata is not None else {}
 
                             # Get weather data from overlay (if available)
                             weather_data = None

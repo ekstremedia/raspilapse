@@ -132,7 +132,7 @@ class ImageCapture:
             manual_controls: Optional dict of controls to apply during configuration.
                            These override config file controls.
         """
-        logger.info("Initializing camera...")
+        logger.debug("Initializing camera...")
 
         try:
             from picamera2 import Picamera2
@@ -151,7 +151,7 @@ class ImageCapture:
 
             # Create camera configuration
             resolution = self.config.get_resolution()
-            logger.info(f"Setting camera resolution to {resolution[0]}x{resolution[1]}")
+            logger.debug(f"Setting camera resolution to {resolution[0]}x{resolution[1]}")
 
             # Prepare controls - merge manual_controls with config controls
             controls_to_apply = {}
@@ -222,13 +222,13 @@ class ImageCapture:
             logger.debug("Camera configured")
 
             self.picam2.start()
-            logger.info("Camera started")
+            logger.debug("Camera started")
 
             # Allow camera to stabilize
             logger.debug("Waiting for camera to stabilize (2 seconds)...")
             time.sleep(2)
 
-            logger.info("Camera initialization complete")
+            logger.debug("Camera initialization complete")
 
         except Exception as e:
             logger.error(f"Failed to initialize camera: {e}")
@@ -430,7 +430,7 @@ class ImageCapture:
             logger.error("Camera not initialized. Call initialize_camera() first.")
             raise RuntimeError("Camera not initialized. Call initialize_camera() first.")
 
-        logger.info(f"Starting image capture #{self._counter}")
+        logger.debug(f"Starting image capture #{self._counter}")
 
         try:
             # Prepare output directory
@@ -497,15 +497,15 @@ class ImageCapture:
 
             # Apply overlay if enabled (do this after release to avoid holding camera)
             if self.overlay.enabled and metadata_dict is not None:
-                logger.info(f"Applying overlay to {output_path} (mode: {mode})...")
+                logger.debug(f"Applying overlay to {output_path} (mode: {mode})...")
                 result = self.overlay.apply_overlay(str(output_path), metadata_dict, mode)
                 if result:
-                    logger.info(f"Overlay applied successfully")
+                    logger.debug(f"Overlay applied successfully")
                 else:
                     logger.warning(f"Overlay application returned None/False")
             else:
                 if not self.overlay.enabled:
-                    logger.info("Overlay is disabled")
+                    logger.debug("Overlay is disabled")
                 if metadata_dict is None:
                     logger.warning("No metadata available for overlay")
 
@@ -567,7 +567,7 @@ class ImageCapture:
     def close(self):
         """Close and cleanup camera resources."""
         if self.picam2:
-            logger.info("Closing camera...")
+            logger.debug("Closing camera...")
             self.picam2.close()
             self.picam2 = None
             logger.debug("Camera closed successfully")

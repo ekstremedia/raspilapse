@@ -79,11 +79,11 @@ sudo systemctl status raspilapse
 - `src/auto_timelapse.py` - Added `_calculate_exposure_from_brightness()` method
 - `docs/CLAUDE.md` - Added "Direct Brightness Control" section
 - `ML.md` - Added deprecation notice
-- `UPGRADE.md` - Instructions for updating other Pis
+- `Update.md` - Instructions for updating other Pis
 
 ## For Other Pis
 
-See `UPGRADE.md` for instructions on updating other Raspberry Pis to use direct brightness control.
+See `Update.md` for instructions on updating other Raspberry Pis to use direct brightness control.
 
 ## Rollback
 
