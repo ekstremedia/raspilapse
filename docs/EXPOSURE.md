@@ -194,5 +194,7 @@ python3 scripts/db_graphs.py 24h    # brightness.png, exposure_gain.png, white_b
 tail -f logs/auto_timelapse.log
 ```
 
-Every frame's metadata JSON carries a `diagnostics` block with the mode, lux,
-target, what the controller decided and what was applied.
+Set `adaptive_timelapse.diagnostics.enabled: true` and every frame's metadata
+JSON gains a `diagnostics` block with the mode, lux, target, what the controller
+decided and what was applied. It ships disabled: the brightness analysis it does
+costs 100-300 ms per capture.

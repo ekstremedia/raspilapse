@@ -231,8 +231,11 @@ for 24/7 running.
 Check `logging.console` is `auto`. Set to `true` under systemd it writes every
 line twice, once to `logs/` and once to the journal.
 
-Rotation is `logging.max_size_mb` × `logging.backup_count`, per logger. The
-defaults (5 MB × 2) cap `logs/` at about 100 MB across all of them.
+Rotation is per logger: `logging.max_size_mb` for the live file plus
+`logging.backup_count` rotations, so the defaults give 5 MB x 3 = 15 MB each.
+Eleven loggers write today, so the worst case for `logs/` is around 165 MB —
+though only auto_timelapse, capture_image, overlay and weather get anywhere
+near their limit in practice.
 
 ---
 

@@ -34,6 +34,10 @@ highlight protection, which is new and can be turned off in config.
 - **Highlight protection** (`adaptive_timelapse.highlight_protection`). Lowers the
   brightness target when the top of the histogram nears clipping, so bright skies
   keep detail. Off at night by default. `enabled: false` reverts.
+  Not to be confused with the p95 protection listed under 1.3.0: that one scaled
+  the *exposure*, lived in the now-deleted ML path, and never reached the camera.
+  This one scales the *target*, which is what makes its equilibrium independent
+  of `brightness_damping`.
 - **`scripts/install.sh` as the single entry point**, with `--only`, `--check`,
   `--dry-run`, `--uninstall` and `--with-watchdog`. It renders `systemd/*.in`
   templates rather than copying units that hardcode `pi` and `/home/pi`.
@@ -75,7 +79,7 @@ highlight protection, which is new and can be turned off in config.
 ### Changed
 - SQLite runs in WAL mode. Three unused indexes dropped (26 MB on a 515k-row
   database, three fewer B-tree writes per capture).
-- `auto_timelapse.py` is 983 lines, down from 3,230.
+- `auto_timelapse.py` is under 1,000 lines, down from 3,230.
 - ruff replaces flake8 and pylint, and the CI lint step can now fail -- it was
   `--exit-zero` *and* `continue-on-error`.
 - black pinned to one version across `requirements-dev.txt`, `pyproject.toml` and

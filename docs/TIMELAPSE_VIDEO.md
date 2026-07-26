@@ -69,9 +69,6 @@ video:
   # %Y = 4-digit year, %m = 2-digit month
   date_format: "%Y/%m"
 
-  # Video filename pattern
-  # Available placeholders: {name}, {start_date}, {end_date}
-  filename_pattern: "{name}_{start_date}_to_{end_date}.mp4"
 
   # Video codec settings
   codec:
@@ -86,7 +83,7 @@ video:
     # ultrafast = fastest, lowest memory, acceptable quality
     # fast = good balance
     # slow = best quality, highest memory (may OOM on 4K)
-    preset: "ultrafast"
+    preset: "fast"
 
     # Thread count (lower = less memory, slower encoding)
     # 2 = safe for Pi with 4GB RAM doing 4K
@@ -94,7 +91,7 @@ video:
 
     # Constant Rate Factor (0-51, lower = better quality)
     # 18 = visually lossless, 23 = good quality, 28 = acceptable
-    crf: 23
+    crf: 25
 
   # Frame rate (frames per second)
   # 25 fps = smooth European standard
@@ -133,8 +130,10 @@ video:
 python3 src/make_timelapse.py [OPTIONS]
 
 Time Selection:
-  --start TIME        Start time in HH:MM format (default: from config or 05:00)
-  --end TIME          End time in HH:MM format (default: from config or 05:00)
+  --start TIME        Start time in HH:MM format (default: from config, else 00:00)
+  --end TIME          End time in HH:MM format (default: from config, else now)
+  -hd, --hd           Scale output to 1080p (1920x1080)
+  -hw, --hw           Use the hardware H264 encoder (h264_v4l2m2m)
   --start-date DATE   Start date in YYYY-MM-DD format (default: auto-determined)
   --end-date DATE     End date in YYYY-MM-DD format (default: today)
   --today             Both start and end on today's date
@@ -183,7 +182,7 @@ The script searches for images:
 Uses `ffmpeg` to create the video:
 1. Creates temporary file list of all images
 2. Runs `ffmpeg` with concat demuxer
-3. Applies codec settings (H.264, CRF 20, yuv420p)
+3. Applies codec settings (H.264, CRF 25, yuv420p)
 4. Generates video at specified frame rate
 5. Saves to configured output directory
 
@@ -206,7 +205,7 @@ Configuration
 ──────────────────────────────────────────────────────────────────────
   Image directory: /var/www/html/images
   Project name: kringelen
-  Video settings: 25 fps, libx264, CRF 20
+  Video settings: 25 fps, libx264, CRF 25
 
 Searching for Images
 ──────────────────────────────────────────────────────────────────────
@@ -218,7 +217,7 @@ Generating Video
 ──────────────────────────────────────────────────────────────────────
   Images: 1440 frames
   Frame rate: 25 fps
-  Codec: libx264 (CRF 20)
+  Codec: libx264 (CRF 25)
   Pixel format: yuv420p
   Video duration: 57.6s (0.96 minutes)
 
@@ -333,7 +332,7 @@ Approximate processing time on Raspberry Pi 4/5:
 
 ### File Sizes
 
-Expected output file sizes (CRF 23, 25 fps, ultrafast preset):
+Expected output file sizes (CRF 25, 25 fps, fast preset):
 
 | Resolution | Video Duration | Images | File Size |
 |------------|---------------|--------|-----------|
@@ -349,7 +348,7 @@ Expected output file sizes (CRF 23, 25 fps, ultrafast preset):
 ```yaml
 video:
   codec:
-    preset: "ultrafast"  # ~500MB RAM
+    preset: "fast"  # ~500MB RAM
     threads: 2           # Limits parallel memory usage
 ```
 
@@ -391,7 +390,7 @@ With these settings, 4K encoding uses ~1-1.5GB RAM (safe for 4GB Pi).
    ```yaml
    video:
      codec:
-       preset: "ultrafast"  # Lowest memory usage
+       preset: "fast"  # Lowest memory usage
        threads: 2           # Limit parallel processing
    ```
 
@@ -435,7 +434,7 @@ video:
   codec:
     name: "libx265"      # H.265 for better compression
     pixel_format: "yuv420p"
-    crf: 23              # Slightly lower quality, much smaller files
+    crf: 25              # Slightly lower quality, much smaller files
   fps: 30                # Smoother playback
 ```
 
@@ -460,17 +459,12 @@ for day in {0..6}; do
 done
 ```
 
-### Scheduling with Cron
+### Scheduling
 
-Generate daily timelapse at 04:00:
-
-```bash
-# Edit crontab
-crontab -e
-
-# Add line:
-0 4 * * * cd /home/pi/raspilapse && python3 src/make_timelapse.py --start 04:00 --end 04:00
-```
+Don't. `raspilapse-daily-video.timer` already does this — installed by
+`./scripts/install.sh`, firing at 05:00, covering 05:00 yesterday to 05:00
+today so a night's captures land in one video rather than being split across
+two. `systemctl list-timers 'raspilapse-*'` shows when it next runs.
 
 ## Integration with Raspilapse
 
