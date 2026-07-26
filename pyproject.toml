@@ -55,7 +55,7 @@ dev = [
     "ruff>=0.14.0",
     # Pinned exactly: black's stable style changes between yearly releases, so
     # a floating version guarantees CI rejects locally-formatted code.
-    "black==26.1.0",
+    "black==25.11.0",
     "mypy>=1.0.0",
     "packaging>=21.0",
 ]

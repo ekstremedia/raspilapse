@@ -15,7 +15,10 @@ ruff>=0.14.0
 # Pinned exactly, not >=: black's stable style changes between yearly releases,
 # so a floating version means locally-formatted code gets rejected by CI.
 # Keep this in step with .pre-commit-config.yaml and pyproject.toml.
-black==26.1.0
+#
+# Must also support the oldest Python in the CI matrix. black 26.x requires
+# >=3.10; 25.11.0 is the newest that still runs on 3.9.
+black==25.11.0
 
 # Type checking (advisory; the codebase is not fully annotated)
 mypy>=1.0.0
