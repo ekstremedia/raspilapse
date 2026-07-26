@@ -627,8 +627,8 @@ weather:
   # Enable/disable weather data fetching
   enabled: false
 
-  # Netatmo API endpoint URL
-  # Example: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
+  # Netatmo API endpoint URL. Expects JSON with a "modules" array; see docs/WEATHER.md.
+  # Example: "https://example.com/api/netatmo/stations/<your-station-id>"
   endpoint:
 
   # Cache duration in seconds (how long to keep weather data before refreshing)
