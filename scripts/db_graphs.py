@@ -274,8 +274,13 @@ def find_mode_zones(
     return zones
 
 
-def add_mode_shading(ax, zones: List[Tuple], y_min: float, y_max: float):
-    """Add colored background zones for day/night/transition modes."""
+def add_mode_shading(ax, zones: List[Tuple]):
+    """Shade the background by light mode.
+
+    axvspan covers the full height of the axis, so no y bounds are needed --
+    they used to be parameters and were silently ignored, while every call site
+    computed them first.
+    """
     for start, end, mode in zones:
         if mode in MODE_COLORS:
             color, alpha = MODE_COLORS[mode]
@@ -326,10 +331,12 @@ def create_lux_graph(data: Dict, output_dir: Path, time_desc: str):
 
     # Add mode zone shading
     zones = find_mode_zones(timestamps, modes)
+    add_mode_shading(ax, zones)
+
+    # Still needed for set_ylim below, just not by add_mode_shading.
     positive = [v for v in lux if v > 0]
     min_lux = max(0.01, min(positive)) if positive else 0.01
     max_lux = max(lux) if lux else 100000
-    add_mode_shading(ax, zones, min_lux, max_lux)
 
     # Plot smoothed lux line
     ax.plot(
@@ -411,7 +418,7 @@ def create_exposure_gain_graph(data: Dict, output_dir: Path, time_desc: str):
 
     # Add mode zone shading
     zones = find_mode_zones(timestamps, modes)
-    add_mode_shading(ax1, zones, 0, max(exposure) if exposure else 1)
+    add_mode_shading(ax1, zones)
 
     # Plot smoothed exposure time
     ax1.semilogy(
@@ -1063,8 +1070,7 @@ def create_white_balance_graph(data: Dict, output_dir: Path, time_desc: str):
 
     # Top panel: red and blue gains. Manual WB holds these steady in day mode;
     # visible drift means AWB is running or the seeded reference changed.
-    valid_gains = [g for g in gains_r + gains_b if g is not None]
-    add_mode_shading(ax1, zones, 0, max(valid_gains) if valid_gains else 1)
+    add_mode_shading(ax1, zones)
 
     ax1.plot(
         timestamps,
@@ -1092,7 +1098,7 @@ def create_white_balance_graph(data: Dict, output_dir: Path, time_desc: str):
     # Bottom panel: colour temperature as the ISP reported it.
     valid_temps = [t for t in temps if t]
     if valid_temps:
-        add_mode_shading(ax2, zones, min(valid_temps), max(valid_temps))
+        add_mode_shading(ax2, zones)
         ax2.plot(
             timestamps,
             smooth_data([t if t else float("nan") for t in temps]),

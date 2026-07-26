@@ -6,6 +6,7 @@ and keys nobody read were still documented as if they did something. These
 tests fail on either kind of drift.
 """
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -65,6 +66,49 @@ def test_example_parses(example_config):
     assert example_config, "config.example.yml is empty"
 
 
+def _attributes_never_loaded():
+    """Return `self.<attr>` names that are assigned but never read, per file.
+
+    An attribute written and never read is dead, and so is whatever config key
+    fed it. `brightness_tolerance` survived the previous pass exactly this way:
+    the key was read into `self._brightness_tolerance`, nothing ever looked at
+    it, and a check for "does the name appear in the source" saw the string in
+    the `.get()` call and passed.
+    """
+    dead = {}
+    for directory in CODE_DIRS:
+        for path in sorted(directory.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            tree = ast.parse(path.read_text())
+            # Any attribute read, whatever the receiver -- DatabaseConfig sets
+            # self.db_path and CaptureDatabase reads it as self.config.db_path,
+            # so restricting this to `self.X` would call it dead.
+            loaded = {
+                n.attr
+                for n in ast.walk(tree)
+                if isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Load)
+            }
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)):
+                    continue
+                fn = node.value.func
+                if not (isinstance(fn, ast.Attribute) and fn.attr == "get" and node.value.args):
+                    continue
+                key = node.value.args[0]
+                if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                    continue
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "self"
+                        and target.attr not in loaded
+                    ):
+                        dead[key.value] = f"{path}:{node.lineno} self.{target.attr}"
+    return dead
+
+
 def test_every_documented_key_is_read_somewhere(example_config, code_text):
     """A key in the example that no code reads is a promise the code doesn't keep."""
     quoted = set(re.findall(r"""["']([a-zA-Z_][a-zA-Z_0-9]*)["']""", code_text))
@@ -81,6 +125,23 @@ def test_every_documented_key_is_read_somewhere(example_config, code_text):
         "config.example.yml documents keys nothing reads:\n  "
         + "\n  ".join(sorted(unread))
         + "\nRemove them, or add them to ALLOWED_UNUSED with a reason."
+    )
+
+
+def test_no_documented_key_feeds_a_dead_attribute(example_config):
+    """Being read is not enough -- the value has to go somewhere that matters.
+
+    Catches the case the test above cannot: a key read into an attribute that
+    nothing ever loads. The key looks live because its name appears in the
+    source, but changing it in config has no effect whatsoever.
+    """
+    dead = _attributes_never_loaded()
+    documented = {p.split(".")[-1] for p in _leaf_paths(example_config)}
+
+    offenders = sorted(f"{key}  ->  {where}" for key, where in dead.items() if key in documented)
+    assert not offenders, (
+        "config.example.yml documents keys whose value is read into an attribute "
+        "that is never used:\n  " + "\n  ".join(offenders)
     )
 
 

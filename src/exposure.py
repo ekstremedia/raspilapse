@@ -161,10 +161,6 @@ class ExposureController:
 
         # Brightness feedback config
         self._target_brightness = transition_config.get("target_brightness", 120)
-        self._brightness_tolerance = transition_config.get("brightness_tolerance", 40)
-        self._brightness_feedback_strength = transition_config.get(
-            "brightness_feedback_strength", 0.3
-        )
 
         # Contrast-aware brightness target (overcast boost)
         bt_config = adaptive_config.get("brightness_target", {})
@@ -297,20 +293,12 @@ class ExposureController:
         return self._last_brightness
 
     @property
-    def last_exposure_time(self) -> Optional[float]:
-        return self._last_exposure_time
-
-    @property
     def transition_seeded(self) -> bool:
         return self._transition_seeded
 
     @property
     def seed_exposure(self) -> Optional[float]:
         return self._seed_exposure
-
-    @property
-    def last_decision(self) -> Dict:
-        return dict(self._last_decision)
 
     def diagnostics(self) -> Dict:
         """Everything worth writing into a frame's metadata JSON."""

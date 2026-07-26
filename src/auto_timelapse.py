@@ -85,8 +85,6 @@ class AdaptiveTimelapse:
         self._civil_twilight_threshold = -6.0  # Default: Civil twilight
         self._init_location()
 
-        self._frame_interval = self.config.get("adaptive_timelapse", {}).get("interval", 30)
-
         # Database storage for capture history
         self._database = None
         self._init_database()

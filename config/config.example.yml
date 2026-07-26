@@ -333,17 +333,6 @@ adaptive_timelapse:
     # Higher = brighter images, lower = darker images
     target_brightness: 120
 
-    # Brightness tolerance (pixels within target ± tolerance are acceptable)
-    # Larger tolerance = less correction, more stable
-    # Smaller tolerance = more correction, may cause subtle fluctuations
-    brightness_tolerance: 40
-
-    # Brightness feedback strength (0.0-1.0)
-    # How quickly the correction factor adjusts per frame
-    # Lower = smoother but slower to correct (recommended: 0.1-0.3)
-    # Higher = faster correction but may cause subtle jumps
-    brightness_feedback_strength: 0.2
-
     # === OVEREXPOSURE FAST RAMP-DOWN ===
     # When overexposure is detected (brightness > 180 or >10% clipped pixels),
     # exposure ramps down faster to prevent the "light flash" at dawn.

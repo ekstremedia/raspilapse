@@ -300,18 +300,6 @@ class ImageCapture:
 
         return control_map
 
-    def _apply_controls(self, controls: Dict):
-        """
-        Apply camera controls to an already-started camera (legacy method).
-
-        Args:
-            controls: Dictionary of control settings
-        """
-        control_map = self._prepare_control_map(controls)
-        if control_map:
-            logger.debug(f"Applying controls to camera: {control_map}")
-            self.picam2.set_controls(control_map)
-
     def _compute_brightness_from_lores(self, request) -> Dict:
         """
         Compute brightness metrics from the lores stream.
@@ -551,19 +539,6 @@ class ImageCapture:
             json.dump(metadata, f, indent=2, default=str)
 
         return str(metadata_path)
-
-    def _save_metadata(self, image_path: Path) -> str:
-        """
-        Save capture metadata (legacy method using capture_metadata()).
-
-        Args:
-            image_path: Path to captured image
-
-        Returns:
-            Path to metadata file
-        """
-        metadata = self.picam2.capture_metadata()
-        return self._save_metadata_from_dict(image_path, metadata)
 
     def close(self):
         """Close and cleanup camera resources."""
