@@ -77,46 +77,46 @@ class TestDynamicTargetBrightness:
 
     def test_sunny_day_no_boost(self, timelapse):
         """High std_brightness (sunny) should return base target."""
-        timelapse._last_mode = LightMode.DAY
-        result = timelapse._get_dynamic_target_brightness(50.0)
+        timelapse.exposure._last_mode = LightMode.DAY
+        result = timelapse.exposure._get_dynamic_target_brightness(50.0)
         assert result == 120
 
     def test_overcast_full_boost(self, timelapse):
         """Low std_brightness (overcast) should return boosted target."""
-        timelapse._last_mode = LightMode.DAY
-        result = timelapse._get_dynamic_target_brightness(20.0)
+        timelapse.exposure._last_mode = LightMode.DAY
+        result = timelapse.exposure._get_dynamic_target_brightness(20.0)
         assert result == 135  # 120 + 15
 
     def test_very_low_contrast_capped(self, timelapse):
         """Very low contrast should be capped at max_target."""
-        timelapse._last_mode = LightMode.DAY
-        result = timelapse._get_dynamic_target_brightness(5.0)
+        timelapse.exposure._last_mode = LightMode.DAY
+        result = timelapse.exposure._get_dynamic_target_brightness(5.0)
         assert result == 135  # 120 + 15, capped at 140 but 135 < 140
 
     def test_max_target_cap(self, timelapse):
         """Boost should not exceed max_target."""
-        timelapse._overcast_boost = 30  # Would give 120 + 30 = 150
-        timelapse._last_mode = LightMode.DAY
-        result = timelapse._get_dynamic_target_brightness(10.0)
+        timelapse.exposure._overcast_boost = 30  # Would give 120 + 30 = 150
+        timelapse.exposure._last_mode = LightMode.DAY
+        result = timelapse.exposure._get_dynamic_target_brightness(10.0)
         assert result == 140  # Capped at max_target
 
     def test_at_low_threshold(self, timelapse):
         """At exactly the low threshold, should get full boost."""
-        timelapse._last_mode = LightMode.DAY
-        result = timelapse._get_dynamic_target_brightness(25.0)
+        timelapse.exposure._last_mode = LightMode.DAY
+        result = timelapse.exposure._get_dynamic_target_brightness(25.0)
         assert result == 135  # Full boost
 
     def test_at_high_threshold(self, timelapse):
         """At exactly the high threshold, should get no boost."""
-        timelapse._last_mode = LightMode.DAY
-        result = timelapse._get_dynamic_target_brightness(40.0)
+        timelapse.exposure._last_mode = LightMode.DAY
+        result = timelapse.exposure._get_dynamic_target_brightness(40.0)
         assert result == 120  # No boost
 
     def test_midpoint_interpolation(self, timelapse):
         """Midpoint between thresholds should give ~half boost."""
-        timelapse._last_mode = LightMode.DAY
+        timelapse.exposure._last_mode = LightMode.DAY
         # Midpoint of 25 and 40 is 32.5
-        result = timelapse._get_dynamic_target_brightness(32.5)
+        result = timelapse.exposure._get_dynamic_target_brightness(32.5)
         # t = (32.5 - 25) / (40 - 25) = 0.5
         # boost = 15 * (1 - 0.5) = 7.5
         # target = 120 + 7.5 = 127.5, rounded to 128
@@ -124,40 +124,40 @@ class TestDynamicTargetBrightness:
 
     def test_night_mode_no_boost(self, timelapse):
         """Night mode should always return base target, regardless of std."""
-        timelapse._last_mode = LightMode.NIGHT
-        result = timelapse._get_dynamic_target_brightness(10.0)
+        timelapse.exposure._last_mode = LightMode.NIGHT
+        result = timelapse.exposure._get_dynamic_target_brightness(10.0)
         assert result == 120  # No boost in night mode
 
     def test_transition_mode_gets_boost(self, timelapse):
         """Transition mode should get boost like day mode."""
-        timelapse._last_mode = LightMode.TRANSITION
-        result = timelapse._get_dynamic_target_brightness(20.0)
+        timelapse.exposure._last_mode = LightMode.TRANSITION
+        result = timelapse.exposure._get_dynamic_target_brightness(20.0)
         assert result == 135  # Full boost
 
     def test_none_std_returns_base(self, timelapse):
         """None std_brightness should return base target."""
-        timelapse._last_mode = LightMode.DAY
-        result = timelapse._get_dynamic_target_brightness(None)
+        timelapse.exposure._last_mode = LightMode.DAY
+        result = timelapse.exposure._get_dynamic_target_brightness(None)
         assert result == 120
 
     def test_negative_std_returns_base(self, timelapse):
         """Negative std_brightness should return base target."""
-        timelapse._last_mode = LightMode.DAY
-        result = timelapse._get_dynamic_target_brightness(-5.0)
+        timelapse.exposure._last_mode = LightMode.DAY
+        result = timelapse.exposure._get_dynamic_target_brightness(-5.0)
         assert result == 120
 
     def test_zero_std_returns_boosted(self, timelapse):
         """Zero std (completely flat image) should get full boost."""
-        timelapse._last_mode = LightMode.DAY
-        result = timelapse._get_dynamic_target_brightness(0.0)
+        timelapse.exposure._last_mode = LightMode.DAY
+        result = timelapse.exposure._get_dynamic_target_brightness(0.0)
         assert result == 135
 
     def test_no_mode_set_returns_base(self, timelapse):
         """When no mode has been set yet, return base target."""
-        timelapse._last_mode = None
+        timelapse.exposure._last_mode = None
         # _last_mode is None, not NIGHT, so it won't trigger the night guard
         # But the method should still work (None != NIGHT)
-        result = timelapse._get_dynamic_target_brightness(20.0)
+        result = timelapse.exposure._get_dynamic_target_brightness(20.0)
         assert result == 135  # Still gets boost since mode is not NIGHT
 
 
@@ -206,16 +206,16 @@ class TestConfigLoading:
         (tmp_path / "output").mkdir(exist_ok=True)
         tl = AdaptiveTimelapse(str(config_path))
 
-        assert tl._base_target_brightness == 120
-        assert tl._overcast_boost == 15
-        assert tl._max_target_brightness == 140
-        assert tl._contrast_threshold_low == 25
-        assert tl._contrast_threshold_high == 40
+        assert tl.exposure._base_target_brightness == 120
+        assert tl.exposure._overcast_boost == 15
+        assert tl.exposure._max_target_brightness == 140
+        assert tl.exposure._contrast_threshold_low == 25
+        assert tl.exposure._contrast_threshold_high == 40
 
     def test_custom_config(self, timelapse):
         """Test that custom brightness_target config is loaded."""
-        assert timelapse._base_target_brightness == 120
-        assert timelapse._overcast_boost == 15
-        assert timelapse._max_target_brightness == 140
-        assert timelapse._contrast_threshold_low == 25
-        assert timelapse._contrast_threshold_high == 40
+        assert timelapse.exposure._base_target_brightness == 120
+        assert timelapse.exposure._overcast_boost == 15
+        assert timelapse.exposure._max_target_brightness == 140
+        assert timelapse.exposure._contrast_threshold_low == 25
+        assert timelapse.exposure._contrast_threshold_high == 40
