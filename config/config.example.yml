@@ -657,6 +657,21 @@ database:
   # Automatically create directories if they don't exist
   create_directories: true
 
+  # Delete capture rows older than this many days. 0 keeps everything.
+  #
+  # Rows outlive their JPEGs on purpose -- images go after 7 days (see
+  # scripts/cleanup_old_images.sh) while the rows keep the lux, brightness and
+  # weather history the graphs are drawn from, so only image_path goes stale.
+  #
+  # 180 days is a full seasonal cycle, which is what makes the solar-pattern
+  # graphs worth having at high latitudes. At a 30s interval a year is roughly
+  # 1 million rows and about 200 MB.
+  #
+  # Pruning runs from raspilapse-cleanup.timer. Space is only handed back to
+  # the filesystem by an explicit `python3 src/database.py --vacuum`, which is
+  # slow and needs free disk equal to the database size.
+  retention_days: 180
+
 # Barentswatch Ship Tracking Overlay
 # Shows ships in the camera's field of view (from pi-overlay-data service)
 barentswatch:

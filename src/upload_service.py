@@ -38,8 +38,10 @@ if project_root not in sys.path:
 
 try:
     from src.logging_config import get_logger
+    from src.database import apply_schema
 except ImportError:
     from logging_config import get_logger
+    from database import apply_schema
 
 # Exponential backoff settings
 BASE_RETRY_DELAY_MINUTES = 5
@@ -123,36 +125,19 @@ class UploadService:
                     pass
 
     def _ensure_table_exists(self) -> bool:
-        """Ensure the upload_queue table exists."""
+        """Ensure the upload_queue table and its indexes exist.
+
+        Applies database.apply_schema to this service's own connection rather
+        than carrying a second copy of the DDL. The two copies had already
+        drifted: this one predated the v4 composite index, so whichever process
+        opened the file first decided which indexes existed, leaving the schema
+        pinned at v3.
+        """
         try:
             with self._get_connection() as conn:
                 if conn is None:
                     return False
-
-                cursor = conn.cursor()
-                cursor.execute(
-                    """CREATE TABLE IF NOT EXISTS upload_queue (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        video_date DATE NOT NULL UNIQUE,
-                        video_path TEXT NOT NULL,
-                        keogram_path TEXT,
-                        slitscan_path TEXT,
-                        status TEXT DEFAULT 'pending',
-                        retry_count INTEGER DEFAULT 0,
-                        max_retries INTEGER DEFAULT 5,
-                        created_at TEXT DEFAULT (datetime('now')),
-                        last_attempt_at TEXT,
-                        next_retry_at TEXT,
-                        completed_at TEXT,
-                        last_error TEXT,
-                        server_response TEXT
-                    )"""
-                )
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_upload_queue_status ON upload_queue(status)"
-                )
-                conn.commit()
-                return True
+                return apply_schema(conn, wal=self.db_path != ":memory:")
         except Exception as e:
             self.logger.error(f"[Upload] Failed to ensure table exists: {e}")
             return False

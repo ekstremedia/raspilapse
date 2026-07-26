@@ -9,7 +9,10 @@ Type=oneshot
 User=@USER@
 Group=@GROUP@
 WorkingDirectory=@PROJECT_DIR@
+# Type=oneshot runs these in order: expired images off disk, then expired rows
+# out of the database. Both are no-ops when their retention is disabled.
 ExecStart=/bin/bash @PROJECT_DIR@/scripts/cleanup_old_images.sh
+ExecStart=@PYTHON@ @PROJECT_DIR@/src/database.py --prune
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=raspilapse-cleanup

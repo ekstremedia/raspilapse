@@ -343,11 +343,12 @@ class ImageCapture:
             median_brightness = float(np.median(gray))
             std_brightness = float(np.std(gray))
 
-            # Percentiles for exposure analysis
-            p5 = float(np.percentile(gray, 5))
-            p10 = float(np.percentile(gray, 10))
-            p90 = float(np.percentile(gray, 90))
-            p95 = float(np.percentile(gray, 95))
+            # Percentiles for exposure analysis. p5/p95 drive the shadow and
+            # highlight checks; p25/p75 are the interquartile range, and are
+            # what the brightness_p25/p75 database columns expect -- this used
+            # to emit p10/p90, so both columns were NULL on every row ever
+            # written, and nothing else read them.
+            p5, p25, p75, p95 = (float(v) for v in np.percentile(gray, [5, 25, 75, 95]))
 
             # Under/overexposure percentages
             total_pixels = gray.size
@@ -359,8 +360,8 @@ class ImageCapture:
                 "median_brightness": round(median_brightness, 2),
                 "std_brightness": round(std_brightness, 2),
                 "percentile_5": round(p5, 2),
-                "percentile_10": round(p10, 2),
-                "percentile_90": round(p90, 2),
+                "percentile_25": round(p25, 2),
+                "percentile_75": round(p75, 2),
                 "percentile_95": round(p95, 2),
                 "underexposed_percent": round(underexposed, 2),
                 "overexposed_percent": round(overexposed, 2),
