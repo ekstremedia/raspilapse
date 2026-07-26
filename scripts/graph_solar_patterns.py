@@ -7,9 +7,9 @@ helping visualize how light conditions change at different times of day
 and track the polar winter recovery.
 
 Usage:
-    python src/graph_ml_patterns.py
-    python src/graph_ml_patterns.py --days 14
-    python src/graph_ml_patterns.py --output graphs/daily_solar_patterns.png
+    python scripts/graph_solar_patterns.py
+    python scripts/graph_solar_patterns.py --days 14
+    python scripts/graph_solar_patterns.py --output graphs/daily_solar_patterns.png
 """
 
 import argparse

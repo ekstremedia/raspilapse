@@ -21,140 +21,18 @@ class TestBrightnessZones:
         assert BrightnessZones.WARNING_LOW == 80
         assert BrightnessZones.EMERGENCY_LOW == 60
 
-    def test_brightness_zone_factors(self):
-        """Test that correction factors are properly defined."""
+    def test_zones_are_ordered(self):
+        """The landmarks must stay monotonic for the mode override to make sense."""
         from src.auto_timelapse import BrightnessZones
 
-        # Factors for overexposure should reduce exposure (< 1.0)
-        assert BrightnessZones.EMERGENCY_HIGH_FACTOR < 1.0
-        assert BrightnessZones.WARNING_HIGH_FACTOR < 1.0
-
-        # Factors for underexposure should increase exposure (> 1.0)
-        assert BrightnessZones.WARNING_LOW_FACTOR > 1.0
-        assert BrightnessZones.EMERGENCY_LOW_FACTOR > 1.0
-        assert BrightnessZones.CRITICAL_LOW_FACTOR > BrightnessZones.EMERGENCY_LOW_FACTOR
-
-
-class TestEmergencyBrightnessFactor:
-    """Tests for _get_emergency_brightness_factor method."""
-
-    @pytest.fixture
-    def timelapse(self, tmp_path):
-        """Create a minimal AdaptiveTimelapse instance for testing."""
-        # Create minimal config file
-        config = {
-            "adaptive_timelapse": {
-                "night_mode": {"max_exposure_time": 20.0, "analogue_gain": 8.0},
-                "day_mode": {"exposure_time": 0.02},
-                "light_thresholds": {"night": 3, "day": 80},
-                "transition_mode": {
-                    "target_brightness": 120,
-                    "brightness_tolerance": 40,
-                    "brightness_feedback_strength": 0.3,
-                },
-            },
-            "output": {"directory": str(tmp_path / "output")},
-            "camera": {"resolution": [1920, 1080]},
-        }
-
-        config_path = tmp_path / "config.yml"
-        with open(config_path, "w") as f:
-            yaml.dump(config, f)
-
-        # Create output directory
-        (tmp_path / "output").mkdir(exist_ok=True)
-
-        from src.auto_timelapse import AdaptiveTimelapse
-
-        timelapse = AdaptiveTimelapse(str(config_path))
-        return timelapse
-
-    def test_emergency_high_factor(self, timelapse):
-        """Test emergency factor converges for severe overexposure."""
-        from src.auto_timelapse import BrightnessZones
-
-        # Test severe overexposure (>180) - factor should converge towards 0.7
-        # With smoothing, need multiple calls to approach target
-        for _ in range(20):
-            factor = timelapse._get_emergency_brightness_factor(200)
-
-        # Should have converged close to target (within 10%)
-        assert factor < 0.8  # Moving towards 0.7
-        assert factor > BrightnessZones.EMERGENCY_HIGH_FACTOR - 0.05
-
-    def test_warning_high_factor(self, timelapse):
-        """Test emergency factor converges for moderate overexposure."""
-        from src.auto_timelapse import BrightnessZones
-
-        # Test moderate overexposure (>160, <=180) - factor should converge towards 0.85
-        for _ in range(20):
-            factor = timelapse._get_emergency_brightness_factor(170)
-
-        # Should have converged close to target
-        assert factor < 0.9  # Moving towards 0.85
-        assert factor > BrightnessZones.WARNING_HIGH_FACTOR - 0.05
-
-    def test_no_factor_in_normal_range(self, timelapse):
-        """Test no emergency factor in normal brightness range."""
-        # Test normal range (80-160) - factor should stay at 1.0
-        for _ in range(10):
-            factor = timelapse._get_emergency_brightness_factor(120)
-        assert 0.98 < factor < 1.02
-
-        timelapse._smoothed_emergency_factor = 1.0  # Reset
-        for _ in range(10):
-            factor = timelapse._get_emergency_brightness_factor(100)
-        assert 0.98 < factor < 1.02
-
-        timelapse._smoothed_emergency_factor = 1.0  # Reset
-        for _ in range(10):
-            factor = timelapse._get_emergency_brightness_factor(150)
-        assert 0.98 < factor < 1.02
-
-    def test_warning_low_factor(self, timelapse):
-        """Test emergency factor converges for moderate underexposure."""
-        from src.auto_timelapse import BrightnessZones
-
-        # Test moderate underexposure (<80, >=60) - factor should converge towards 1.2
-        for _ in range(20):
-            factor = timelapse._get_emergency_brightness_factor(70)
-
-        # Should have converged close to target
-        assert factor > 1.1  # Moving towards 1.2
-        assert factor < BrightnessZones.WARNING_LOW_FACTOR + 0.05
-
-    def test_emergency_low_factor(self, timelapse):
-        """Test emergency factor converges for severe underexposure."""
-        from src.auto_timelapse import BrightnessZones
-
-        # Test severe underexposure (40-60) - factor should converge towards EMERGENCY_LOW_FACTOR
-        for _ in range(20):
-            factor = timelapse._get_emergency_brightness_factor(50)
-
-        # Should have converged close to target
-        assert factor > 1.5  # Moving towards 2.0
-        assert factor < BrightnessZones.EMERGENCY_LOW_FACTOR + 0.1
-
-    def test_critical_low_factor(self, timelapse):
-        """Test emergency factor converges for critical underexposure (Arctic twilight)."""
-        from src.auto_timelapse import BrightnessZones
-
-        # Test critical underexposure (<40) - factor should converge towards CRITICAL_LOW_FACTOR
-        for _ in range(20):
-            factor = timelapse._get_emergency_brightness_factor(20)
-
-        # Should have converged close to 4.0 target
-        assert factor > 3.0  # Moving towards 4.0
-        assert factor < BrightnessZones.CRITICAL_LOW_FACTOR + 0.1
-
-    def test_none_brightness_decays_towards_1(self, timelapse):
-        """Test that None brightness decays factor towards 1.0."""
-        # Set a non-default factor (below 1.0)
-        timelapse._smoothed_emergency_factor = 0.85
-        factor = timelapse._get_emergency_brightness_factor(None)
-        # Should decay towards 1.0 (factor should increase from 0.85)
-        assert factor > 0.85
-        assert factor < 1.0
+        assert (
+            BrightnessZones.CRITICAL_LOW
+            < BrightnessZones.EMERGENCY_LOW
+            < BrightnessZones.WARNING_LOW
+            < BrightnessZones.TARGET
+            < BrightnessZones.WARNING_HIGH
+            < BrightnessZones.EMERGENCY_HIGH
+        )
 
 
 class TestHybridModeDetection:
@@ -251,75 +129,6 @@ class TestHybridModeDetection:
         timelapse._last_brightness = 150.0
         mode = timelapse.determine_mode(200.0)
         assert mode == LightMode.DAY
-
-
-class TestUrgencyScaledFeedback:
-    """Tests for urgency-scaled brightness feedback."""
-
-    @pytest.fixture
-    def timelapse(self, tmp_path):
-        """Create a minimal AdaptiveTimelapse instance for testing."""
-        config = {
-            "adaptive_timelapse": {
-                "night_mode": {"max_exposure_time": 20.0, "analogue_gain": 8.0},
-                "day_mode": {"exposure_time": 0.02},
-                "light_thresholds": {"night": 3, "day": 80},
-                "transition_mode": {
-                    "target_brightness": 120,
-                    "brightness_tolerance": 40,
-                    "brightness_feedback_strength": 0.3,
-                },
-            },
-            "output": {"directory": str(tmp_path / "output")},
-            "camera": {"resolution": [1920, 1080]},
-        }
-
-        config_path = tmp_path / "config.yml"
-        with open(config_path, "w") as f:
-            yaml.dump(config, f)
-
-        (tmp_path / "output").mkdir(exist_ok=True)
-
-        from src.auto_timelapse import AdaptiveTimelapse
-
-        timelapse = AdaptiveTimelapse(str(config_path))
-        # Initialize last brightness
-        timelapse._last_brightness = None
-        return timelapse
-
-    def test_normal_urgency_small_error(self, timelapse):
-        """Test normal urgency for small brightness error."""
-        # Small error (within tolerance)
-        timelapse._brightness_correction_factor = 1.0
-        timelapse._apply_brightness_feedback(110)  # Error = -10
-
-        # Within tolerance - factor should stay near 1.0 (decay behavior)
-        assert 0.95 <= timelapse._brightness_correction_factor <= 1.05
-
-    def test_elevated_urgency_medium_error(self, timelapse):
-        """Test elevated urgency for medium brightness error."""
-        timelapse._brightness_correction_factor = 1.0
-        initial_factor = timelapse._brightness_correction_factor
-
-        # Medium error (>40)
-        timelapse._apply_brightness_feedback(170)  # Error = 50
-
-        # Factor should decrease (reduce exposure) due to overexposure
-        assert timelapse._brightness_correction_factor < initial_factor
-
-    def test_urgent_correction_large_error(self, timelapse):
-        """Test urgent correction for large brightness error."""
-        timelapse._brightness_correction_factor = 1.0
-        initial_factor = timelapse._brightness_correction_factor
-
-        # Large error (>60)
-        timelapse._apply_brightness_feedback(200)  # Error = 80
-
-        # Factor should decrease significantly
-        change = initial_factor - timelapse._brightness_correction_factor
-
-        # With 3x urgency multiplier, change should be significant
-        assert change > 0.1  # At least 10% change
 
 
 class TestNightModeGainReduction:

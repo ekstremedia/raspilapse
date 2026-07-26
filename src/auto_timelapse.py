@@ -27,17 +27,11 @@ except ImportError:
 try:
     from src.logging_config import configure_logging, get_logger
     from src.capture_image import CameraConfig, ImageCapture
-    from src.ml_exposure_v2 import MLExposurePredictorV2
     from src.database import CaptureDatabase
     from src.system_monitor import SystemMonitor
 except ImportError:
     from logging_config import configure_logging, get_logger
     from capture_image import CameraConfig, ImageCapture
-
-    try:
-        from ml_exposure_v2 import MLExposurePredictorV2
-    except ImportError:
-        MLExposurePredictorV2 = None  # ML v2 module not available
 
     try:
         from database import CaptureDatabase
@@ -61,108 +55,20 @@ class LightMode:
     TRANSITION = "transition"
 
 
-# Emergency brightness zones for fast correction
-# When brightness is severely off-target, apply immediate corrections
 class BrightnessZones:
-    """Brightness thresholds for emergency exposure correction."""
+    """Brightness landmarks on the 0-255 scale.
 
-    EMERGENCY_HIGH = 180  # Severe overexposure - immediate 30% reduction
-    WARNING_HIGH = 160  # Moderate overexposure - 15% reduction
+    WARNING_HIGH and WARNING_LOW drive the hybrid mode override in
+    determine_mode: when the lux reading and the measured brightness disagree
+    badly, brightness wins.
+    """
+
+    EMERGENCY_HIGH = 180  # Severe overexposure
+    WARNING_HIGH = 160  # Moderate overexposure
     TARGET = 120  # Ideal brightness
-    WARNING_LOW = 80  # Moderate underexposure - 20% increase
-    EMERGENCY_LOW = 60  # Severe underexposure - 100% increase
-    CRITICAL_LOW = 40  # Critical underexposure (e.g., Arctic twilight) - 300% increase
-
-    # Emergency correction multipliers (applied directly to exposure)
-    EMERGENCY_HIGH_FACTOR = 0.7  # Reduce exposure by 30%
-    WARNING_HIGH_FACTOR = 0.85  # Reduce by 15%
-    WARNING_LOW_FACTOR = 1.2  # Increase by 20%
-    EMERGENCY_LOW_FACTOR = 2.0  # Increase by 100%
-    CRITICAL_LOW_FACTOR = 4.0  # Increase by 300% for Arctic winter twilight
-
-
-class SustainedDriftCorrector:
-    """
-    Sustained drift correction for ML-first exposure.
-
-    Only applies correction after 3+ consecutive frames show consistent
-    brightness error in the same direction. This prevents frame-to-frame
-    oscillation while still correcting systematic drift.
-
-    Philosophy: Trust ML predictions for smooth transitions, but correct
-    when brightness consistently deviates from target.
-    """
-
-    def __init__(self, threshold_frames: int = 3, min_error: float = 20.0):
-        """
-        Initialize drift corrector.
-
-        Args:
-            threshold_frames: Number of consecutive frames needed to trigger correction
-            min_error: Minimum brightness error to consider (0-255 scale)
-        """
-        self._error_history: List[float] = []
-        self._threshold_frames = threshold_frames
-        self._min_error = min_error
-        self._last_correction = 1.0
-
-    def update(self, brightness: float, target: float = 120.0) -> float:
-        """
-        Update with new brightness reading and return correction factor.
-
-        Args:
-            brightness: Current mean brightness (0-255)
-            target: Target brightness (default 120)
-
-        Returns:
-            Correction factor (1.0 = no correction, <1.0 = reduce exposure,
-            >1.0 = increase exposure)
-        """
-        if brightness is None:
-            return self._last_correction
-
-        error = brightness - target
-        self._error_history.append(error)
-
-        # Keep recent history only (2x threshold for smoothing)
-        max_history = self._threshold_frames * 2
-        if len(self._error_history) > max_history:
-            self._error_history = self._error_history[-max_history:]
-
-        # Check for sustained drift (threshold_frames consecutive errors same direction)
-        if len(self._error_history) >= self._threshold_frames:
-            recent = self._error_history[-self._threshold_frames :]
-
-            all_low = all(e < -self._min_error for e in recent)
-            all_high = all(e > self._min_error for e in recent)
-
-            if all_low or all_high:
-                avg_error = sum(recent) / len(recent)
-                # Gentler correction: max 30% change per update
-                # Negative error (too dark) -> correction > 1.0 (increase exposure)
-                # Positive error (too bright) -> correction < 1.0 (decrease exposure)
-                correction = 1.0 - (avg_error / target) * 0.3
-                correction = max(0.5, min(2.0, correction))
-                self._last_correction = correction
-                logger.info(
-                    f"[Drift] Sustained error {avg_error:.1f} over {self._threshold_frames} frames "
-                    f"→ correction {correction:.2f}"
-                )
-                return correction
-
-        # No sustained drift - gradually return to 1.0
-        if self._last_correction != 1.0:
-            # Decay towards 1.0 at 10% per frame
-            self._last_correction += (1.0 - self._last_correction) * 0.1
-            if abs(self._last_correction - 1.0) < 0.01:
-                self._last_correction = 1.0
-
-        return self._last_correction
-
-    def reset(self):
-        """Reset drift history (e.g., after mode change)."""
-        self._error_history = []
-        self._last_correction = 1.0
+    WARNING_LOW = 80  # Moderate underexposure
+    EMERGENCY_LOW = 60  # Severe underexposure
+    CRITICAL_LOW = 40  # Critical underexposure, e.g. Arctic twilight
 
 
 class AdaptiveTimelapse:
@@ -182,7 +88,6 @@ class AdaptiveTimelapse:
         self.frame_count = 0
 
         # Transition smoothing state
-        self._lux_history: list = []  # Rolling history for EMA
         self._smoothed_lux: float = None  # Exponential moving average of lux
         self._last_mode: str = None  # Previous mode for hysteresis
         self._mode_hold_count: int = 0  # Counter for hysteresis
@@ -196,7 +101,11 @@ class AdaptiveTimelapse:
         # Brightness feedback state for smooth transitions
         self._last_brightness: float = None  # Previous frame's mean brightness
         self._last_p95: float = None  # Previous frame's 95th percentile (highlight level)
-        self._brightness_correction_factor: float = 1.0  # Multiplier for exposure adjustment
+
+        # What get_camera_settings decided for the current frame, for the
+        # metadata diagnostics. Written by the branch that ran, read by
+        # _enrich_metadata_with_diagnostics -- no recomputation.
+        self._last_decision: Dict = {}
 
         # Overexposure detection for fast ramp-down
         self._overexposure_detected: bool = False  # True when image is overexposed
@@ -208,11 +117,6 @@ class AdaptiveTimelapse:
         )
         self._underexposure_severity: str = None  # "warning" or "critical"
 
-        # Smoothed emergency factor to prevent oscillation
-        # Instead of hard on/off switching, this gradually moves towards target factor
-        self._smoothed_emergency_factor: float = 1.0
-        self._emergency_factor_speed: float = 0.15  # How fast to adjust (0.0-1.0)
-
         # Holy Grail transition state - seeded from actual camera metadata
         self._transition_seeded: bool = False  # True once we've seeded from metadata
         self._seed_exposure: float = None  # Actual exposure from last auto frame
@@ -220,7 +124,6 @@ class AdaptiveTimelapse:
         self._seed_wb_gains: tuple = None  # Actual WB gains from last auto frame
         self._previous_mode: str = None  # Track mode changes for seeding detection
         self._last_day_capture_metadata: Dict = None  # Metadata from last day mode capture
-        self._ev_clamp_applied: bool = False  # True after EV clamp applied on first frame
 
         # Load transition smoothing config with defaults
         transition_config = self.config.get("adaptive_timelapse", {}).get("transition_mode", {})
@@ -275,32 +178,12 @@ class AdaptiveTimelapse:
         self._fast_rampup_speed = transition_config.get("fast_rampup_speed", 0.50)
         self._critical_rampup_speed = transition_config.get("critical_rampup_speed", 0.70)
 
-        # Rapid lux change detection
-        self._previous_raw_lux: float = None  # For detecting rapid changes
-        self._lux_change_threshold = transition_config.get(
-            "lux_change_threshold", 3.0
-        )  # 3x change = rapid
-
         # Polar awareness - sun position for high latitude locations (68°N)
         self._location = None
         self._sun_elevation: float = None  # Current sun elevation in degrees
         self._civil_twilight_threshold = -6.0  # Default: Civil twilight
         self._init_location()
 
-        # ML-based exposure prediction
-        self._ml_predictor = None
-        self._ml_enabled = False
-        self._init_ml_predictor()
-
-        # ML-first sustained drift corrector (replaces reactive per-frame feedback)
-        self._drift_corrector = SustainedDriftCorrector(
-            threshold_frames=3,
-            min_error=transition_config.get("brightness_tolerance", 40) / 2,  # Half of tolerance
-        )
-
-        # Lux stability tracking for trust reduction during rapid changes
-        self._previous_lux_for_stability: float = None
-        self._last_lux_timestamp: float = None
         self._frame_interval = self.config.get("adaptive_timelapse", {}).get("interval", 30)
 
         # Database storage for capture history
@@ -355,59 +238,6 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.warning(f"Could not initialize location: {e}")
             self._location = None
-
-    def _init_ml_predictor(self):
-        """Initialize ML v2 exposure predictor if enabled.
-
-        ML v2 is database-driven and Arctic-aware:
-        - Trains only on good frames (brightness 105-135) from database
-        - Uses sun elevation for time periods (not clock hours)
-        - Doesn't learn from bad frames, avoiding reinforced mistakes
-
-        NOTE: When direct_brightness_control is enabled, ML is skipped
-        in favor of simple physics-based feedback (faster, more predictable).
-        """
-        # Skip ML when using direct brightness control
-        adaptive_config = self.config.get("adaptive_timelapse", {})
-        if adaptive_config.get("direct_brightness_control", False):
-            logger.debug("[ML v2] Skipped - using direct brightness control instead")
-            self._ml_enabled = False
-            return
-
-        if MLExposurePredictorV2 is None:
-            logger.debug("[ML v2] MLExposurePredictorV2 not available")
-            return
-
-        ml_config = adaptive_config.get("ml_exposure", {})
-        self._ml_enabled = ml_config.get("enabled", False)
-
-        if not self._ml_enabled:
-            logger.debug("[ML v2] ML exposure prediction disabled in config")
-            return
-
-        # Get database path for ML v2 (it trains from database)
-        db_config = self.config.get("database", {})
-        db_path = db_config.get("path", "data/timelapse.db")
-
-        if not db_config.get("enabled", False):
-            logger.warning("[ML v2] Database disabled - ML v2 requires database for training")
-            self._ml_enabled = False
-            return
-
-        try:
-            self._ml_predictor = MLExposurePredictorV2(
-                db_path=db_path, config=ml_config, state_dir="ml_state"
-            )
-            stats = self._ml_predictor.get_statistics()
-            logger.info(
-                f"[ML v2] Initialized: trust={self._ml_predictor.get_trust_level():.2f}, "
-                f"buckets={stats.get('lux_exposure_buckets', 0)}, "
-                f"trained={stats.get('last_trained', 'never')}"
-            )
-        except Exception as e:
-            logger.warning(f"[ML v2] Failed to initialize predictor: {e}", exc_info=True)
-            self._ml_predictor = None
-            self._ml_enabled = False
 
     def _init_database(self):
         """Initialize database storage for capture history."""
@@ -759,133 +589,6 @@ class AdaptiveTimelapse:
         )
         return new_exposure
 
-    def _apply_brightness_feedback(self, actual_brightness: float) -> float:
-        """
-        Apply gradual brightness feedback to correct exposure errors.
-
-        This method maintains a slow-moving correction factor based on the
-        difference between actual and target brightness. The correction is
-        applied VERY gradually over multiple frames to ensure butter-smooth
-        transitions with no visible jumps.
-
-        The correction factor is a multiplier for exposure:
-        - If images are consistently too bright, factor decreases below 1.0
-        - If images are consistently too dark, factor increases above 1.0
-
-        Args:
-            actual_brightness: Mean brightness of the captured image (0-255)
-
-        Returns:
-            Updated correction factor to apply to target exposure
-        """
-        if actual_brightness is None:
-            return self._brightness_correction_factor
-
-        # Store for tracking
-        self._last_brightness = actual_brightness
-
-        # Calculate brightness error (positive = too bright, negative = too dark)
-        error = actual_brightness - self._target_brightness
-
-        # Check if we're within acceptable tolerance
-        if abs(error) <= self._brightness_tolerance:
-            # Within tolerance - slowly decay correction back to 1.0
-            # This prevents over-correction after reaching target
-            decay_rate = 0.05  # Very slow decay
-            if self._brightness_correction_factor > 1.0:
-                self._brightness_correction_factor = max(
-                    1.0, self._brightness_correction_factor - decay_rate
-                )
-            elif self._brightness_correction_factor < 1.0:
-                self._brightness_correction_factor = min(
-                    1.0, self._brightness_correction_factor + decay_rate
-                )
-            logger.debug(
-                f"Brightness within tolerance ({actual_brightness:.1f}), "
-                f"correction decaying to {self._brightness_correction_factor:.3f}"
-            )
-            return self._brightness_correction_factor
-
-        # Check for underexposure at minimum exposure (fast recovery needed)
-        # Get minimum exposure from config
-        adaptive_config = self.config.get("adaptive_timelapse", {})
-        min_exposure = adaptive_config.get("day_mode", {}).get("exposure_time", 0.02)
-
-        # If we're at or near minimum exposure AND the image is significantly dark,
-        # apply faster recovery to prevent prolonged dark periods
-        at_min_exposure = (
-            self._last_exposure_time is not None
-            and self._last_exposure_time <= min_exposure * 1.5  # Within 50% of minimum
-        )
-        significantly_dark = actual_brightness < 90  # Well below target of 120
-
-        if at_min_exposure and significantly_dark:
-            # Fast underexposure recovery - boost correction factor
-            boost = 1.2  # 20% increase per frame
-            self._brightness_correction_factor *= boost
-            self._brightness_correction_factor = min(4.0, self._brightness_correction_factor)
-            logger.info(
-                f"[Underexposure] Fast recovery: brightness={actual_brightness:.1f}, "
-                f"at min exposure - boosting correction to {self._brightness_correction_factor:.3f}"
-            )
-            return self._brightness_correction_factor
-
-        # Outside tolerance - apply correction with urgency scaling
-        # Convert error to a correction percentage
-        # error of 40 (e.g., brightness 160 vs target 120) = 33% too bright
-        error_percent = error / self._target_brightness
-        abs_error = abs(error)
-
-        # === URGENCY MULTIPLIER ===
-        # Scale feedback strength based on how far off-target we are
-        # Small errors: normal slow correction
-        # Large errors: faster correction to catch up
-        base_strength = self._brightness_feedback_strength
-
-        if abs_error > 60:
-            # Severe deviation (e.g., brightness 60 or 180) - 3x speed
-            urgency_multiplier = 3.0
-            urgency_level = "URGENT"
-        elif abs_error > 40:
-            # Moderate deviation (e.g., brightness 80 or 160) - 2x speed
-            urgency_multiplier = 2.0
-            urgency_level = "elevated"
-        elif abs_error > 25:
-            # Mild deviation - 1.5x speed
-            urgency_multiplier = 1.5
-            urgency_level = "mild"
-        else:
-            # Normal
-            urgency_multiplier = 1.0
-            urgency_level = "normal"
-
-        effective_strength = min(0.7, base_strength * urgency_multiplier)
-        adjustment = error_percent * effective_strength
-
-        # Update correction factor (reducing it if too bright, increasing if too dark)
-        # Too bright (positive error) → reduce correction factor (less exposure)
-        # Too dark (negative error) → increase correction factor (more exposure)
-        self._brightness_correction_factor *= 1.0 - adjustment
-
-        # Clamp to reasonable range (0.3x to 4x correction)
-        self._brightness_correction_factor = max(0.3, min(4.0, self._brightness_correction_factor))
-
-        # Log with urgency level if not normal
-        if urgency_multiplier > 1.0:
-            logger.info(
-                f"[Feedback] {urgency_level.upper()}: brightness={actual_brightness:.1f}, "
-                f"error={error:.0f}, urgency={urgency_multiplier}x, "
-                f"correction={self._brightness_correction_factor:.3f}"
-            )
-        else:
-            logger.debug(
-                f"Brightness feedback: actual={actual_brightness:.1f}, "
-                f"target={self._target_brightness}, error={error:.1f}, "
-                f"correction={self._brightness_correction_factor:.3f}"
-            )
-
-        return self._brightness_correction_factor
-
     def _get_dynamic_target_brightness(self, std_brightness: float) -> int:
         """
         Calculate dynamic brightness target based on image contrast (std deviation).
@@ -959,105 +662,6 @@ class AdaptiveTimelapse:
             return self._critical_rampup_speed
         else:
             return self._fast_rampup_speed
-
-    def _apply_proactive_exposure_correction(self, test_image_path: str, raw_lux: float) -> None:
-        """
-        Proactively adjust exposure correction based on test shot brightness.
-
-        This is called BEFORE calculating exposure for the actual capture.
-        If the test shot (with fixed short exposure) is bright, it means the
-        scene is getting brighter and we should proactively reduce exposure
-        to prevent overexposure in the actual long-exposure capture.
-
-        Args:
-            test_image_path: Path to the test shot image
-            raw_lux: Raw calculated lux from test shot
-        """
-        try:
-            brightness_metrics = self._analyze_image_brightness(test_image_path)
-            if not brightness_metrics:
-                return
-
-            test_brightness = brightness_metrics.get("mean_brightness", 128)
-
-            # Test shot uses fixed short exposure (0.1s, gain 1.0)
-            # If it's bright, the scene has lots of light
-            # We need to proactively reduce exposure for the actual capture
-
-            # Thresholds for proactive correction (softened to prevent dark dips)
-            bright_threshold = 160  # Test shot brightness indicating bright scene
-            very_bright_threshold = 200  # Very bright scene
-
-            if test_brightness > very_bright_threshold:
-                # Scene is very bright - reduce correction factor (softened)
-                # This helps when transitioning from night to day
-                reduction = 0.8  # 20% reduction (was 30%)
-                self._brightness_correction_factor *= reduction
-                self._brightness_correction_factor = max(0.3, self._brightness_correction_factor)
-                logger.debug(
-                    f"[Proactive] Very bright test shot ({test_brightness:.1f}) - "
-                    f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
-                )
-            elif test_brightness > bright_threshold:
-                # Scene is moderately bright - gentle reduction (softened)
-                reduction = 0.9  # 10% reduction (was 15%)
-                self._brightness_correction_factor *= reduction
-                self._brightness_correction_factor = max(0.3, self._brightness_correction_factor)
-                logger.debug(
-                    f"[Proactive] Bright test shot ({test_brightness:.1f}) - "
-                    f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
-                )
-
-            # Also detect rapid brightening (lux increasing quickly)
-            if self._previous_raw_lux is not None and raw_lux > 0:
-                lux_ratio = raw_lux / max(0.01, self._previous_raw_lux)
-                if lux_ratio > 2.0:  # Lux more than doubled
-                    # Scene getting much brighter - reduce exposure proactively
-                    reduction = min(0.85, 1.0 / (lux_ratio * 0.5))  # Softened from 0.8
-                    self._brightness_correction_factor *= reduction
-                    self._brightness_correction_factor = max(
-                        0.3, self._brightness_correction_factor  # Lowered floor for faster recovery
-                    )
-                    logger.info(
-                        f"[Proactive] Rapid brightening ({lux_ratio:.1f}x) - "
-                        f"reducing exposure correction to {self._brightness_correction_factor:.3f}"
-                    )
-
-        except Exception as e:
-            logger.debug(f"Could not apply proactive exposure correction: {e}")
-
-    def _detect_rapid_lux_change(self, raw_lux: float) -> bool:
-        """
-        Detect if lux is changing rapidly (e.g., at dawn/dusk).
-
-        Rapid changes trigger faster transition speeds to keep up.
-
-        Args:
-            raw_lux: Current raw lux value (before smoothing)
-
-        Returns:
-            True if rapid change detected
-        """
-        if self._previous_raw_lux is None:
-            self._previous_raw_lux = raw_lux
-            return False
-
-        # Calculate ratio of change
-        if self._previous_raw_lux > 0 and raw_lux > 0:
-            ratio = max(raw_lux / self._previous_raw_lux, self._previous_raw_lux / raw_lux)
-            is_rapid = ratio > self._lux_change_threshold
-
-            if is_rapid:
-                logger.info(
-                    f"[RapidLux] Rapid light change detected: "
-                    f"{self._previous_raw_lux:.1f} → {raw_lux:.1f} (ratio: {ratio:.1f}x)"
-                )
-
-            self._previous_raw_lux = raw_lux
-            return is_rapid
-
-        self._previous_raw_lux = raw_lux
-        return False
 
     def _check_overexposure(self, brightness_metrics: Dict) -> bool:
         """
@@ -1186,179 +790,6 @@ class AdaptiveTimelapse:
 
         return self._underexposure_detected
 
-    def _get_emergency_brightness_factor(self, brightness: float) -> float:
-        """
-        Get smoothed emergency correction factor based on brightness zones.
-
-        This provides correction when brightness is off-target, but uses
-        smooth transitions to prevent oscillation. The factor gradually
-        moves towards the ideal value rather than jumping instantly.
-
-        Args:
-            brightness: Current mean brightness (0-255)
-
-        Returns:
-            Smoothed correction factor (1.0 = no change, <1.0 = reduce, >1.0 = increase)
-        """
-        if brightness is None:
-            # Decay towards 1.0 when no brightness data available
-            # Use slower speed since we're relaxing without new data
-            target_factor = 1.0
-            speed = self._emergency_factor_speed * 0.5
-            self._smoothed_emergency_factor += speed * (
-                target_factor - self._smoothed_emergency_factor
-            )
-            self._smoothed_emergency_factor = max(0.5, min(4.0, self._smoothed_emergency_factor))
-            return self._smoothed_emergency_factor
-
-        # Calculate the ideal (target) factor based on current brightness
-        target_factor = 1.0
-        zone_name = None
-
-        if brightness > BrightnessZones.EMERGENCY_HIGH:
-            target_factor = BrightnessZones.EMERGENCY_HIGH_FACTOR
-            zone_name = "SEVERE OVEREXPOSURE"
-        elif brightness > BrightnessZones.WARNING_HIGH:
-            target_factor = BrightnessZones.WARNING_HIGH_FACTOR
-            zone_name = "Overexposure warning"
-        elif brightness < BrightnessZones.CRITICAL_LOW:
-            target_factor = BrightnessZones.CRITICAL_LOW_FACTOR
-            zone_name = "CRITICAL UNDEREXPOSURE"
-        elif brightness < BrightnessZones.EMERGENCY_LOW:
-            target_factor = BrightnessZones.EMERGENCY_LOW_FACTOR
-            zone_name = "SEVERE UNDEREXPOSURE"
-        elif brightness < BrightnessZones.WARNING_LOW:
-            target_factor = BrightnessZones.WARNING_LOW_FACTOR
-            zone_name = "Underexposure warning"
-
-        # Smoothly move towards target factor to prevent oscillation
-        # Use faster speed when moving away from 1.0 (applying correction)
-        # Use slower speed when returning to 1.0 (relaxing correction)
-        if abs(target_factor - 1.0) > abs(self._smoothed_emergency_factor - 1.0):
-            # Getting worse - apply correction faster
-            speed = self._emergency_factor_speed * 2.0
-        else:
-            # Getting better - relax slowly to prevent oscillation
-            speed = self._emergency_factor_speed * 0.5
-
-        # Interpolate towards target
-        self._smoothed_emergency_factor += speed * (target_factor - self._smoothed_emergency_factor)
-
-        # Clamp to valid range
-        # Allow up to 4x increase for severe underexposure (e.g., Arctic winter twilight)
-        # but limit reduction to 50% to prevent sudden darkening
-        self._smoothed_emergency_factor = max(0.5, min(4.0, self._smoothed_emergency_factor))
-
-        # Only log when factor is significantly different from 1.0
-        if abs(self._smoothed_emergency_factor - 1.0) > 0.02:
-            if self._smoothed_emergency_factor < 1.0:
-                reduction_pct = (1 - self._smoothed_emergency_factor) * 100
-                logger.info(
-                    f"[Emergency] {zone_name or 'Correction'}: brightness={brightness:.1f} "
-                    f"→ smoothed factor {self._smoothed_emergency_factor:.2f} ({reduction_pct:.0f}% reduction)"
-                )
-            else:
-                increase_pct = (self._smoothed_emergency_factor - 1) * 100
-                logger.info(
-                    f"[Emergency] {zone_name or 'Correction'}: brightness={brightness:.1f} "
-                    f"→ smoothed factor {self._smoothed_emergency_factor:.2f} ({increase_pct:.0f}% increase)"
-                )
-
-        return self._smoothed_emergency_factor
-
-    def get_brightness_adjusted_trust(self, brightness: float, base_trust: float) -> float:
-        """
-        Reduce ML trust as brightness deviates from target.
-
-        Philosophy: Trust ML predictions when they're working (brightness in normal range),
-        but gradually fall back to formula when brightness is off.
-
-        Args:
-            brightness: Current mean brightness (0-255) or None
-            base_trust: Base ML trust level (0.0-1.0)
-
-        Returns:
-            Adjusted trust level (0.0-1.0)
-        """
-        if brightness is None:
-            return base_trust
-
-        # Severe cases: force formula (trust = 0)
-        if brightness < 50 or brightness > 200:
-            logger.info(f"[ML-Trust] Severe deviation ({brightness:.0f}) - forcing formula")
-            return 0.0
-
-        # Warning zones: graduated reduction
-        if brightness < 70:
-            # Ramp from 0% trust at 50 to 100% trust at 70
-            factor = (brightness - 50) / 20
-            adjusted = base_trust * factor
-            logger.debug(
-                f"[ML-Trust] Low brightness ({brightness:.0f}) - reduced trust: "
-                f"{base_trust:.2f} → {adjusted:.2f}"
-            )
-            return adjusted
-
-        if brightness > 170:
-            # Ramp from 100% trust at 170 to 0% trust at 200
-            factor = (200 - brightness) / 30
-            adjusted = base_trust * factor
-            logger.debug(
-                f"[ML-Trust] High brightness ({brightness:.0f}) - reduced trust: "
-                f"{base_trust:.2f} → {adjusted:.2f}"
-            )
-            return adjusted
-
-        return base_trust
-
-    def get_lux_stability_trust(
-        self, current_lux: float, previous_lux: float, elapsed_seconds: float
-    ) -> float:
-        """
-        Reduce trust during rapid light changes.
-
-        During sunrise/sunset when lux changes rapidly, ML predictions may lag
-        behind actual conditions. Reduce trust to let formula adapt faster.
-
-        Args:
-            current_lux: Current lux reading
-            previous_lux: Previous lux reading (or None)
-            elapsed_seconds: Time between readings
-
-        Returns:
-            Trust multiplier (0.5-1.0)
-        """
-        if previous_lux is None or previous_lux <= 0 or elapsed_seconds <= 0:
-            return 1.0
-
-        if current_lux <= 0:
-            return 1.0
-
-        # Calculate rate of change in log space (lux is logarithmic)
-        try:
-            import math
-
-            lux_ratio = current_lux / previous_lux
-            log_change = abs(math.log10(lux_ratio))
-            change_per_minute = (log_change / elapsed_seconds) * 60
-
-            # Above 0.3 log-lux/minute = rapid transition (sunrise/sunset)
-            if change_per_minute > 0.3:
-                # Trust reduction: 0.3→0%, 0.6→25%, 1.0+→50%
-                trust_reduction = min(0.5, (change_per_minute - 0.3) * 0.7)
-                trust = 1.0 - trust_reduction
-
-                logger.debug(
-                    f"[ML-Trust] Rapid lux change: {previous_lux:.1f}→{current_lux:.1f} "
-                    f"({change_per_minute:.2f} log-lux/min) - trust reduced to {trust:.0%}"
-                )
-                return trust
-
-        except (ValueError, ZeroDivisionError):
-            pass
-
-        return 1.0
-
     def get_p95_highlight_factor(self, p95: float) -> float:
         """
         Get proactive exposure reduction factor based on p95 (highlight level).
@@ -1413,295 +844,6 @@ class AdaptiveTimelapse:
         factor = max(0.70, 0.85 - ((p95 - critical_threshold) / 15) * 0.15)
         logger.warning(f"[P95-Protect] Highlight EMERGENCY: p95={p95:.1f} → factor={factor:.3f}")
         return factor
-
-    def _calculate_target_gain_from_lux(self, lux: float) -> float:
-        """
-        Calculate target analogue gain based on current lux level.
-
-        Uses a continuous relationship across the entire lux range.
-        Higher lux = lower gain needed (less amplification for bright scenes).
-
-        The gain adjusts to complement exposure:
-        - In bright light (high lux): low gain (1.0) since exposure provides enough light
-        - In dim light (low lux): high gain to amplify the signal
-
-        Args:
-            lux: Current light level in lux
-
-        Returns:
-            Target analogue gain value
-        """
-        import math
-
-        adaptive_config = self.config["adaptive_timelapse"]
-
-        # Get gain limits from config
-        night_gain = adaptive_config["night_mode"]["analogue_gain"]
-        day_gain = adaptive_config.get("day_mode", {}).get("analogue_gain", 1.0)
-
-        # Clamp lux to reasonable range
-        lux = max(0.01, min(10000, lux))
-
-        # Use logarithmic interpolation for smooth gain transitions
-        # Map lux range to gain range using log scale
-        # At lux=1, gain should be near night_gain
-        # At lux=500+, gain should be near day_gain
-
-        # Calculate position in log space (0 to 1)
-        # lux=1 → position=0 (night), lux=500 → position=1 (day)
-        lux_low = 1.0  # Lux level for max gain
-        lux_high = 500.0  # Lux level for min gain
-
-        if lux <= lux_low:
-            return night_gain
-        elif lux >= lux_high:
-            return day_gain
-        else:
-            # Logarithmic interpolation
-            log_position = (math.log10(lux) - math.log10(lux_low)) / (
-                math.log10(lux_high) - math.log10(lux_low)
-            )
-            log_position = max(0.0, min(1.0, log_position))
-
-            # Interpolate gain (higher position = lower gain)
-            target_gain = night_gain - log_position * (night_gain - day_gain)
-
-            logger.debug(
-                f"Lux-based gain: lux={lux:.2f} → position={log_position:.2f} → gain={target_gain:.2f}"
-            )
-
-            return target_gain
-
-    def _calculate_sequential_ramping(self, lux: float, position: float) -> Tuple[float, float]:
-        """
-        Calculate exposure and gain using Sequential Ramping for noise reduction.
-
-        This prioritizes shutter speed to keep ISO (gain) low:
-        - Phase 1 (Shutter Priority): Ramp exposure from seed to max, keep gain locked
-        - Phase 2 (Gain Priority): Only after exposure is maxed, ramp gain up
-
-        This produces cleaner images by minimizing sensor noise from high gain.
-
-        Args:
-            lux: Current light level in lux
-            position: Transition position (0.0=at night threshold, 1.0=at day threshold)
-
-        Returns:
-            Tuple of (target_exposure_seconds, target_gain)
-        """
-        import math
-
-        adaptive_config = self.config["adaptive_timelapse"]
-        night_config = adaptive_config["night_mode"]
-
-        # Get limits
-        max_exposure = night_config["max_exposure_time"]  # e.g., 20s
-        max_gain = night_config["analogue_gain"]  # e.g., 8.0
-
-        # Get seed values (from last day mode capture) or reasonable defaults
-        seed_exposure = self._seed_exposure if self._seed_exposure else 0.01  # 10ms default
-        seed_gain = self._seed_gain if self._seed_gain else 1.0
-
-        # Transition goes from position=1.0 (day) to position=0.0 (night)
-        # So we invert to get progress towards night (0=start, 1=end)
-        night_progress = 1.0 - position
-
-        # Calculate the total EV range we need to cover
-        # EV_night = max_exposure * max_gain
-        # EV_seed = seed_exposure * seed_gain
-        # Total EV increase needed = log2(EV_night / EV_seed)
-
-        ev_seed = seed_exposure * seed_gain
-        ev_night = max_exposure * max_gain
-
-        if ev_seed <= 0 or ev_night <= 0:
-            # Fallback to simple calculation
-            return self._calculate_target_exposure_from_lux(
-                lux
-            ), self._calculate_target_gain_from_lux(lux)
-
-        # Phase boundary: when does exposure hit max?
-        # Exposure range: seed_exposure → max_exposure
-        # This represents a portion of total EV range
-        exposure_ev_range = math.log2(max_exposure / seed_exposure) if seed_exposure > 0 else 10
-        total_ev_range = math.log2(ev_night / ev_seed) if ev_seed > 0 else 12
-
-        # Phase 1 ends when exposure is maxed
-        phase1_end = exposure_ev_range / total_ev_range if total_ev_range > 0 else 0.5
-        phase1_end = max(0.1, min(0.9, phase1_end))  # Clamp to reasonable range
-
-        if night_progress <= phase1_end:
-            # === PHASE 1: Shutter Priority ===
-            # Ramp exposure from seed to max, keep gain locked at seed
-            phase1_progress = night_progress / phase1_end  # 0 to 1 within phase 1
-
-            # Logarithmic interpolation for exposure
-            log_seed = math.log10(max(0.0001, seed_exposure))
-            log_max = math.log10(max_exposure)
-            log_target = log_seed + phase1_progress * (log_max - log_seed)
-            target_exposure = 10**log_target
-
-            # Keep gain locked at seed value
-            target_gain = seed_gain
-
-            logger.debug(
-                f"[Sequential] Phase 1 (Shutter): progress={night_progress:.2f}/{phase1_end:.2f}, "
-                f"exposure={target_exposure:.4f}s, gain={target_gain:.2f} (locked)"
-            )
-        else:
-            # === PHASE 2: Gain Priority ===
-            # Exposure is maxed, now ramp gain from seed to night target
-            phase2_progress = (night_progress - phase1_end) / (
-                1.0 - phase1_end
-            )  # 0 to 1 within phase 2
-            phase2_progress = max(0.0, min(1.0, phase2_progress))
-
-            # Exposure stays at max
-            target_exposure = max_exposure
-
-            # Logarithmic interpolation for gain
-            log_seed = math.log10(max(0.5, seed_gain))
-            log_max = math.log10(max_gain)
-            log_target = log_seed + phase2_progress * (log_max - log_seed)
-            target_gain = 10**log_target
-
-            logger.debug(
-                f"[Sequential] Phase 2 (Gain): progress={night_progress:.2f}, "
-                f"exposure={target_exposure:.4f}s (maxed), gain={target_gain:.2f}"
-            )
-
-        return target_exposure, target_gain
-
-    def _calculate_target_exposure_from_lux(self, lux: float) -> float:
-        """
-        Calculate target exposure time based on current lux level.
-
-        ML-FIRST APPROACH (v2):
-        1. Trust ML predictions from learned patterns
-        2. Adjust trust based on brightness deviation and lux stability
-        3. Apply sustained drift correction (not reactive per-frame)
-        4. Only apply severe safety clamps for extreme cases
-
-        Philosophy: Smooth predictable curves from ML > reactive corrections
-        that cause oscillation.
-
-        Args:
-            lux: Current light level in lux
-
-        Returns:
-            Target exposure time in seconds
-        """
-        import math
-        import time as time_module
-
-        adaptive_config = self.config["adaptive_timelapse"]
-
-        # Get exposure limits from config
-        night_exposure = adaptive_config["night_mode"]["max_exposure_time"]
-        min_exposure = adaptive_config.get("day_mode", {}).get("exposure_time", 0.01)
-
-        # Clamp lux to reasonable range to avoid extreme values
-        lux = max(0.01, min(10000, lux))
-
-        # Calculate formula-based exposure (fallback)
-        reference_lux = adaptive_config.get("reference_lux", 3.8)
-        base_exposure = (night_exposure * reference_lux) / lux
-
-        # Apply existing brightness feedback correction (gradual)
-        formula_exposure = base_exposure * self._brightness_correction_factor
-
-        target_exposure = formula_exposure
-
-        # === ML v2 PREDICTIVE EXPOSURE (ML-FIRST) ===
-        if self._ml_enabled and self._ml_predictor is not None:
-            ml_exposure, ml_confidence = self._ml_predictor.predict_optimal_exposure(
-                lux=lux, timestamp=time_module.time(), sun_elevation=self._sun_elevation
-            )
-
-            if ml_exposure is not None:
-                # Get base trust from ML predictor (0.65-0.90)
-                base_trust = self._ml_predictor.get_trust_level()
-
-                # Scale by ML confidence (indicates prediction quality from sample count)
-                base_trust *= ml_confidence
-
-                # Adjust trust based on brightness deviation
-                adjusted_trust = self.get_brightness_adjusted_trust(
-                    self._last_brightness, base_trust
-                )
-
-                # Further adjust for rapid light changes
-                current_time = time_module.time()
-                elapsed = self._frame_interval
-                if self._last_lux_timestamp is not None:
-                    elapsed = current_time - self._last_lux_timestamp
-                lux_stability_trust = self.get_lux_stability_trust(
-                    lux, self._previous_lux_for_stability, elapsed
-                )
-                adjusted_trust *= lux_stability_trust
-
-                # Apply sustained drift correction
-                drift_correction = self._drift_corrector.update(
-                    self._last_brightness, self._target_brightness
-                )
-
-                # Blend ML with formula using adjusted trust
-                target_exposure = (
-                    adjusted_trust * ml_exposure + (1 - adjusted_trust) * formula_exposure
-                )
-
-                # Apply drift correction
-                target_exposure *= drift_correction
-
-                logger.debug(
-                    f"[ML-First] trust={adjusted_trust:.2f} (base={base_trust:.2f}, "
-                    f"conf={ml_confidence:.2f}, lux_stab={lux_stability_trust:.2f}), "
-                    f"ML={ml_exposure:.4f}s, formula={formula_exposure:.4f}s, "
-                    f"drift={drift_correction:.2f} → target={target_exposure:.4f}s"
-                )
-
-                # Update lux tracking for next frame
-                self._previous_lux_for_stability = lux
-                self._last_lux_timestamp = current_time
-
-        # === PROACTIVE P95 HIGHLIGHT PROTECTION ===
-        # Reduce exposure BEFORE highlights clip (when p95 approaches 255)
-        # This is proactive (prevent clipping) vs reactive (fix after clipping)
-        p95_factor = self.get_p95_highlight_factor(self._last_p95)
-        if p95_factor < 1.0:
-            target_exposure *= p95_factor
-            logger.debug(
-                f"[P95] Applied highlight protection: p95={self._last_p95:.1f}, "
-                f"factor={p95_factor:.3f}"
-            )
-
-        # === SEVERE-ONLY SAFETY CLAMPS ===
-        # Only apply hard corrections for extreme cases (after all adjustments)
-        # Philosophy: Small variations (70-170) are OK if curve is smooth
-        if self._last_brightness is not None:
-            if self._last_brightness > 220:  # Very severe overexposure only
-                target_exposure *= 0.7
-                logger.warning(
-                    f"[Safety] Severe overexposure ({self._last_brightness:.0f}) "
-                    f"- forcing 30% reduction"
-                )
-            elif self._last_brightness < 35:  # Very severe underexposure only
-                target_exposure *= 1.8
-                logger.warning(
-                    f"[Safety] Severe underexposure ({self._last_brightness:.0f}) "
-                    f"- forcing 80% increase"
-                )
-
-        # Clamp to valid range
-        target_exposure = max(min_exposure, min(night_exposure, target_exposure))
-
-        logger.debug(
-            f"Lux-based exposure: lux={lux:.2f} -> base={base_exposure:.4f}s "
-            f"x correction={self._brightness_correction_factor:.3f} "
-            f"-> target={target_exposure:.4f}s"
-        )
-
-        return target_exposure
 
     def _calculate_exposure_from_brightness(
         self, actual_brightness: float, lux: Optional[float] = None
@@ -1803,74 +945,6 @@ class AdaptiveTimelapse:
                     f"Updated day WB reference: [{colour_gains[0]:.2f}, {colour_gains[1]:.2f}] "
                     f"at {lux:.0f} lux"
                 )
-
-    def _apply_ev_safety_clamp(
-        self, target_exposure: float, target_gain: float
-    ) -> Tuple[float, float]:
-        """
-        Apply EV Safety Clamp to ensure seamless auto-to-manual handover.
-
-        Compares proposed manual EV to the seeded auto EV. If they differ by >5%,
-        forces the manual values to match the auto EV exactly.
-
-        This guarantees the first manual frame is mathematically identical to
-        the last auto frame, preventing any visible "flash" or brightness jump.
-
-        Args:
-            target_exposure: Proposed exposure time in seconds
-            target_gain: Proposed analogue gain
-
-        Returns:
-            Tuple of (clamped_exposure, clamped_gain)
-        """
-        # Check if EV safety clamp is disabled in config
-        transition = self.config["adaptive_timelapse"].get("transition_mode", {})
-        if not transition.get("ev_safety_clamp_enabled", True):
-            return target_exposure, target_gain
-
-        # Only apply clamp on first manual frame (when we have seed values)
-        # Bug fix: only apply ONCE, not every frame
-        if not self._transition_seeded or self._seed_exposure is None or self._seed_gain is None:
-            return target_exposure, target_gain
-
-        # Skip if clamp was already applied (only apply on first frame)
-        if self._ev_clamp_applied:
-            return target_exposure, target_gain
-
-        # Calculate EVs (EV = exposure * gain, proportional to light captured)
-        seed_ev = self._seed_exposure * self._seed_gain
-        proposed_ev = target_exposure * target_gain
-
-        if seed_ev <= 0 or proposed_ev <= 0:
-            return target_exposure, target_gain
-
-        # Calculate percentage difference
-        ev_ratio = proposed_ev / seed_ev
-        ev_diff_percent = abs(ev_ratio - 1.0) * 100
-
-        if ev_diff_percent > 5.0:
-            # Clamp: adjust exposure to match seed EV while keeping proposed gain
-            # EV_seed = exposure_new * gain_proposed
-            # exposure_new = EV_seed / gain_proposed
-            clamped_exposure = seed_ev / target_gain
-
-            # Ensure within valid range
-            night_config = self.config["adaptive_timelapse"]["night_mode"]
-            max_exposure = night_config["max_exposure_time"]
-            min_exposure = 0.0001  # 100µs
-
-            clamped_exposure = max(min_exposure, min(max_exposure, clamped_exposure))
-
-            logger.info(
-                f"[Safety] EV clamp applied: proposed EV differs by {ev_diff_percent:.1f}%. "
-                f"Adjusted exposure {target_exposure:.4f}s → {clamped_exposure:.4f}s "
-                f"to match auto EV={seed_ev:.4f}"
-            )
-            # Mark clamp as applied so it only runs once
-            self._ev_clamp_applied = True
-            return clamped_exposure, target_gain
-
-        return target_exposure, target_gain
 
     def _seed_from_metadata(self, metadata: Dict, capture_metadata: Dict = None):
         """
@@ -2178,18 +1252,17 @@ class AdaptiveTimelapse:
             # Disable auto-exposure, auto-gain, and auto-white-balance for manual control
             settings["AeEnable"] = 0
 
-            # Check if direct brightness control is enabled
-            direct_control = adaptive_config.get("direct_brightness_control", False)
             night_max = night["max_exposure_time"]
             night_gain = night["analogue_gain"]
 
-            # Calculate target values for night mode
+            # Night mode runs wide open by default and only pulls back when the
+            # scene is measurably too bright.
             target_gain = night_gain
             target_exposure = night_max
 
-            # FIX 1: Brightness feedback in night mode when overexposed
-            # Allow night mode to reduce exposure when brightness > 140 (dawn overexposure)
-            if direct_control and self._last_brightness is not None and self._last_brightness > 140:
+            # Dawn: brightness climbing past 140 while still in night mode means
+            # the sky is brightening faster than the mode boundary moved.
+            if self._last_brightness is not None and self._last_brightness > 140:
                 # Calculate ideal exposure from brightness ratio (same as transition mode)
                 target_exposure = self._calculate_exposure_from_brightness(
                     self._last_brightness, lux=None
@@ -2285,65 +1358,42 @@ class AdaptiveTimelapse:
                 f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
             )
 
+            self._last_decision = {
+                "target_exposure_s": round(target_exposure, 6),
+                "target_exposure_ms": round(target_exposure * 1000, 2),
+                "target_gain": round(target_gain, 3),
+                "applied_exposure_s": round(smooth_exposure, 6),
+                "applied_gain": round(smooth_gain, 3),
+            }
+
         elif mode == LightMode.DAY:
             day = adaptive_config["day_mode"]
             transition_config = adaptive_config.get("transition_mode", {})
 
             # Check if direct brightness control is enabled (new simple approach)
-            direct_control = adaptive_config.get("direct_brightness_control", False)
+            # Direct brightness feedback: exposure follows the measured
+            # brightness of the previous frame. No interpolation -- the
+            # controller's own damping already limits how fast it moves.
+            settings["AeEnable"] = 0
 
-            if direct_control:
-                # DIRECT BRIGHTNESS FEEDBACK: Simple physics-based control
-                # No ML, no complex interpolation - just ratio-based correction
-                settings["AeEnable"] = 0
+            target_exposure = self._calculate_exposure_from_brightness(self._last_brightness, lux)
 
-                # Calculate exposure directly from brightness error
-                target_exposure = self._calculate_exposure_from_brightness(
-                    self._last_brightness, lux
-                )
+            # Gain stays at its floor in daylight; the shutter does the work.
+            target_gain = self._interpolate_gain(1.0)
 
-                # Keep gain minimal in day mode
-                target_gain = self._interpolate_gain(1.0)
+            settings["ExposureTime"] = int(target_exposure * 1_000_000)
+            settings["AnalogueGain"] = target_gain
 
-                # Apply directly - no exposure interpolation!
-                settings["ExposureTime"] = int(target_exposure * 1_000_000)
-                settings["AnalogueGain"] = target_gain
+            # Feeds the next frame's ratio calculation.
+            self._last_exposure_time = target_exposure
 
-                # Update last exposure for next frame's feedback calculation
-                self._last_exposure_time = target_exposure
-
-            # Check if smooth exposure/gain transitions are enabled (legacy)
-            elif transition_config.get("smooth_exposure_in_day_mode", True) and lux is not None:
-                # LEGACY: Use ML/formula with interpolation
-                settings["AeEnable"] = 0
-
-                # Calculate target values based on current lux
-                target_gain = self._calculate_target_gain_from_lux(lux)
-                target_exposure = self._calculate_target_exposure_from_lux(lux)
-
-                # Apply smooth interpolation to prevent jumps
-                # Use fast ramp-up for underexposure or fast ramp-down for overexposure
-                if self._underexposure_detected:
-                    exposure_speed = self._get_rampup_speed()
-                elif self._overexposure_detected:
-                    exposure_speed = self._get_rampdown_speed()
-                else:
-                    exposure_speed = None
-                smooth_gain = self._interpolate_gain(target_gain)
-                smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
-
-                settings["AnalogueGain"] = smooth_gain
-                settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
-
-            elif "exposure_time" in day:
-                # Manual exposure mode (fixed values from config)
-                settings["AeEnable"] = 0
-                settings["ExposureTime"] = int(day["exposure_time"] * 1_000_000)
-                if "analogue_gain" in day:
-                    settings["AnalogueGain"] = day["analogue_gain"]
-            else:
-                # Legacy auto exposure mode (may cause ISO jumps)
-                settings["AeEnable"] = 1
+            self._last_decision = {
+                "target_exposure_s": round(target_exposure, 6),
+                "target_exposure_ms": round(target_exposure * 1000, 2),
+                "target_gain": round(target_gain, 3),
+                "applied_exposure_s": round(target_exposure, 6),
+                "applied_gain": round(target_gain, 3),
+            }
 
             # For smooth transitions, use manual WB with interpolated gains
             # AWB is only used internally to learn good daylight WB values
@@ -2385,171 +1435,65 @@ class AdaptiveTimelapse:
             # Disable auto-exposure for manual control
             settings["AeEnable"] = 0
 
-            # Check if direct brightness control is enabled (new simple approach)
-            direct_control = adaptive_config.get("direct_brightness_control", False)
+            # Direct brightness feedback for transition mode.
+            night_max = adaptive_config["night_mode"]["max_exposure_time"]
+            night_gain = adaptive_config["night_mode"]["analogue_gain"]
 
-            if direct_control and lux is not None:
-                # DIRECT BRIGHTNESS FEEDBACK for transition mode
-                # Simple physics-based control - no ML, no complex interpolation
-                night_max = adaptive_config["night_mode"]["max_exposure_time"]
-                night_gain = adaptive_config["night_mode"]["analogue_gain"]
+            target_exposure = self._calculate_exposure_from_brightness(self._last_brightness, lux)
 
-                # Calculate exposure directly from brightness error
-                target_exposure = self._calculate_exposure_from_brightness(
-                    self._last_brightness, lux
-                )
-
-                # Gain ramping: keep gain at 1.0 until shutter approaches max
-                if target_exposure >= night_max * 0.8:
-                    # Shutter approaching max (80% of 20s = 16s)
-                    # Start increasing gain to compensate
-                    # Calculate how much extra light we need
-                    exposure_shortfall = target_exposure / (night_max * 0.8)
-                    target_gain = min(night_gain, exposure_shortfall)
-                    # Cap exposure at 80% of max when boosting gain
-                    target_exposure = night_max * 0.8
-                else:
-                    target_gain = 1.0
-
-                # Smooth gain interpolation (but NOT exposure - direct is fine)
-                smooth_gain = self._interpolate_gain(target_gain)
-
-                # Apply directly - no exposure interpolation!
-                settings["ExposureTime"] = int(target_exposure * 1_000_000)
-                settings["AnalogueGain"] = smooth_gain
-
-                # Update last exposure for next frame's feedback calculation
-                self._last_exposure_time = target_exposure
-
-                # Calculate position for WB interpolation
-                night_threshold = thresholds["night"]
-                day_threshold = thresholds["day"]
-                lux_range = day_threshold - night_threshold
-                position = (lux - night_threshold) / lux_range
-                position = max(0.0, min(1.0, position))
-
-                # ALWAYS use manual WB during transitions to prevent flickering
-                settings["AwbEnable"] = 0
-                target_gains = self._get_target_colour_gains(mode, position)
-                smooth_gains = self._interpolate_colour_gains(target_gains, position)
-                settings["ColourGains"] = smooth_gains
-
-                brightness_str = (
-                    f"{self._last_brightness:.1f}" if self._last_brightness is not None else "N/A"
-                )
-                logger.info(
-                    f"Transition mode (direct): lux={lux:.2f}, brightness={brightness_str}, "
-                    f"exposure={target_exposure:.4f}s, gain={smooth_gain:.2f}, "
-                    f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
-                )
-
-            elif transition.get("smooth_transition", True) and lux is not None:
-                # LEGACY: Complex ML/formula with interpolation
-                # Calculate position in transition range for WB interpolation
-                night_threshold = thresholds["night"]
-                day_threshold = thresholds["day"]
-                lux_range = day_threshold - night_threshold
-                position = (lux - night_threshold) / lux_range
-                position = max(0.0, min(1.0, position))
-
-                # === SEQUENTIAL RAMPING ===
-                # Use shutter-first ramping when transition is seeded (Holy Grail mode)
-                # This keeps ISO low for cleaner images
-                use_sequential = (
-                    transition.get("sequential_ramping", True) and self._transition_seeded
-                )
-
-                if use_sequential:
-                    # Sequential: Shutter first, then gain
-                    target_exposure, target_gain = self._calculate_sequential_ramping(lux, position)
-                else:
-                    # Legacy: Simultaneous ramping based on lux
-                    target_gain = self._calculate_target_gain_from_lux(lux)
-                    target_exposure = self._calculate_target_exposure_from_lux(lux)
-
-                # === BRIGHTNESS CORRECTION FOR TRANSITION MODE ===
-                # Apply brightness correction factor to sequential ramping results
-                # This compensates for sensor differences and scene variations
-                # that the seed-based ramping doesn't account for
-                if self._brightness_correction_factor != 1.0:
-                    corrected_exposure = target_exposure * self._brightness_correction_factor
-                    # Clamp to valid range
-                    max_exp = self.config["adaptive_timelapse"]["night_mode"]["max_exposure_time"]
-                    min_exp = (
-                        self.config["adaptive_timelapse"]
-                        .get("day_mode", {})
-                        .get("exposure_time", 0.01)
-                    )
-                    corrected_exposure = max(min_exp, min(max_exp, corrected_exposure))
-                    logger.debug(
-                        f"[Transition] Brightness correction: {target_exposure:.4f}s x "
-                        f"{self._brightness_correction_factor:.3f} = {corrected_exposure:.4f}s"
-                    )
-                    target_exposure = corrected_exposure
-
-                # === EMERGENCY BRIGHTNESS CORRECTION ===
-                # Apply immediate correction when brightness is severely off-target
-                emergency_factor = self._get_emergency_brightness_factor(self._last_brightness)
-                if emergency_factor != 1.0:
-                    target_exposure *= emergency_factor
-                    # Clamp to valid range (same as brightness correction block)
-                    max_exp = self.config["adaptive_timelapse"]["night_mode"]["max_exposure_time"]
-                    min_exp = (
-                        self.config["adaptive_timelapse"]
-                        .get("day_mode", {})
-                        .get("exposure_time", 0.01)
-                    )
-                    target_exposure = max(min_exp, min(max_exp, target_exposure))
-                    logger.debug(
-                        f"[Transition] Emergency factor {emergency_factor:.2f} -> "
-                        f"exposure now {target_exposure:.4f}s"
-                    )
-
-                # === EV SAFETY CLAMP ===
-                # Ensure first manual frame matches last auto frame exactly
-                target_exposure, target_gain = self._apply_ev_safety_clamp(
-                    target_exposure, target_gain
-                )
-
-                # Apply smooth interpolation to prevent jumps
-                # Use fast ramp-up for underexposure or fast ramp-down for overexposure
-                if self._underexposure_detected:
-                    exposure_speed = self._get_rampup_speed()
-                elif self._overexposure_detected:
-                    exposure_speed = self._get_rampdown_speed()
-                else:
-                    exposure_speed = None
-                smooth_gain = self._interpolate_gain(target_gain)
-                smooth_exposure = self._interpolate_exposure(target_exposure, exposure_speed)
-
-                settings["ExposureTime"] = int(smooth_exposure * 1_000_000)
-                settings["AnalogueGain"] = smooth_gain
-
-                # ALWAYS use manual WB during transitions to prevent flickering
-                # AWB causes sudden color shifts - instead we smoothly interpolate
-                settings["AwbEnable"] = 0
-
-                # Get smoothly interpolated colour gains
-                target_gains = self._get_target_colour_gains(mode, position)
-                smooth_gains = self._interpolate_colour_gains(target_gains, position)
-                settings["ColourGains"] = smooth_gains
-
-                logger.info(
-                    f"Transition mode: lux={lux:.2f}, position={position:.2f}, "
-                    f"exposure={smooth_exposure:.2f}s, gain={smooth_gain:.2f}, "
-                    f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
-                )
+            # Shutter first, then gain: hold gain at 1.0 until the shutter is
+            # within 20% of its ceiling, then trade the remainder for gain.
+            if target_exposure >= night_max * 0.8:
+                exposure_shortfall = target_exposure / (night_max * 0.8)
+                target_gain = min(night_gain, exposure_shortfall)
+                target_exposure = night_max * 0.8
             else:
-                # Legacy fallback when smooth_transition is disabled
-                # Use middle values between day and night
-                exposure_seconds = 5.0
-                settings["ExposureTime"] = int(exposure_seconds * 1_000_000)  # 5 seconds
-                settings["AnalogueGain"] = 2.5  # Sensible middle value
-                settings["AwbEnable"] = 0
-                # Use interpolated colour gains
-                target_gains = self._get_target_colour_gains(mode, 0.5)
-                smooth_gains = self._interpolate_colour_gains(target_gains)
-                settings["ColourGains"] = smooth_gains
+                target_gain = 1.0
+
+            # Gain is interpolated; exposure is not, since the controller's own
+            # damping already limits per-frame movement.
+            smooth_gain = self._interpolate_gain(target_gain)
+
+            settings["ExposureTime"] = int(target_exposure * 1_000_000)
+            settings["AnalogueGain"] = smooth_gain
+            self._last_exposure_time = target_exposure
+
+            self._last_decision = {
+                "target_exposure_s": round(target_exposure, 6),
+                "target_exposure_ms": round(target_exposure * 1000, 2),
+                "target_gain": round(target_gain, 3),
+                "applied_exposure_s": round(target_exposure, 6),
+                "applied_gain": round(smooth_gain, 3),
+            }
+
+            # Position within the transition, for white-balance interpolation.
+            # lux is None until the first test shot succeeds; mid-transition is
+            # the least wrong assumption, and is far better than the hardcoded
+            # 5-second exposure this used to fall through to -- which could fire
+            # in broad daylight.
+            if lux is not None:
+                lux_range = thresholds["day"] - thresholds["night"]
+                position = max(0.0, min(1.0, (lux - thresholds["night"]) / lux_range))
+            else:
+                position = 0.5
+
+            # Always manual WB during transitions, to prevent flickering.
+            settings["AwbEnable"] = 0
+            target_gains = self._get_target_colour_gains(mode, position)
+            smooth_gains = self._interpolate_colour_gains(target_gains, position)
+            settings["ColourGains"] = smooth_gains
+
+            brightness_str = (
+                f"{self._last_brightness:.1f}" if self._last_brightness is not None else "N/A"
+            )
+            logger.info(
+                f"Transition mode: lux={lux:.2f}" if lux is not None else "Transition mode: lux=N/A"
+            )
+            logger.debug(
+                f"Transition: brightness={brightness_str}, position={position:.2f}, "
+                f"exposure={target_exposure:.4f}s, gain={smooth_gain:.2f}, "
+                f"WB=[{smooth_gains[0]:.2f}, {smooth_gains[1]:.2f}]"
+            )
 
         # Add HDR mode control if enabled
         if self._hdr_enabled and self._hdr_enum_available:
@@ -2735,13 +1679,12 @@ class AdaptiveTimelapse:
                 ),
             }
 
-            # Add exposure calculation targets (what we calculated, before interpolation)
-            if lux is not None:
-                target_exposure = self._calculate_target_exposure_from_lux(lux)
-                target_gain = self._calculate_target_gain_from_lux(lux)
-                diagnostics["target_exposure_s"] = round(target_exposure, 6)
-                diagnostics["target_exposure_ms"] = round(target_exposure * 1000, 2)
-                diagnostics["target_gain"] = round(target_gain, 2)
+            # What the controller decided for this frame. Recorded by
+            # get_camera_settings rather than recomputed here -- the old code
+            # re-ran the whole exposure formula purely to fill in these fields,
+            # which meant a pure calculation ran twice per frame and emitted
+            # duplicate log lines from a path whose result was thrown away.
+            diagnostics.update(self._last_decision)
 
             # Add current interpolated values (what we actually sent to camera)
             if self._last_exposure_time is not None:
@@ -2755,9 +1698,6 @@ class AdaptiveTimelapse:
             diagnostics["hysteresis_last_mode"] = getattr(self, "_last_mode", None)
 
             # Add brightness feedback state
-            diagnostics["brightness_correction_factor"] = round(
-                self._brightness_correction_factor, 4
-            )
             diagnostics["target_brightness"] = self._target_brightness
             diagnostics["base_target_brightness"] = self._base_target_brightness
             diagnostics["overcast_boost_active"] = (
@@ -2957,13 +1897,6 @@ class AdaptiveTimelapse:
                                         )
                                         raw_lux = self._smoothed_lux
 
-                        # Apply proactive exposure correction based on test shot brightness
-                        # This helps prevent overexposure during rapid light changes
-                        self._apply_proactive_exposure_correction(test_image_path, raw_lux)
-
-                        # Detect rapid lux changes for faster transition speeds
-                        self._detect_rapid_lux_change(raw_lux)
-
                         # Apply exponential moving average smoothing
                         lux = self._smooth_lux(raw_lux)
 
@@ -2997,7 +1930,6 @@ class AdaptiveTimelapse:
                         # Reset seed state when returning to day mode
                         if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
                             self._transition_seeded = False
-                            self._ev_clamp_applied = False
                             logger.info("[Holy Grail] Returned to Day mode - seed state reset")
 
                         # Log transition progress
@@ -3097,8 +2029,11 @@ class AdaptiveTimelapse:
                                             f"(std_brightness={std_brightness:.1f})"
                                         )
 
-                                self._apply_brightness_feedback(actual_brightness)
-                                # Track p95 for proactive highlight protection
+                                # These two are the entire input to the exposure
+                                # controller. _apply_brightness_feedback used to write
+                                # _last_brightness as a side effect while computing a
+                                # correction factor nothing read.
+                                self._last_brightness = actual_brightness
                                 self._last_p95 = brightness_metrics.get("percentile_95")
                                 # Check for overexposure and enable fast ramp-down if needed
                                 self._check_overexposure(brightness_metrics)
@@ -3106,10 +2041,6 @@ class AdaptiveTimelapse:
                                 self._check_underexposure(brightness_metrics)
                         except Exception as e:
                             logger.debug(f"Could not apply brightness feedback: {e}")
-
-                    # Note: ML v2 does not learn frame-by-frame like v1
-                    # It trains from the database on initialization (daily retrain)
-                    # This avoids reinforcing bad exposures during problematic transitions
 
                     # Update day WB reference from actual capture metadata
                     # This allows us to learn good daylight WB values for smooth transitions

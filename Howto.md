@@ -35,7 +35,7 @@ Plus one crontab line: `0 13 */2 * * sudo reboot` — the Pi reboots every other
 
 `src/auto_timelapse.py` runs an infinite loop. Each iteration:
 
-1. **Decide mode and exposure.** ML logic in `src/ml_exposure_v2.py` looks at sun elevation, recent brightness history, and weather to pick day/transition/night exposure parameters.
+1. **Decide mode and exposure.** `src/auto_timelapse.py` picks day/transition/night from smoothed lux and sun elevation, then sets exposure by direct brightness feedback: `new = current * (target / measured) ** damping`.
 2. **Shoot.** `src/capture_image.py` opens picamera2, captures the frame, and saves it to `/var/www/html/images/YYYY/MM/DD/kringelen_YYYY-MM-DD_HH-MM-SS.jpg`. A sibling `_metadata.json` is written with exposure, AWB gains, lux, sun elevation, weather snapshot.
 3. **Stamp the overlay.** `src/overlay.py` + `src/apply_overlay.py` draw the timestamp / weather / camera badge directly onto the JPEG.
 4. **Record in DB.** `src/database.py` inserts a row into the `captures` table (timestamp, mode, lux, brightness, weather, system metrics).
@@ -123,5 +123,4 @@ journalctl -u raspilapse-daily-video.service -f
 
 - **Wi-Fi only.** `eth0` is down. If the AP misbehaves, captures still work but uploads queue up.
 - **Reboot at 13:00 every other day.** Anything running at exactly that moment gets killed. The upload service now reconciles stale `'uploading'` rows on the next retry tick, so no manual cleanup is needed.
-- **ML state files (`ml_state/`).** They grow over time. No automatic pruning yet.
 - **One config file across Pis.** When something is fixed in the repo, sync the other Pis via `git pull` and follow `Update.md` for any post-pull steps.

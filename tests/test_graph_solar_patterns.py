@@ -19,7 +19,7 @@ class TestGetDbPath:
 
     def test_returns_default_path_when_no_config(self):
         """Test that default path is returned when config doesn't exist."""
-        from src.graph_ml_patterns import get_db_path
+        from scripts.graph_solar_patterns import get_db_path
 
         # Function should return a path even if config doesn't exist
         result = get_db_path()
@@ -31,7 +31,7 @@ class TestFetchDailyLuxData:
 
     def test_fetch_from_empty_db(self):
         """Test fetching from database with no captures."""
-        from src.graph_ml_patterns import fetch_daily_lux_data
+        from scripts.graph_solar_patterns import fetch_daily_lux_data
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
@@ -56,7 +56,7 @@ class TestFetchDailyLuxData:
 
     def test_fetch_with_data(self):
         """Test fetching data from database with captures."""
-        from src.graph_ml_patterns import fetch_daily_lux_data
+        from scripts.graph_solar_patterns import fetch_daily_lux_data
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
@@ -102,7 +102,7 @@ class TestFetchDailyLuxData:
 
     def test_fetch_filters_by_days(self):
         """Test that data is filtered by days parameter."""
-        from src.graph_ml_patterns import fetch_daily_lux_data
+        from scripts.graph_solar_patterns import fetch_daily_lux_data
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
@@ -140,7 +140,7 @@ class TestFetchDailyLuxData:
 
     def test_fetch_nonexistent_db(self):
         """Test fetching from nonexistent database."""
-        from src.graph_ml_patterns import fetch_daily_lux_data
+        from scripts.graph_solar_patterns import fetch_daily_lux_data
 
         result = fetch_daily_lux_data("/nonexistent/db.db", days=7)
         assert result == {}
@@ -184,7 +184,7 @@ class TestCreateSolarPatternGraph:
 
     def test_create_graph_empty_db(self, capsys):
         """Test creating graph with empty database."""
-        from src.graph_ml_patterns import create_solar_pattern_graph
+        from scripts.graph_solar_patterns import create_solar_pattern_graph
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
@@ -209,7 +209,7 @@ class TestCreateSolarPatternGraph:
 
     def test_create_graph_with_data(self):
         """Test creating graph with sample data."""
-        from src.graph_ml_patterns import create_solar_pattern_graph
+        from scripts.graph_solar_patterns import create_solar_pattern_graph
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
@@ -226,7 +226,7 @@ class TestCreateSolarPatternGraph:
 
     def test_create_graph_single_day(self):
         """Test creating graph with single day of data."""
-        from src.graph_ml_patterns import create_solar_pattern_graph
+        from scripts.graph_solar_patterns import create_solar_pattern_graph
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
@@ -241,7 +241,7 @@ class TestCreateSolarPatternGraph:
 
     def test_create_graph_many_days(self):
         """Test creating graph with many days shows trend line."""
-        from src.graph_ml_patterns import create_solar_pattern_graph
+        from scripts.graph_solar_patterns import create_solar_pattern_graph
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
@@ -260,7 +260,7 @@ class TestMainFunction:
 
     def test_main_with_valid_db(self):
         """Test main function with valid database."""
-        from src.graph_ml_patterns import main
+        from scripts.graph_solar_patterns import main
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
@@ -285,7 +285,7 @@ class TestMainFunction:
             conn.close()
 
             with mock.patch(
-                "sys.argv", ["graph_ml_patterns.py", "--db", db_path, "-o", output_path, "-d", "7"]
+                "sys.argv", ["graph_solar_patterns.py", "--db", db_path, "-o", output_path, "-d", "7"]
             ):
                 main()
 
@@ -293,7 +293,7 @@ class TestMainFunction:
 
     def test_main_creates_output_dir(self):
         """Test main function creates output directory if needed."""
-        from src.graph_ml_patterns import main
+        from scripts.graph_solar_patterns import main
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
@@ -329,7 +329,7 @@ class TestMainFunction:
             conn.close()
 
             with mock.patch(
-                "sys.argv", ["graph_ml_patterns.py", "--db", db_path, "-o", output_path]
+                "sys.argv", ["graph_solar_patterns.py", "--db", db_path, "-o", output_path]
             ):
                 main()
 

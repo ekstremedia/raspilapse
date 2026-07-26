@@ -34,7 +34,7 @@ sys.path.insert(0, str(project_root))
 
 # Import solar patterns graph generator
 try:
-    from src.graph_ml_patterns import create_solar_pattern_graph
+    from graph_solar_patterns import create_solar_pattern_graph
 
     HAS_SOLAR_GRAPH = True
 except ImportError:
@@ -834,7 +834,7 @@ def create_overview_graph(data: Dict, output_dir: Path, time_desc: str):
     print(f"    Saved: {output_path}")
 
 
-def create_ml_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
+def create_brightness_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
     """
     Create ML diagnostics graph for monitoring ML-first exposure system.
 
@@ -843,7 +843,7 @@ def create_ml_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
     - Brightness stability (rolling std dev - detects oscillation)
     - Lux rate of change (detects rapid transitions)
     """
-    print("  Creating ml_diagnostics.png...")
+    print("  Creating brightness_diagnostics.png...")
 
     # Filter out None values for brightness
     valid_indices = [i for i, v in enumerate(data["brightness_mean"]) if v is not None]
@@ -1027,7 +1027,7 @@ def create_ml_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
     )
     fig.tight_layout()
 
-    output_path = output_dir / "ml_diagnostics.png"
+    output_path = output_dir / "brightness_diagnostics.png"
     plt.savefig(output_path, dpi=DPI, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
     print(f"    Saved: {output_path}")
@@ -1229,7 +1229,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
         where=[r >= 1.0 for r in ratio_smooth],
         alpha=0.4,
         color="#88ff88",
-        label="ML > Formula",
+        label="Above reference curve",
     )
     ax2.fill_between(
         valid_timestamps,
@@ -1238,7 +1238,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
         where=[r < 1.0 for r in ratio_smooth],
         alpha=0.4,
         color="#ff8888",
-        label="ML < Formula",
+        label="Below reference curve",
     )
     ax2.plot(valid_timestamps, ratio_smooth, color="#ffffff", linewidth=1.5, alpha=0.8)
 
@@ -1352,7 +1352,7 @@ Examples:
     create_overview_graph(data, output_dir, time_desc)
 
     # ML diagnostics graphs (for monitoring ML-first exposure system)
-    create_ml_diagnostics_graph(data, output_dir, time_desc)
+    create_brightness_diagnostics_graph(data, output_dir, time_desc)
     create_exposure_efficiency_graph(data, output_dir, time_desc)
     create_white_balance_graph(data, output_dir, time_desc)
 
