@@ -138,7 +138,10 @@ def _apply(logger: logging.Logger, script_name: str, settings: Dict) -> logging.
         logger.removeHandler(handler)
 
     if not settings.get("enabled", True):
+        # NullHandler alone does not stop propagation, so a "disabled" logger
+        # would still emit through any root handler someone else configured.
         logger.addHandler(logging.NullHandler())
+        logger.propagate = False
         return logger
 
     logger.setLevel(_LEVELS.get(str(settings.get("level", "INFO")).upper(), logging.INFO))
@@ -246,6 +249,9 @@ class LoggerConfig:
 
     def setup_logger(self, name: Optional[str] = None) -> logging.Logger:
         script_name = name or self.script_name
-        logger = _apply(logging.getLogger(script_name), self.script_name, self.config["logging"])
+        # One name throughout: registering under `script_name` while formatting
+        # the filename from self.script_name meant a later configure_logging()
+        # silently moved the logger to a different file.
+        logger = _apply(logging.getLogger(script_name), script_name, self.config["logging"])
         _registry[script_name] = logger
         return logger

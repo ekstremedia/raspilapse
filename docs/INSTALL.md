@@ -30,7 +30,8 @@ below Raspilapse — reseat the cable and re-check raspi-config.
 ```bash
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y python3-picamera2 python3-yaml python3-pil python3-numpy \
-                    python3-requests python3-requests-toolbelt python3-matplotlib ffmpeg
+                    python3-requests python3-requests-toolbelt python3-matplotlib \
+                    python3-pip ffmpeg
 ```
 
 | Package | Needed for |

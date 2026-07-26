@@ -70,7 +70,9 @@ components=()
 with_watchdog=0
 mode=install
 
-usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+# 2..18 is the header comment; line 19 is `set -euo pipefail`, which has no
+# leading # and would otherwise be printed as part of the help text.
+usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -274,7 +276,8 @@ do_install() {
 
 do_uninstall() {
     local unit units=()
-    for unit in "${COMPONENT_UNITS[@]}" "${COMPONENT_UNITS[watchdog]}"; do
+    for unit in "${COMPONENT_UNITS[@]}"; do
+        # shellcheck disable=SC2206  # deliberate: values hold several units
         units+=($unit)
     done
 

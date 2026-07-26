@@ -22,10 +22,11 @@ lazily and stubbed in tests; only one test is hardware-gated.
 ```bash
 make format    # black
 make lint      # ruff
+make check     # black --check
 make test      # pytest
 ```
 
-or `make all`, which runs all three.
+or `make all`, which runs all four.
 
 **Use the black version pinned in `requirements-dev.txt`.** Black's stable
 style changes between yearly releases, so a newer black on your machine will

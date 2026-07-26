@@ -22,5 +22,5 @@ StateDirectory=raspilapse
 Environment="RASPILAPSE_WATCHDOG_STATE=/var/lib/raspilapse/watchdog_state"
 Environment="RASPILAPSE_PROJECT_DIR=@PROJECT_DIR@"
 
-[Install]
-WantedBy=multi-user.target
+# No [Install] section: triggered by raspilapse-watchdog.timer. Without one the
+# service cannot be enabled, which is what install.sh's contract assumes.

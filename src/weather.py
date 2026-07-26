@@ -26,6 +26,9 @@ logger = get_logger("weather")
 # How long to suppress repeats of an unchanged error message.
 ERROR_LOG_INTERVAL = timedelta(minutes=10)
 
+# Smallest retry delay, so cache_duration: 0 cannot mean "retry immediately".
+MIN_BACKOFF = timedelta(seconds=30)
+
 
 @dataclass
 class _CacheEntry:
@@ -158,8 +161,11 @@ class WeatherData:
         now = datetime.now()
         entry.failures += 1
 
-        # 300s, 600s, 1200s, ... capped at max_backoff.
-        delay = min(self.cache_duration * (2 ** (entry.failures - 1)), self.max_backoff)
+        # 300s, 600s, 1200s, ... capped at max_backoff. The floor matters
+        # because cache_duration: 0 would otherwise give a zero delay and
+        # restore the every-call retry this exists to prevent.
+        base = max(self.cache_duration, MIN_BACKOFF)
+        delay = min(base * (2 ** (entry.failures - 1)), self.max_backoff)
         entry.next_attempt_at = now + delay
 
         changed = message != entry.last_error

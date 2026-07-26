@@ -1945,3 +1945,56 @@ class TestFeedbackWiring:
         tl.exposure.observe_frame({"mean_brightness": 60.0, "percentile_95": 90.0})
         settings = tl.exposure.get_camera_settings(LightMode.DAY, lux=500)
         assert settings["ExposureTime"] > 0.02 * 1_000_000
+
+
+class TestPartialSeedResilience:
+    """A partial database row must not be able to crash the capture loop.
+
+    seed_from_capture applies only the fields the row actually had, so a row
+    with brightness but no analogue_gain leaves _last_analogue_gain as None
+    while _last_brightness is set. Night mode's gain-reduction branch then
+    reached for that gain and raised TypeError -- out of get_camera_settings,
+    on the capture path.
+    """
+
+    def test_night_gain_reduction_with_no_seeded_gain(self, direct_control_config_file):
+        tl = AdaptiveTimelapse(direct_control_config_file)
+
+        tl.exposure.seed_from_capture(brightness=180.0, lux=1.0, mode=LightMode.NIGHT)
+        assert tl.exposure._last_analogue_gain is None
+        assert tl.exposure.last_brightness == 180.0
+
+        settings = tl.exposure.get_camera_settings(LightMode.NIGHT, lux=1.0)
+
+        assert settings["AnalogueGain"] >= 2.0
+        assert settings["ExposureTime"] > 0
+
+    def test_highlight_factor_never_divides_by_zero(self):
+        """Degenerate threshold configs must not crash the capture loop.
+
+        They cannot: the `p95 <= safe` early return covers every p95 that could
+        reach an interpolation with a zero-width band. Asserted rather than
+        assumed, because it is the kind of invariant a later edit could break.
+        """
+        from src.auto_timelapse import highlight_factor
+
+        for safe in range(0, 260, 20):
+            for warning in range(0, 260, 20):
+                for critical in range(0, 260, 20):
+                    for p95 in (0, 1, safe, warning, critical, 200, 255):
+                        value = highlight_factor(p95, safe=safe, warning=warning, critical=critical)
+                        assert 0.70 <= value <= 1.0
+
+    def test_observe_frame_tolerates_none_measurements(self, direct_control_config_file):
+        """A failed measurement sets the key to None, which a .get default misses."""
+        tl = AdaptiveTimelapse(direct_control_config_file)
+
+        tl.exposure.observe_frame(
+            {
+                "mean_brightness": None,
+                "percentile_95": None,
+                "std_brightness": None,
+                "overexposed_percent": None,
+                "underexposed_percent": None,
+            }
+        )

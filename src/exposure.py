@@ -9,7 +9,7 @@ AdaptiveTimelapse holds one of these and feeds it measurements; the solar
 position it needs is passed in rather than computed here.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 try:
     from src.logging_config import get_logger
@@ -79,11 +79,14 @@ def highlight_factor(
         return 1.0
 
     if p95 <= warning:
-        # safe -> 1.00, warning -> 0.95
+        # safe -> 1.00, warning -> 0.95.
+        # No divide-by-zero guard is needed for safe == warning: the
+        # `p95 <= safe` return above already covers every p95 that could reach
+        # this branch. Verified exhaustively over all threshold/p95 combinations.
         return 1.0 - ((p95 - safe) / (warning - safe)) * 0.05
 
     if p95 <= critical:
-        # warning -> 0.95, critical -> 0.85
+        # warning -> 0.95, critical -> 0.85. Same reasoning for warning == critical.
         return 0.95 - ((p95 - warning) / (critical - warning)) * 0.10
 
     # critical -> 0.85, and downhill from there to the floor
@@ -624,8 +627,10 @@ class ExposureController:
         if not brightness_metrics:
             return self._overexposure_detected
 
-        mean_brightness = brightness_metrics.get("mean_brightness", 0)
-        overexposed_pct = brightness_metrics.get("overexposed_percent", 0)
+        # `or` rather than a .get default: a failed measurement sets the key
+        # to None, which a default does not cover.
+        mean_brightness = brightness_metrics.get("mean_brightness") or 0
+        overexposed_pct = brightness_metrics.get("overexposed_percent") or 0
 
         # Thresholds - lowered for earlier detection
         brightness_warning = 150  # Early warning threshold
@@ -687,7 +692,9 @@ class ExposureController:
         if not brightness_metrics:
             return self._underexposure_detected
 
-        mean_brightness = brightness_metrics.get("mean_brightness", 128)
+        # 128 is "unremarkable" -- neither over nor under -- so a missing or
+        # None measurement leaves the flags where they are.
+        mean_brightness = brightness_metrics.get("mean_brightness") or 128
 
         # Thresholds for underexposure detection (lowered for faster response)
         brightness_warning = 90  # Early warning (target is 120)
@@ -1139,7 +1146,7 @@ class ExposureController:
     def _settings_night(self, lux: float = None) -> Dict:
         """Night: long exposure at high gain, pulled back only if the scene is bright."""
         adaptive_config = self.config["adaptive_timelapse"]
-        settings = {}
+        settings: Dict[str, Any] = {}
         night = adaptive_config["night_mode"]
         # Disable auto-exposure, auto-gain, and auto-white-balance for manual control
         settings["AeEnable"] = 0
@@ -1171,7 +1178,13 @@ class ExposureController:
                 # Reduce gain proportionally to bring brightness toward 120
                 # Use sqrt for gentler reduction (since brightness ~ gain * exposure)
                 brightness_ratio = 120.0 / self._last_brightness
-                target_gain = max(2.0, self._last_analogue_gain * brightness_ratio**0.5)
+                # seed_from_capture applies only the fields the database row
+                # actually had, so a partial row can leave this None while
+                # brightness is set. Fall back to the configured night gain.
+                current_gain = (
+                    night_gain if self._last_analogue_gain is None else self._last_analogue_gain
+                )
+                target_gain = max(2.0, current_gain * brightness_ratio**0.5)
                 logger.debug(
                     f"Night mode gain reduction: brightness={self._last_brightness:.0f}, "
                     f"exposure at floor ({target_exposure:.2f}s), reducing gain to {target_gain:.2f}"
@@ -1256,7 +1269,7 @@ class ExposureController:
     def _settings_day(self, lux: float = None) -> Dict:
         """Day: shutter does the work, gain pinned at its floor."""
         adaptive_config = self.config["adaptive_timelapse"]
-        settings = {}
+        settings: Dict[str, Any] = {}
         day = adaptive_config["day_mode"]
         transition_config = adaptive_config.get("transition_mode", {})
 
@@ -1322,7 +1335,7 @@ class ExposureController:
     def _settings_transition(self, lux: float = None) -> Dict:
         """Transition: shutter first, then gain once the shutter nears its ceiling."""
         adaptive_config = self.config["adaptive_timelapse"]
-        settings = {}
+        settings: Dict[str, Any] = {}
         thresholds = adaptive_config["light_thresholds"]
 
         # Disable auto-exposure for manual control

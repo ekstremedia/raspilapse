@@ -45,6 +45,7 @@ class CachedJsonSource:
         self.path = self.section.get(self.path_key, "")
         self._cache: Optional[Dict] = None
         self._cache_time: Optional[datetime] = None
+        self._missing_logged = False
 
     def _extract(self, raw: Dict) -> Dict:
         """Pull the payload out of the loaded file. Override to unwrap."""
@@ -69,17 +70,27 @@ class CachedJsonSource:
         try:
             path = Path(self.path)
             if not path.exists():
-                logger.warning(f"{self.label.capitalize()} file not found: {self.path}")
+                # Stamp the attempt so a permanently absent file is re-checked
+                # on the normal interval instead of on every render, and warn
+                # once rather than every time the cache expires. An overlay is
+                # rebuilt twice per capture cycle; without this an unconfigured
+                # ships_file floods the log exactly the way weather.py used to.
+                self._cache_time = now
+                if not self._missing_logged:
+                    logger.warning(f"{self.label.capitalize()} file not found: {self.path}")
+                    self._missing_logged = True
                 return self._cache
 
             with open(path, "r") as f:
                 data = self._extract(json.load(f))
 
+            self._missing_logged = False
             self._cache = data
             self._cache_time = now
             return data
 
         except Exception as e:
+            self._cache_time = now
             logger.warning(f"Failed to load {self.label} data: {e}")
             return self._cache
 
@@ -595,15 +606,15 @@ class TideData(CachedJsonSource):
             "next_event_time": event_time,
             "next_event_time_str": self.format_time(event_time),
             "target_level": target_level,
-            "target_level_str": f"{int(target_level * 100)}cm" if target_level else "",
+            "target_level_str": f"{int(target_level * 100)}cm" if target_level is not None else "",
             "high_time": high_time,
             "high_time_str": self.format_time(high_time),
             "high_level": high_level,
-            "high_level_str": f"{int(high_level * 100)}cm" if high_level else "",
+            "high_level_str": f"{int(high_level * 100)}cm" if high_level is not None else "",
             "low_time": low_time,
             "low_time_str": self.format_time(low_time),
             "low_level": low_level,
-            "low_level_str": f"{int(low_level * 100)}cm" if low_level else "",
+            "low_level_str": f"{int(low_level * 100)}cm" if low_level is not None else "",
         }
 
 

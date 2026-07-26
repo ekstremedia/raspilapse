@@ -839,7 +839,8 @@ def create_overview_graph(data: Dict, output_dir: Path, time_desc: str):
 
 def create_brightness_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
     """
-    Create ML diagnostics graph for monitoring ML-first exposure system.
+    Create a brightness diagnostics graph: how well the exposure loop is
+    holding its target, and how fast the light is changing under it.
 
     Shows:
     - Brightness error from target (120)
@@ -988,7 +989,7 @@ def create_brightness_diagnostics_graph(data: Dict, output_dir: Path, time_desc:
     ax3.fill_between(timestamps, lux_rate_smooth, alpha=0.4, color="#ffaa66")
     ax3.plot(timestamps, lux_rate_smooth, color="#ffaa66", linewidth=2, label="Lux change rate")
 
-    # ML trust reduction threshold
+    # Above this rate of change, the loop is chasing rather than holding
     ax3.axhline(
         y=0.3,
         color="#ffaa00",
@@ -1026,7 +1027,7 @@ def create_brightness_diagnostics_graph(data: Dict, output_dir: Path, time_desc:
         spine.set_edgecolor(GRID_COLOR)
 
     fig.suptitle(
-        f"ML Exposure Diagnostics - {time_desc}", fontsize=14, fontweight="bold", color=TEXT_COLOR
+        f"Exposure Diagnostics - {time_desc}", fontsize=14, fontweight="bold", color=TEXT_COLOR
     )
     fig.tight_layout()
 
@@ -1127,8 +1128,8 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
     """
     Compare actual exposure to formula-predicted exposure.
 
-    Shows how much ML is deviating from the simple formula.
-    Positive = ML using more exposure, Negative = ML using less.
+    Shows how far actual exposure sits from the lux-based reference curve.
+    Positive = using more exposure than the reference, negative = less.
     """
     print("  Creating exposure_efficiency.png...")
 
@@ -1159,7 +1160,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
             formula_exposure.append(formula_exp)
             actual_exposure.append(exp)
             valid_timestamps.append(ts)
-            # Ratio: >1 means ML using more exposure than formula
+            # Ratio: >1 means more exposure than the reference curve
             ratio = exp / formula_exp
             exposure_ratio.append(ratio)
 
@@ -1193,7 +1194,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
         actual_smooth,
         color=COLORS["exposure"],
         linewidth=2,
-        label="Actual (ML-blended)",
+        label="Actual",
     )
 
     ax1.set_ylabel("Exposure (s)", fontsize=11, color=TEXT_COLOR)
@@ -1221,7 +1222,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
     for spine in ax1.spines.values():
         spine.set_edgecolor(GRID_COLOR)
 
-    # === Panel 2: Exposure Ratio (ML deviation from formula) ===
+    # === Panel 2: Exposure ratio (deviation from the reference curve) ===
     ax2.set_facecolor(AXES_BG)
 
     # Color by ratio: green near 1.0, red for large deviations
@@ -1253,7 +1254,10 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
     ax2.set_xlabel("Time", fontsize=11, color=TEXT_COLOR)
     ax2.set_ylabel("Ratio (Actual/Formula)", fontsize=11, color=TEXT_COLOR)
     ax2.set_title(
-        "ML Exposure Deviation from Formula", fontsize=12, fontweight="bold", color=TEXT_COLOR
+        "Exposure Deviation from Reference Curve",
+        fontsize=12,
+        fontweight="bold",
+        color=TEXT_COLOR,
     )
     ax2.set_ylim(0.3, 3.0)
     ax2.set_yscale("log")
@@ -1354,7 +1358,7 @@ Examples:
     create_system_graph(data, output_dir, time_desc)
     create_overview_graph(data, output_dir, time_desc)
 
-    # ML diagnostics graphs (for monitoring ML-first exposure system)
+    # Brightness/exposure diagnostics
     create_brightness_diagnostics_graph(data, output_dir, time_desc)
     create_exposure_efficiency_graph(data, output_dir, time_desc)
     create_white_balance_graph(data, output_dir, time_desc)

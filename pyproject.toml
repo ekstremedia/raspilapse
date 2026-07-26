@@ -102,6 +102,11 @@ markers = [
 
 [tool.mypy]
 python_version = "3.9"
+# Every src/ module supports being imported both as `src.x` and as bare `x`,
+# because the systemd units run the scripts directly. mypy sees the fallback
+# arm of that try/except as a redefinition. It is deliberate and project-wide,
+# so flagging it at ~40 sites is noise rather than signal.
+disable_error_code = ["no-redef"]
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
