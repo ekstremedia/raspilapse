@@ -586,8 +586,12 @@ logging:
   # Date format for timestamps
   date_format: "%Y-%m-%d %H:%M:%S"
 
-  # Also log to console
-  console: true
+  # Console output: auto | true | false
+  #   auto  - skip it under systemd, which already captures stdout into the
+  #           journal. Without this, every line is stored twice.
+  #   true  - always add a console handler
+  #   false - never
+  console: auto
 
   # Maximum log file size in MB (0 = unlimited)
   max_size_mb: 5

@@ -25,10 +25,10 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
-    from src.logging_config import get_logger
+    from src.logging_config import configure_logging, get_logger
     from src.upload_service import UploadService
 except ModuleNotFoundError:
-    from logging_config import get_logger
+    from logging_config import configure_logging, get_logger
     from upload_service import UploadService
 
 
@@ -236,6 +236,7 @@ Examples:
     )
 
     args = parser.parse_args()
+    configure_logging(args.config)
 
     # Change to project directory
     os.chdir(project_root)

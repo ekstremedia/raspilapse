@@ -28,10 +28,10 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
-    from src.logging_config import get_logger
+    from src.logging_config import configure_logging, get_logger
     from src.colors import Colors, print_section, print_info
 except ModuleNotFoundError:
-    from logging_config import get_logger
+    from logging_config import configure_logging, get_logger
     from colors import Colors, print_section, print_info
 
 
@@ -539,13 +539,9 @@ What is a Slitscan?
     )
 
     args = parser.parse_args()
+    configure_logging(args.config)
 
-    # Setup logger
-    try:
-        logger = get_logger("create_keogram", args.config)
-    except Exception:
-        logger = logging.getLogger("create_keogram")
-        logger.setLevel(logging.INFO)
+    logger = get_logger("create_keogram")
 
     # Determine mode
     mode = "slitscan" if args.slitscan else "keogram"

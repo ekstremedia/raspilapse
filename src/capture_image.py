@@ -10,10 +10,10 @@ import yaml
 
 # Handle imports for both module and script execution
 try:
-    from src.logging_config import get_logger
+    from src.logging_config import configure_logging, get_logger
     from src.overlay import ImageOverlay
 except ImportError:
-    from logging_config import get_logger
+    from logging_config import configure_logging, get_logger
     from overlay import ImageOverlay
 
 # Initialize logger
@@ -615,6 +615,7 @@ def main():
     parser.add_argument("-o", "--output", help="Output file path (overrides config pattern)")
 
     args = parser.parse_args()
+    configure_logging(args.config)
 
     logger.info("=== Raspilapse Image Capture Started ===")
     logger.debug(f"Config file: {args.config}")

@@ -13,10 +13,10 @@ import json
 
 try:
     from src.overlay import apply_overlay_to_image
-    from src.logging_config import get_logger
+    from src.logging_config import configure_logging, get_logger
 except ImportError:
     from overlay import apply_overlay_to_image
-    from logging_config import get_logger
+    from logging_config import configure_logging, get_logger
 
 logger = get_logger("apply_overlay")
 
@@ -95,6 +95,7 @@ Examples:
     )
 
     args = parser.parse_args()
+    configure_logging(getattr(args, "config", None))
 
     # Set log level
     if args.verbose:

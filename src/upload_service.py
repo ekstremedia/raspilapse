@@ -36,37 +36,10 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-import logging
-
-
-# Setup fallback logger
-def _get_fallback_logger(name):
-    logger = logging.getLogger(name)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        )
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
-    return logger
-
-
 try:
-    from src.logging_config import get_logger as _get_project_logger
+    from src.logging_config import get_logger
 except ImportError:
-    try:
-        from logging_config import get_logger as _get_project_logger
-    except ImportError:
-        _get_project_logger = None
-
-
-def get_logger(name, config_path=None):
-    """Get logger, using project logger if config_path provided, else fallback."""
-    if config_path and _get_project_logger:
-        return _get_project_logger(name, config_path)
-    return _get_fallback_logger(name)
-
+    from logging_config import get_logger
 
 # Exponential backoff settings
 BASE_RETRY_DELAY_MINUTES = 5

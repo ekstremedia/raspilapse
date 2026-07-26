@@ -23,10 +23,10 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
-    from src.logging_config import get_logger
+    from src.logging_config import configure_logging, get_logger
     from src.create_keogram import create_keogram_from_images, create_slitscan_from_images
 except ModuleNotFoundError:
-    from logging_config import get_logger
+    from logging_config import configure_logging, get_logger
     from create_keogram import create_keogram_from_images, create_slitscan_from_images
 
 
@@ -455,6 +455,7 @@ Examples:
     )
 
     args = parser.parse_args()
+    configure_logging(args.config)
 
     # Load configuration
     try:

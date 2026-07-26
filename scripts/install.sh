@@ -338,5 +338,6 @@ systemctl list-timers 'raspilapse-*' --no-pager 2>/dev/null || true
 echo
 echo "  Start now:   sudo systemctl start raspilapse"
 echo "  Status:      systemctl status raspilapse"
-echo "  Logs:        journalctl -u raspilapse -f"
+echo "  Logs:        tail -f $PROJECT_DIR/logs/auto_timelapse.log"
+echo "               journalctl -u raspilapse -f    (systemd + libcamera)"
 echo "  Uninstall:   ./scripts/install.sh --uninstall"

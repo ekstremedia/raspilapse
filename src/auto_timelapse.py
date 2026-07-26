@@ -25,13 +25,13 @@ except ImportError:
 
 # Handle imports for both module and script execution
 try:
-    from src.logging_config import get_logger
+    from src.logging_config import configure_logging, get_logger
     from src.capture_image import CameraConfig, ImageCapture
     from src.ml_exposure_v2 import MLExposurePredictorV2
     from src.database import CaptureDatabase
     from src.system_monitor import SystemMonitor
 except ImportError:
-    from logging_config import get_logger
+    from logging_config import configure_logging, get_logger
     from capture_image import CameraConfig, ImageCapture
 
     try:
@@ -3209,6 +3209,7 @@ def main():
     )
 
     args = parser.parse_args()
+    configure_logging(args.config)
 
     logger.info("Starting Raspilapse Adaptive Timelapse")
 
