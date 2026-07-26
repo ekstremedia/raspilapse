@@ -26,8 +26,11 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 
-from src.config_utils import format_duration, get_db_path  # noqa: E402
-from src.config_utils import parse_time_arg_or_exit  # noqa: E402
+from src.config_utils import (  # noqa: E402
+    format_duration,
+    get_db_path,
+    parse_time_arg_or_exit,  # noqa: E402
+)
 
 
 def parse_time_arg(time_str: str) -> timedelta:
@@ -111,14 +114,14 @@ def print_stats(
     # Print header
     print()
     print(f"  📊 Raspilapse Database Stats - {range_desc}")
-    print(f"  " + "=" * 60)
+    print("  " + "=" * 60)
     print(f"  Database: {db_path}")
     print(f"  Captures: {stats['cnt']} | From: {stats['first'][:19]} | To: {stats['last'][:19]}")
     print()
 
     # Print averages
-    print(f"  📈 Averages:")
-    print(f"  " + "-" * 60)
+    print("  📈 Averages:")
+    print("  " + "-" * 60)
     avg_lux = stats["avg_lux"] or 0
     avg_brightness = stats["avg_brightness"] or 0
     avg_exp = stats["avg_exp"] or 0
@@ -136,7 +139,7 @@ def print_stats(
     # Get recent captures
     if limit:
         cur.execute(
-            f"""
+            """
             SELECT timestamp, mode, lux, brightness_mean,
                    exposure_time_us/1000000.0 as exp_sec,
                    weather_temperature, system_cpu_temp, system_load_1min
@@ -170,12 +173,12 @@ def print_stats(
     rows = cur.fetchall()
 
     if rows:
-        print(f"  📷 Recent Captures (newest first):")
-        print(f"  " + "-" * 60)
+        print("  📷 Recent Captures (newest first):")
+        print("  " + "-" * 60)
         print(
             f"  {'Time':<12} {'Mode':<11} {'Lux':>7} {'Bright':>7} {'Exp':>7} {'Temp':>6} {'CPU':>5} {'Load':>5}"
         )
-        print(f"  " + "-" * 60)
+        print("  " + "-" * 60)
 
         for row in rows:
             ts = row["timestamp"][11:19] if row["timestamp"] else "N/A"

@@ -2,10 +2,10 @@
 
 import json
 import sys
-from pathlib import Path
-from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, MagicMock
 import urllib.error
+from datetime import datetime, timedelta
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 

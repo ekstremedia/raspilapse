@@ -5,12 +5,12 @@ Shows service status, configuration, and recent captures with beautiful colored 
 """
 
 import os
-import sys
-import json
 import subprocess
-from pathlib import Path
+import sys
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Tuple
+
 import yaml
 
 # Add project root to path for imports

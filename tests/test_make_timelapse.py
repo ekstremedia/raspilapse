@@ -10,29 +10,30 @@ Tests the timelapse video generation functionality including:
 - Deflicker and resolution options
 """
 
-import pytest
+import os
+import shutil
+import sys
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-import tempfile
-import shutil
+from unittest.mock import Mock, patch
+
+import pytest
 import yaml
-import sys
-import os
-from unittest.mock import Mock, patch, MagicMock
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from make_timelapse import (
-    parse_time,
+    Colors,
+    create_video,
     find_images_in_range,
     load_config,
-    create_video,
-    Colors,
+    main,
+    parse_time,
+    print_info,
     print_section,
     print_subsection,
-    print_info,
-    main,
 )
 
 
@@ -392,8 +393,8 @@ class TestVideoDirectoryOrganization:
 
     def test_video_path_with_date_organization(self):
         """Test that video path includes date subdirectory when organize_by_date is True."""
-        from pathlib import Path
         from datetime import datetime
+        from pathlib import Path
 
         video_base_dir = "/videos"
         video_organize_by_date = True
@@ -422,7 +423,6 @@ class TestVideoDirectoryOrganization:
 
     def test_video_date_format_variations(self):
         """Test different date format patterns."""
-        from pathlib import Path
         from datetime import datetime
 
         end_datetime = datetime(2025, 12, 25, 10, 0, 0)
@@ -613,7 +613,7 @@ class TestDeflickerOptions:
             )
 
 
-class TestResolutionScaling:
+class TestResolutionScalingBasics:
     """Test video resolution scaling."""
 
     @pytest.fixture
@@ -972,10 +972,10 @@ class TestFFmpegErrorHandling:
     @patch("subprocess.run")
     def test_ffmpeg_subprocess_exception(self, mock_run, temp_images, temp_output):
         """Test handling when subprocess raises an exception."""
-        mock_run.side_effect = Exception("Subprocess failed")
+        mock_run.side_effect = RuntimeError("Subprocess failed")
 
-        # The function lets exceptions propagate
-        with pytest.raises(Exception):
+        # The function lets exceptions propagate rather than swallowing them
+        with pytest.raises(RuntimeError, match="Subprocess failed"):
             create_video(temp_images, temp_output)
 
     @patch("subprocess.run")

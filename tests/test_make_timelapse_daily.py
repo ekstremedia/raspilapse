@@ -3,21 +3,19 @@
 import os
 import sys
 import tempfile
-import argparse
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
+
 import pytest
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.make_timelapse import (
+    find_images_in_range,
     main,
     parse_time,
-    find_images_in_range,
-    create_video,
-    load_config,
 )
 
 

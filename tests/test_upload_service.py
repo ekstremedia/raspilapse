@@ -5,13 +5,13 @@ import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.upload_service import UploadService, BASE_RETRY_DELAY_MINUTES, MAX_RETRY_DELAY_MINUTES
+from src.upload_service import MAX_RETRY_DELAY_MINUTES, UploadService
 
 
 @pytest.fixture

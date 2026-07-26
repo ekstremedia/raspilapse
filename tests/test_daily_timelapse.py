@@ -10,25 +10,24 @@ Tests the daily timelapse runner including:
 - Main CLI function
 """
 
-import pytest
 import os
+import shutil
 import sys
 import tempfile
-import shutil
+from datetime import datetime
 from pathlib import Path
-from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock, Mock
+from unittest.mock import MagicMock, patch
+
+import pytest
 import yaml
-import logging
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from daily_timelapse import (
-    load_config,
-    find_video_file,
     find_keogram_file,
-    find_slitscan_file,
+    find_video_file,
+    load_config,
     main,
 )
 

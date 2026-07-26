@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raspilapse"
-version = "1.1.0"
+# src/__version__.py is the single source of truth. See [tool.setuptools.dynamic].
+dynamic = ["version"]
 description = "A Python library for creating timelapses with Raspberry Pi Camera"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -33,19 +34,28 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+# picamera2 is deliberately absent: it must come from apt, not pip.
 dependencies = [
     "PyYAML>=6.0",
     "Pillow>=10.0.0",
+    "numpy>=1.21.0",
+    "astral>=3.2",
+    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]
+# Streams the daily video upload instead of buffering ~300 MB in memory.
+upload = ["requests-toolbelt>=1.0.0"]
+# Only scripts/db_graphs.py and scripts/graph_solar_patterns.py need these.
+graphs = ["matplotlib>=3.5.0"]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
-    "flake8>=6.0.0",
-    "black>=23.0.0",
-    "pylint>=2.15.0",
+    "ruff>=0.14.0",
+    # Pinned exactly: black's stable style changes between yearly releases, so
+    # a floating version guarantees CI rejects locally-formatted code.
+    "black==26.1.0",
     "mypy>=1.0.0",
     "packaging>=21.0",
 ]
@@ -83,6 +93,7 @@ addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
+    "--disable-warnings",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -96,14 +107,6 @@ warn_unused_configs = true
 ignore_missing_imports = true
 no_strict_optional = true
 
-[tool.pylint.messages_control]
-max-line-length = 100
-disable = [
-    "C0103",  # Invalid name
-    "C0114",  # Missing module docstring
-    "R0913",  # Too many arguments
-]
-
 [tool.coverage.run]
 source = ["src"]
 omit = [
@@ -112,9 +115,38 @@ omit = [
 ]
 
 [tool.coverage.report]
+precision = 2
+show_missing = true
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",
     "def main\\(",
     "raise NotImplementedError",
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "src.__version__.__version__"}
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I import order, B bugbear.
+#
+# UP (pyupgrade) is deliberately not enabled yet: it wants ~200 changes,
+# mostly typing.Dict -> dict, which is a large mechanical diff worth doing on
+# its own rather than mixed into feature work.
+select = ["E", "W", "F", "I", "B"]
+ignore = [
+    "E501",  # line length is black's job
+    "B008",  # function call in an argument default -- used for timedelta defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The dual-import idiom (try src.x / except x) needs imports after sys.path edits.
+"src/*.py" = ["E402"]
+"scripts/*.py" = ["E402"]
+# Tests bind results to names for readability even when only the side effect
+# matters, and often ignore the loop index. Neither is worth flagging there.
+"tests/*.py" = ["E402", "F841", "B007"]

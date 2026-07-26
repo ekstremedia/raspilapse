@@ -12,13 +12,13 @@ Usage:
     python3 src/create_keogram.py --dir /path/to/images --output keogram.jpg
 """
 
+import argparse
+import logging
 import os
 import sys
-import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
-import logging
+from typing import List, Optional
 
 from PIL import Image
 
@@ -28,11 +28,11 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
+    from src.colors import Colors, print_info, print_section
     from src.logging_config import configure_logging, get_logger
-    from src.colors import Colors, print_section, print_info
 except ModuleNotFoundError:
+    from colors import Colors, print_info, print_section
     from logging_config import configure_logging, get_logger
-    from colors import Colors, print_section, print_info
 
 
 def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:

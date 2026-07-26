@@ -9,13 +9,14 @@ This script:
 Designed to be run via cron at 5 AM daily.
 """
 
-import os
-import sys
 import argparse
-import yaml
+import os
 import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import yaml
 
 # Add project root to path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -177,11 +178,8 @@ Examples:
     project_name = config["output"]["project_name"]
     video_dir = Path(config["video"]["directory"])
 
-    # Get upload config
+    # UploadService derives camera_id from the same config itself.
     upload_config = config.get("video_upload", {})
-    camera_id = upload_config.get(
-        "camera_id", config.get("output", {}).get("project_name", "unknown")
-    )
 
     # Step 1: Create timelapse video, keogram, and slitscan
     if not args.only_upload:
@@ -238,7 +236,7 @@ Examples:
         video_path = find_video_file(video_dir, project_name, target_date)
         if not video_path:
             logger.error(f"Could not find video file in {video_dir}")
-            print(f"Error: Video file not found")
+            print("Error: Video file not found")
             return 1
 
         logger.info(f"Found video: {video_path}")
@@ -254,7 +252,7 @@ Examples:
             logger.info(f"Found slitscan: {slitscan_path}")
 
         if args.dry_run:
-            print(f"Would upload:")
+            print("Would upload:")
             print(f"  Video: {video_path}")
             print(f"  Keogram: {keogram_path}")
             print(f"  Slitscan: {slitscan_path}")

@@ -171,17 +171,6 @@ video:
   # End time (comment out or set to null to use current time)
   default_end_time: "05:00"
 
-# Timelapse Settings (for future timelapse.py script)
-timelapse:
-  # Interval between captures in seconds
-  interval: 3
-
-  # Total number of frames to capture (0 = unlimited)
-  num_frames: 0
-
-  # Stabilization delay after camera start (seconds)
-  stabilization_delay: 2
-
 # Adaptive Timelapse Settings (for auto_timelapse.py)
 adaptive_timelapse:
   # Enable adaptive exposure based on light conditions
@@ -212,6 +201,14 @@ adaptive_timelapse:
 
     # Between night and day = transition mode (gradual adjustment)
     # Automatically calculated between night and day thresholds
+
+  # How hard the exposure loop corrects toward the brightness target each frame:
+  #     new_exposure = current * (target / measured) ** brightness_damping
+  # Lower is gentler and slower; higher converges faster but can overshoot.
+  #   0.5 = conservative (recommended, converges in 3-5 frames)
+  #   0.7 = balanced
+  #   0.8 = aggressive
+  brightness_damping: 0.5
 
   # Highlight protection: scale the brightness target down when the top of the
   # histogram approaches clipping, so bright skies keep detail instead of
@@ -285,16 +282,7 @@ adaptive_timelapse:
 
   # Transition mode settings (dawn/dusk)
   transition_mode:
-    # Gradually adjust between day and night settings
-    # Based on calculated lux value
-    smooth_transition: true
 
-    # === SEQUENTIAL RAMPING (Noise Reduction) ===
-    # When enabled, prioritizes shutter speed over gain to minimize noise:
-    # - Phase 1: Ramp shutter from day value to max, keep gain locked at ~1.0
-    # - Phase 2: Only after shutter is maxed, ramp gain up to night target
-    # This produces cleaner twilight images by keeping ISO low as long as possible
-    sequential_ramping: true
 
     # === SMOOTH TRANSITION SETTINGS ===
     # These settings prevent flickering and ISO jumps during day/night transitions
@@ -332,10 +320,6 @@ adaptive_timelapse:
     # When false, uses camera's AWB in full day mode (legacy behavior)
     smooth_wb_in_day_mode: true
 
-    # Use smooth exposure/gain in day mode
-    # When true, calculates exposure and gain based on lux (prevents ISO jumps)
-    # When false, uses camera's auto-exposure (legacy behavior, may cause ISO jumps)
-    smooth_exposure_in_day_mode: true
 
     # === BRIGHTNESS FEEDBACK SETTINGS ===
     # These settings enable real-time brightness correction for butter-smooth
@@ -371,21 +355,14 @@ adaptive_timelapse:
     # - 0.50 = 5x faster (recommended for quick overexposure correction)
     fast_rampdown_speed: 0.50
 
-    # === EV SAFETY CLAMP ===
-    # Prevents brightness jumps when transitioning from day (auto) to night (manual) mode.
-    # Uses the "Holy Grail" technique: seeds manual exposure from last auto-exposure values.
-    #
-    # IMPORTANT: Disable this for scenes with bright point light sources (street lamps,
-    # security lights, etc.) as they can fool the auto-exposure seeding and cause
-    # extremely short exposures (e.g., 330ms instead of 20s) in night mode.
-    #
-    # When enabled: First manual frame matches last auto frame exactly (no brightness jump)
-    # When disabled: Manual exposure calculated purely from lux (may have slight jump but
-    #                works correctly with bright point light sources in frame)
-    #
-    # ev_safety_clamp_enabled: true (default) - Enable for scenes without bright point lights
-    # ev_safety_clamp_enabled: false - Disable for scenes with street lamps, etc.
-    ev_safety_clamp_enabled: true
+    # Severe overexposure (brightness > 200): even faster, to stop a dawn flare
+    # from burning several frames before the loop catches up.
+    critical_rampdown_speed: 0.70
+
+    # The mirror images, for recovering from underexposure at dusk.
+    fast_rampup_speed: 0.50
+    critical_rampup_speed: 0.70
+
 
   # === HDR MODE ===
   # Enables ISP tone-mapped HDR (SingleExposure mode) during daytime.
@@ -591,8 +568,6 @@ overlay:
     # Line spacing multiplier (1.0 = normal, 1.5 = 1.5x spacing)
     line_spacing: 1.2  # Tighter spacing for bar mode
 
-    # Separate sections with blank line
-    section_spacing: false  # No blank lines in compact bar
 
     # Extra bottom spacing for bar (adds padding below text)
     bottom_padding_multiplier: 0.7  # 30% more space at bottom
@@ -628,19 +603,6 @@ logging:
 
   # Number of backup log files to keep
   backup_count: 2
-
-# Analysis and Graphs Settings
-graphs:
-  # Directory for generated analysis graphs
-  directory: "graphs"
-
-  # Graph image settings
-  width: 14  # inches
-  height: 8  # inches
-  dpi: 150   # resolution (dots per inch)
-
-  # Default time window for analysis (hours)
-  default_hours: 24
 
 # Video Upload Settings (for daily_timelapse.py)
 video_upload:

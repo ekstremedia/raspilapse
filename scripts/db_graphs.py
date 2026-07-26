@@ -24,8 +24,8 @@ from typing import Dict, List, Optional, Tuple
 import matplotlib
 
 matplotlib.use("Agg")  # Non-interactive backend for headless systems
-import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
 
 # Add project root to path
@@ -83,9 +83,9 @@ def smooth_data(data: List[float], window: int = SMOOTH_WINDOW) -> List[float]:
     if len(data) < window:
         return data
 
-    # Create Gaussian kernel for smoother results than rolling average
-    sigma = window / 4
-    kernel_size = window if window % 2 == 1 else window + 1  # Ensure odd size
+    # Gaussian kernel: smoother than a rolling average. The +/-2 sigma span is
+    # fixed, so `window` sets how many samples the curve is spread across.
+    kernel_size = window if window % 2 == 1 else window + 1  # Must be odd
     x = np.linspace(-2, 2, kernel_size)
     kernel = np.exp(-(x**2) / 2)
     kernel = kernel / kernel.sum()
@@ -150,9 +150,11 @@ def plot_gradient_line(ax, x_data, y_data, linewidth=2.5):
     ax.autoscale()
 
 
-from src.config_utils import get_db_path  # noqa: E402
-from src.config_utils import parse_time_arg_or_exit  # noqa: E402
 from src.config_utils import format_duration as _format_duration  # noqa: E402
+from src.config_utils import (
+    get_db_path,  # noqa: E402
+    parse_time_arg_or_exit,  # noqa: E402
+)
 
 
 def parse_time_arg(time_str: str) -> timedelta:
@@ -244,7 +246,7 @@ def fetch_data(
             data["colour_gains_r"].append(row["colour_gains_r"])
             data["colour_gains_b"].append(row["colour_gains_b"])
             data["colour_temperature"].append(row["colour_temperature"])
-        except Exception as e:
+        except Exception:
             continue
 
     return data
@@ -324,7 +326,8 @@ def create_lux_graph(data: Dict, output_dir: Path, time_desc: str):
 
     # Add mode zone shading
     zones = find_mode_zones(timestamps, modes)
-    min_lux = max(0.01, min(l for l in lux if l > 0)) if any(l > 0 for l in lux) else 0.01
+    positive = [v for v in lux if v > 0]
+    min_lux = max(0.01, min(positive)) if positive else 0.01
     max_lux = max(lux) if lux else 100000
     add_mode_shading(ax, zones, min_lux, max_lux)
 
@@ -365,7 +368,7 @@ def create_lux_graph(data: Dict, output_dir: Path, time_desc: str):
     ax.set_ylim(min_lux * 0.5, max_lux * 2)
 
     # Use plain numbers instead of scientific notation
-    from matplotlib.ticker import FuncFormatter, LogLocator
+    from matplotlib.ticker import FuncFormatter
 
     def plain_number_formatter(x, pos):
         if x >= 1000:
@@ -1148,7 +1151,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
     valid_timestamps = []
     exposure_ratio = []
 
-    for i, (ts, lux, exp) in enumerate(zip(timestamps, lux_values, exposure_values)):
+    for ts, lux, exp in zip(timestamps, lux_values, exposure_values):
         if lux > 0 and exp > 0:
             formula_exp = (night_exposure * reference_lux) / lux
             # Clamp to reasonable range
@@ -1323,12 +1326,12 @@ Examples:
     print(f"  Time range: {time_desc}")
 
     # Fetch data
-    print(f"\n  Fetching data from database...")
+    print("\n  Fetching data from database...")
     data = fetch_data(db_path, time_range, args.all)
 
     if not data or not data.get("timestamps"):
         print(f"\n  No data found for: {time_desc}")
-        print(f"  Check that captures exist in the database.\n")
+        print("  Check that captures exist in the database.\n")
         sys.exit(1)
 
     print(f"  Found {len(data['timestamps'])} data points")
@@ -1341,7 +1344,7 @@ Examples:
         output_dir = project_root / output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n  Generating graphs...")
+    print("\n  Generating graphs...")
 
     # Create all graphs
     create_lux_graph(data, output_dir, time_desc)

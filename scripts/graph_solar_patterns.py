@@ -20,8 +20,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
 import numpy as np
+from matplotlib.ticker import FuncFormatter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

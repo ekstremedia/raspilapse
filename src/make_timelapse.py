@@ -6,16 +6,17 @@ This script collects images from a specified time range and creates a timelapse 
 with configurable framerate and quality settings.
 """
 
-import os
-import sys
 import argparse
-import yaml
+import logging
+import os
+import subprocess
+import sys
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-import subprocess
-import tempfile
 from typing import List, Tuple
-import logging
+
+import yaml
 
 # Add project root to path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,13 +26,13 @@ if project_root not in sys.path:
 try:
     from src.colors import Colors, print_info, print_section, print_subsection
     from src.config_utils import load_config as _load_config
-    from src.logging_config import configure_logging, get_logger
     from src.create_keogram import create_keogram, create_slitscan
+    from src.logging_config import configure_logging, get_logger
 except ModuleNotFoundError:
     from colors import Colors, print_info, print_section, print_subsection
     from config_utils import load_config as _load_config
-    from logging_config import configure_logging, get_logger
     from create_keogram import create_keogram, create_slitscan
+    from logging_config import configure_logging, get_logger
 
 
 def load_config(config_path: str = "config/config.yml") -> dict:

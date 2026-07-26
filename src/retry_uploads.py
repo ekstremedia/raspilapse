@@ -88,7 +88,7 @@ Examples:
 
     # Show status
     stats = service.get_queue_stats()
-    print(f"Upload Queue Status:")
+    print("Upload Queue Status:")
     print(f"  Pending:  {stats.get('pending', 0)}")
     print(f"  Uploading: {stats.get('uploading', 0)}")
     print(f"  Success:  {stats.get('success', 0)}")
@@ -150,7 +150,7 @@ Examples:
     print(f"  Skipped:   {results['skipped']}")
 
     if results["errors"]:
-        print(f"\nErrors:")
+        print("\nErrors:")
         for err in results["errors"]:
             print(f"  [{err['id']}] {err['error'][:80]}")
 

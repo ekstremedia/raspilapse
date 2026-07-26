@@ -2,20 +2,24 @@
 # Install: pip install pre-commit
 # Setup: pre-commit install
 # Run manually: pre-commit run --all-files
+#
+# The black rev here must match requirements-dev.txt and pyproject.toml.
+# Black's stable style changes between yearly releases, so a mismatch means
+# locally-formatted code gets rejected by CI. Line length comes from
+# pyproject.toml, not from args here, so there is one place to change it.
 
 repos:
   - repo: https://github.com/psf/black
-    rev: 24.10.0
+    rev: 26.1.0
     hooks:
       - id: black
         language_version: python3
-        args: ['--line-length=100']
 
-  - repo: https://github.com/PyCQA/flake8
-    rev: 6.1.0
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.13
     hooks:
-      - id: flake8
-        args: ['--max-line-length=100', '--extend-ignore=E203,W503']
+      - id: ruff
+        args: [--fix]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0

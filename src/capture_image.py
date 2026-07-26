@@ -1,11 +1,11 @@
 """Image capture module for Raspilapse."""
 
-import os
 import json
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+
 import yaml
 
 # Handle imports for both module and script execution
@@ -33,7 +33,7 @@ class CameraConfig:
         self.config_path = config_path
         logger.info(f"Loading configuration from: {config_path}")
         self.config = self._load_config()
-        logger.debug(f"Configuration loaded successfully")
+        logger.debug("Configuration loaded successfully")
 
     def _load_config(self) -> Dict:
         """Load configuration from YAML file."""
@@ -45,7 +45,7 @@ class CameraConfig:
         try:
             with open(config_file, "r") as f:
                 config = yaml.safe_load(f)
-                logger.debug(f"Successfully parsed YAML configuration")
+                logger.debug("Successfully parsed YAML configuration")
                 return config
         except yaml.YAMLError as e:
             logger.error(f"Failed to parse configuration file: {e}")
@@ -135,8 +135,8 @@ class ImageCapture:
         logger.debug("Initializing camera...")
 
         try:
-            from picamera2 import Picamera2
             import libcamera
+            from picamera2 import Picamera2
         except ImportError as e:
             logger.error(
                 "Picamera2 library not found. Install with: sudo apt install -y python3-picamera2"
@@ -501,9 +501,9 @@ class ImageCapture:
                 logger.debug(f"Applying overlay to {output_path} (mode: {mode})...")
                 result = self.overlay.apply_overlay(str(output_path), metadata_dict, mode)
                 if result:
-                    logger.debug(f"Overlay applied successfully")
+                    logger.debug("Overlay applied successfully")
                 else:
-                    logger.warning(f"Overlay application returned None/False")
+                    logger.warning("Overlay application returned None/False")
             else:
                 if not self.overlay.enabled:
                     logger.debug("Overlay is disabled")

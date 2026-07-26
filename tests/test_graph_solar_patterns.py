@@ -11,8 +11,6 @@ import tempfile
 from datetime import datetime, timedelta
 from unittest import mock
 
-import pytest
-
 
 class TestGetDbPath:
     """Tests for get_db_path function."""
@@ -285,7 +283,8 @@ class TestMainFunction:
             conn.close()
 
             with mock.patch(
-                "sys.argv", ["graph_solar_patterns.py", "--db", db_path, "-o", output_path, "-d", "7"]
+                "sys.argv",
+                ["graph_solar_patterns.py", "--db", db_path, "-o", output_path, "-d", "7"],
             ):
                 main()
 

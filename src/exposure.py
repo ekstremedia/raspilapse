@@ -9,7 +9,7 @@ AdaptiveTimelapse holds one of these and feeds it measurements; the solar
 position it needs is passed in rather than computed here.
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 try:
     from src.logging_config import get_logger
@@ -1291,7 +1291,7 @@ class ExposureController:
         # AWB is only used internally to learn good daylight WB values
         # (captured via _update_day_wb_reference from actual capture metadata)
         if transition_config.get("smooth_wb_in_day_mode", True):
-            smooth_gains = self._apply_wb(settings, LightMode.DAY)
+            self._apply_wb(settings, LightMode.DAY)
         else:
             # Opt-out: let the ISP run AWB. Expect colour flicker between frames.
             settings["AwbEnable"] = 1 if day.get("awb_enable", True) else 0
@@ -1323,7 +1323,6 @@ class ExposureController:
         """Transition: shutter first, then gain once the shutter nears its ceiling."""
         adaptive_config = self.config["adaptive_timelapse"]
         settings = {}
-        transition = adaptive_config["transition_mode"]
         thresholds = adaptive_config["light_thresholds"]
 
         # Disable auto-exposure for manual control

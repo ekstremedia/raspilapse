@@ -7,12 +7,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from __version__ import (
-    __version__,
     __author__,
+    __description__,
     __email__,
     __license__,
-    __description__,
     __url__,
+    __version__,
 )
 
 

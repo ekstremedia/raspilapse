@@ -3,8 +3,6 @@ Tests for Emergency Brightness Zones and Hybrid Mode Detection.
 """
 
 import pytest
-import tempfile
-import os
 import yaml
 
 

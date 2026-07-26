@@ -1,19 +1,17 @@
 """Tests for overlay module."""
 
-import os
 import json
+import os
+import sys
 import tempfile
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+
 import pytest
 import yaml
 from PIL import Image
 
-import sys
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.overlay import ImageOverlay, apply_overlay_to_image, TideData
+from src.overlay import ImageOverlay, TideData, apply_overlay_to_image
 
 
 @pytest.fixture
@@ -985,8 +983,7 @@ class TestApplyOverlayFunctionErrors:
             config_path = f.name
 
         try:
-            # Should raise YAML parsing error
-            with pytest.raises(Exception):  # yaml.scanner.ScannerError
+            with pytest.raises(yaml.YAMLError):
                 apply_overlay_to_image(
                     test_image,
                     metadata={},
@@ -1083,8 +1080,8 @@ class TestPillowCompatibility:
 
     def test_pillow_version_minimum(self):
         """Verify Pillow version meets minimum requirement for all features."""
-        from PIL import __version__ as pillow_version
         from packaging import version
+        from PIL import __version__ as pillow_version
 
         min_version = "8.2.0"
         assert version.parse(pillow_version) >= version.parse(min_version), (

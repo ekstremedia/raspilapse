@@ -1,10 +1,11 @@
 """Tests for apply_overlay CLI script."""
 
-import sys
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-import tempfile
 import shutil
+import sys
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 
 # Add src to path for imports

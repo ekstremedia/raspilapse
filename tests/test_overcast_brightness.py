@@ -1,11 +1,10 @@
 """Tests for contrast-aware dynamic brightness targeting (overcast boost)."""
 
 import os
-import tempfile
+import sys
+
 import pytest
 import yaml
-
-import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

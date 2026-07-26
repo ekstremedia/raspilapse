@@ -4,18 +4,18 @@ Adds configurable text overlays to captured images with camera settings,
 timestamps, and debug information.
 """
 
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime
 import json
 import math
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 try:
     from PIL import Image, ImageDraw, ImageFont
-except ImportError:
+except ImportError as e:
     raise ImportError(
         "Pillow is required for overlay functionality. Install with: pip3 install Pillow"
-    )
+    ) from e
 
 try:
     from src.logging_config import get_logger
@@ -423,11 +423,9 @@ class TideData:
         last_extreme_level: Optional[int] = None  # level of previous accepted extreme
         last_extreme_kind: Optional[str] = None  # "high" or "low"
 
-        # State for the current monotonic run.
-        # run_start is the index where the current run (or pending plateau) began.
-        # prev_dir is the direction (1 rising, -1 falling, 0 unknown) leading INTO the current point.
-        run_start = 0
-        prev_dir = 0  # direction of the most recent strict change
+        # Direction leading into the current point: 1 rising, -1 falling,
+        # 0 not yet known.
+        prev_dir = 0
 
         def emit(kind: str, idx: int) -> None:
             nonlocal last_extreme_level, last_extreme_kind
@@ -455,18 +453,17 @@ class TideData:
                 cur_dir = 0  # plateau
 
             if cur_dir == 0:
-                # Continuing a plateau; run_start stays at the start of the plateau.
+                # Plateau: wait to see which way it breaks.
                 continue
 
             if prev_dir == 0:
                 # First strict move; nothing to emit yet.
-                run_start = i - 1
                 prev_dir = cur_dir
                 continue
 
             if cur_dir == prev_dir:
-                # Same direction: extend the run, plateau resolved as continuation.
-                run_start = i - 1
+                # Same direction: the plateau resolved as a continuation, so
+                # there is no extremum here.
                 continue
 
             # Direction reversed between the previous strict move and this one.
@@ -487,7 +484,6 @@ class TideData:
             elif prev_dir == -1 and cur_dir == 1:
                 emit("low", mid_idx)
 
-            run_start = i - 1
             prev_dir = cur_dir
 
         return highs, lows

@@ -10,11 +10,11 @@ cache_duration never took effect.
 """
 
 import json
-from dataclasses import dataclass, field
-from typing import Dict, Optional
-from datetime import datetime, timedelta
-import urllib.request
 import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Dict, Optional
 
 try:
     from src.logging_config import get_logger

@@ -1,12 +1,12 @@
 """Tests for logging_config module."""
 
-import os
-import tempfile
 import logging
-from pathlib import Path
-import yaml
-import pytest
+import os
 import sys
+import tempfile
+
+import pytest
+import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
