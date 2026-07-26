@@ -127,14 +127,18 @@ Examples:
         return 0
 
     # Uploading is pointless without credentials, and every attempt still burns
-    # a retry slot and writes a log line. Say so once instead.
+    # a retry slot and writes a log line. Bail out before that happens.
+    #
+    # Exit 0, not 1: this runs from a timer every 30 minutes, and "uploads are
+    # not configured" is a setting, not a fault. Returning non-zero would leave
+    # the unit permanently in `failed` on every install that doesn't upload.
     upload_config = config.get("video_upload", {})
     if not upload_config.get("url") or not upload_config.get("api_key"):
         print(
-            "\nError: video_upload.url and video_upload.api_key must be set in "
-            f"{args.config} before uploads can be retried."
+            "\nUploads are not configured (video_upload.url / video_upload.api_key "
+            f"are empty in {args.config}) - nothing to do."
         )
-        return 1
+        return 0
 
     # Process the queue
     if stats.get("pending", 0) == 0 and stats.get("uploading", 0) == 0:

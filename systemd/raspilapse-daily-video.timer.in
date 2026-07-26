@@ -1,0 +1,20 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Daily Timelapse Video Timer
+Documentation=https://github.com/ekstremedia/raspilapse
+# No Requires= here on purpose: a timer already starts the service of the same
+# name. Adding Requires= makes systemd pull the service in the moment the
+# *timer* starts, i.e. immediately on every boot.
+
+[Timer]
+# 05:00 covers 05:00 yesterday to 05:00 today, so a night's captures land in
+# one video rather than being split across two.
+OnCalendar=*-*-* 05:00:00
+
+# Persistent=true would fire a second run if the Pi reboots after 05:00.
+Persistent=false
+
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

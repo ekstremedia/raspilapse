@@ -1,0 +1,19 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Upload Retry Service
+Documentation=https://github.com/ekstremedia/raspilapse
+After=network.target
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=@PYTHON@ @PROJECT_DIR@/src/retry_uploads.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raspilapse-upload-retry
+
+Environment="PYTHONUNBUFFERED=1"
+
+# No [Install] section: triggered by raspilapse-upload-retry.timer.

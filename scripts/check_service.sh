@@ -1,94 +1,94 @@
 #!/bin/bash
 #
-# Raspilapse Service Health Monitor (Watchdog)
+# Raspilapse capture watchdog.
 #
-# Checks if the timelapse service is running and capturing images.
-# Restarts service if captures stall, reboots if restart doesn't help.
+# raspilapse.service already has Restart=always, so a crashed process recovers
+# on its own. What that cannot catch is the process staying alive while the
+# camera stops producing frames -- a wedged libcamera pipeline, a full disk, a
+# USB reset. That is the only thing this script looks for.
 #
-# Usage: Run every 5 minutes via cron
-#        */5 * * * * /home/pi/raspilapse/scripts/check_service.sh
+# Installed as raspilapse-watchdog.{service,timer} by:
+#     ./scripts/install.sh --with-watchdog
 #
+# It runs as root because it calls `systemctl restart` and, after repeated
+# failures, `reboot`. The older cron-based version ran as the login user, where
+# polkit denied the restart and reboot needed root, so it never recovered
+# anything.
+#
+set -uo pipefail
+
+PROJECT_DIR="${RASPILAPSE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+STATE_FILE="${RASPILAPSE_WATCHDOG_STATE:-/var/lib/raspilapse/watchdog_state}"
+CONFIG_FILE="${RASPILAPSE_CONFIG:-$PROJECT_DIR/config/config.yml}"
 
 SERVICE_NAME="raspilapse.service"
 LOG_TAG="raspilapse-watchdog"
-STATE_FILE="/tmp/raspilapse_watchdog_state"
 MAX_RESTART_ATTEMPTS=2
-STALL_THRESHOLD_SECONDS=600  # 10 minutes without captures = stalled
+STALL_THRESHOLD_SECONDS=600 # 10 minutes without a capture means stalled
 
-# Get age of most recent image in seconds
-get_last_capture_age() {
-    local last_image
-    last_image=$(find /var/www/html/images -name "*.jpg" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)
-    if [ -n "$last_image" ] && [ -f "$last_image" ]; then
-        local last_modified now
-        last_modified=$(stat -c %Y "$last_image")
-        now=$(date +%s)
-        echo $((now - last_modified))
+log() { logger -t "$LOG_TAG" -- "$@"; echo "$*"; }
+
+# Read output.directory from the config rather than hardcoding a path that
+# only matches one install.
+image_dir() {
+    local dir
+    dir=$(python3 -c "
+import sys, yaml
+try:
+    with open('$CONFIG_FILE') as f:
+        print((yaml.safe_load(f) or {}).get('output', {}).get('directory', ''))
+except Exception:
+    sys.exit(1)
+" 2>/dev/null)
+    echo "${dir:-/var/www/html/images}"
+}
+
+# Age in seconds of the newest JPEG, or a large number if there are none.
+last_capture_age() {
+    local dir newest
+    dir=$(image_dir)
+    newest=$(find "$dir" -name '*.jpg' -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+    if [ -n "$newest" ]; then
+        echo $(( $(date +%s) - ${newest%.*} ))
     else
-        echo "9999"  # No images found
+        echo 999999
     fi
 }
 
-# Read restart attempt count from state file
-get_restart_count() {
-    if [ -f "$STATE_FILE" ]; then
-        cat "$STATE_FILE"
-    else
-        echo "0"
-    fi
+restart_count() { [ -f "$STATE_FILE" ] && cat "$STATE_FILE" || echo 0; }
+reset_state() { rm -f "$STATE_FILE"; }
+
+bump_restart_count() {
+    mkdir -p "$(dirname "$STATE_FILE")"
+    echo $(($(restart_count) + 1)) >"$STATE_FILE"
 }
 
-# Reset state (called when captures are working)
-reset_state() {
-    rm -f "$STATE_FILE"
-}
-
-# Increment restart count
-increment_restart_count() {
-    local count
-    count=$(get_restart_count)
-    echo $((count + 1)) > "$STATE_FILE"
-}
-
-# Main logic
 main() {
-    local age restart_count
-
-    # Check if service is running
+    # A dead service is Restart=always's job, not ours. Only report it.
     if ! systemctl is-active --quiet "$SERVICE_NAME"; then
-        logger -t "$LOG_TAG" "Service is down, attempting restart"
-        systemctl restart "$SERVICE_NAME"
-        sleep 5
-        if systemctl is-active --quiet "$SERVICE_NAME"; then
-            logger -t "$LOG_TAG" "Service restarted successfully"
-        else
-            logger -t "$LOG_TAG" "CRITICAL: Failed to restart service"
-        fi
+        log "$SERVICE_NAME is not active; leaving recovery to Restart=always"
         exit 0
     fi
 
-    # Service is running - check capture age
-    age=$(get_last_capture_age)
+    local age
+    age=$(last_capture_age)
 
     if [ "$age" -lt "$STALL_THRESHOLD_SECONDS" ]; then
-        # Captures are working - reset any escalation state
         reset_state
         exit 0
     fi
 
-    # Captures have stalled
-    restart_count=$(get_restart_count)
-    logger -t "$LOG_TAG" "WARNING: No captures in $((age/60)) minutes (restart_count=$restart_count)"
+    local count
+    count=$(restart_count)
+    log "WARNING: no captures in $((age / 60)) minutes (previous restarts: $count)"
 
-    if [ "$restart_count" -ge "$MAX_RESTART_ATTEMPTS" ]; then
-        # Multiple restarts haven't helped - escalate to reboot
-        logger -t "$LOG_TAG" "CRITICAL: $restart_count restart attempts failed, rebooting system"
+    if [ "$count" -ge "$MAX_RESTART_ATTEMPTS" ]; then
+        log "CRITICAL: $count restarts did not help, rebooting"
         reset_state
-        /sbin/reboot
+        systemctl reboot
     else
-        # Try restarting the service
-        logger -t "$LOG_TAG" "Restarting service (attempt $((restart_count + 1)))"
-        increment_restart_count
+        log "Restarting $SERVICE_NAME (attempt $((count + 1)))"
+        bump_restart_count
         systemctl restart "$SERVICE_NAME"
     fi
 }
