@@ -307,9 +307,18 @@ Examples:
             logger.info(f"Running: {' '.join(make_timelapse_cmd)}")
             result = subprocess.run(make_timelapse_cmd, cwd=project_root)
 
+            # Exit 2 from make_timelapse.py means "no images for this date".
+            # That is a normal outcome (camera was off, fresh install), not a
+            # failure - return 0 so the systemd unit does not go to failed.
+            if result.returncode == 2:
+                msg = f"No images for {target_date.strftime('%Y-%m-%d')} - nothing to do"
+                logger.warning(msg)
+                print(msg)
+                return 0
+
             if result.returncode != 0:
                 logger.error(f"make_timelapse.py failed with code {result.returncode}")
-                print(f"Error: Timelapse creation failed")
+                print("Error: Timelapse creation failed")
                 return 1
 
             logger.info("Timelapse creation completed")

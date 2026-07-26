@@ -703,6 +703,34 @@ class TestMainCLI:
 
         assert result == 1
 
+    def test_main_no_images_exits_zero(self, sample_config, temp_dir, monkeypatch, capsys):
+        """Exit code 2 from make_timelapse means 'no images', which is not a failure."""
+        video_dir = Path(sample_config).parent / "videos"
+        video_dir.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "daily_timelapse.py",
+                "--config",
+                str(sample_config),
+                "--date",
+                "2025-12-24",
+            ],
+        )
+
+        with patch("daily_timelapse.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=2)  # nothing to render
+
+            with patch("daily_timelapse.UploadService") as mock_upload:
+                result = main()
+
+            # No upload should be attempted when there is no video
+            mock_upload.assert_not_called()
+
+        assert result == 0
+        assert "No images for 2025-12-24" in capsys.readouterr().out
+
     def test_main_upload_disabled_in_config(self, temp_dir, monkeypatch, capsys):
         """Test main when upload is disabled in config."""
         config_data = {

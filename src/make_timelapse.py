@@ -632,10 +632,13 @@ Examples:
         return 1
 
     if not images:
-        msg = "No images found in specified time range"
-        print(Colors.error(f"✗ {msg}"))
-        logger.error(msg)
-        return 1
+        # Exit 2 means "nothing to do", not "something broke". Callers (notably
+        # daily_timelapse.py) treat it as success so an empty day does not leave
+        # a systemd unit in the failed state. Exit 1 stays reserved for errors.
+        msg = f"No images found between {start_datetime} and {end_datetime} - nothing to render"
+        print(Colors.warning(f"⚠ {msg}"))
+        logger.warning(msg)
+        return 2
 
     print(f"  {Colors.success('✓')} Found {Colors.bold(str(len(images)))} images")
     logger.info(f"Found {len(images)} images")

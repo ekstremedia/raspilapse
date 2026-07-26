@@ -23,7 +23,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from requests_toolbelt import MultipartEncoder
+
+try:
+    # Optional: streams the multipart body instead of buffering it in memory.
+    # A daily video is ~300 MB, which a 4 GB Pi cannot afford to hold twice.
+    from requests_toolbelt import MultipartEncoder
+except ImportError:  # pragma: no cover - exercised via patching in tests
+    MultipartEncoder = None
 
 # Add project root to path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -238,18 +244,30 @@ class UploadService:
                 fields.append(("slitscan", (Path(slitscan_path).name, f, "image/jpeg")))
                 self.logger.info(f"[Upload] Slitscan: {slitscan_path}")
 
-            encoder = MultipartEncoder(fields=fields)
             file_names = [name for name, val in fields if isinstance(val, tuple)]
-            self.logger.info(f"[Upload] Uploading files: {file_names} ({encoder.len} bytes)")
+            headers = {"Authorization": f"Bearer {api_key}"}
 
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": encoder.content_type,
-            }
-
-            # Stream the body so we don't buffer hundreds of MB in memory.
             # timeout=(connect, read); read is the socket idle timeout.
-            response = requests.post(url, data=encoder, headers=headers, timeout=(30, 3600))
+            if MultipartEncoder is not None:
+                encoder = MultipartEncoder(fields=fields)
+                self.logger.info(f"[Upload] Uploading files: {file_names} ({encoder.len} bytes)")
+                # Stream the body so we don't buffer hundreds of MB in memory.
+                headers["Content-Type"] = encoder.content_type
+                response = requests.post(url, data=encoder, headers=headers, timeout=(30, 3600))
+            else:
+                self.logger.warning(
+                    "[Upload] requests-toolbelt not installed - uploading without streaming "
+                    "(the whole file is held in memory). "
+                    "Install it with: sudo apt install python3-requests-toolbelt"
+                )
+                self.logger.info(f"[Upload] Uploading files: {file_names}")
+                # requests builds the multipart body itself, including the boundary,
+                # so Content-Type must NOT be set here or the body is unreadable.
+                files = {name: val for name, val in fields if isinstance(val, tuple)}
+                data = {name: val for name, val in fields if not isinstance(val, tuple)}
+                response = requests.post(
+                    url, files=files, data=data, headers=headers, timeout=(30, 3600)
+                )
 
             if response.status_code == 200:
                 self.logger.info("[Upload] Upload successful!")

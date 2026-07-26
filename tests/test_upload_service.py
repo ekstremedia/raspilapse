@@ -480,6 +480,55 @@ class TestUploadToServer:
             assert error is None
             assert response == '{"id": 123, "status": "uploaded"}'
 
+    def test_upload_without_toolbelt_uses_files_fallback(self, upload_config, temp_video_file):
+        """Without requests-toolbelt, fall back to requests' own multipart encoder."""
+        service = UploadService(upload_config)
+
+        with patch("src.upload_service.MultipartEncoder", None):
+            with patch("src.upload_service.requests.post") as mock_post:
+                mock_response = Mock()
+                mock_response.status_code = 200
+                mock_response.text = "ok"
+                mock_post.return_value = mock_response
+
+                success, error, _ = service.upload_to_server(
+                    video_path=Path(temp_video_file),
+                    keogram_path=None,
+                    slitscan_path=None,
+                    date="2026-01-21",
+                )
+
+        assert success is True
+        assert error is None
+        kwargs = mock_post.call_args.kwargs
+        assert "video" in kwargs["files"]
+        assert kwargs["data"]["date"] == "2026-01-21"
+        # requests generates the multipart boundary itself; setting Content-Type
+        # by hand here would produce a body the server cannot parse.
+        assert "Content-Type" not in kwargs["headers"]
+        assert kwargs["headers"]["Authorization"].startswith("Bearer ")
+
+    def test_upload_with_toolbelt_sets_content_type(self, upload_config, temp_video_file):
+        """With requests-toolbelt, the encoder's Content-Type must be passed through."""
+        service = UploadService(upload_config)
+
+        with patch("src.upload_service.requests.post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.text = "ok"
+            mock_post.return_value = mock_response
+
+            service.upload_to_server(
+                video_path=Path(temp_video_file),
+                keogram_path=None,
+                slitscan_path=None,
+                date="2026-01-21",
+            )
+
+        kwargs = mock_post.call_args.kwargs
+        assert kwargs["headers"]["Content-Type"].startswith("multipart/form-data; boundary=")
+        assert "files" not in kwargs
+
     def test_upload_failure_http_error(self, upload_config, temp_video_file):
         """Test upload failure with HTTP error."""
         service = UploadService(upload_config)
