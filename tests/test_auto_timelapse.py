@@ -1449,136 +1449,59 @@ class TestMainFunction:
         assert exc_info.value.code == 0
 
 
-class TestP95HighlightProtection:
-    """Tests for proactive p95-based highlight protection."""
+@pytest.fixture
+def direct_control_config_file():
+    """Create config file with direct brightness control enabled."""
+    config_data = {
+        "camera": {
+            "resolution": {"width": 1280, "height": 720},
+            "transforms": {"horizontal_flip": False, "vertical_flip": False},
+            "controls": {},
+        },
+        "output": {
+            "directory": "test_photos",
+            "filename_pattern": "{name}_{counter}.jpg",
+            "project_name": "test_project",
+            "quality": 85,
+        },
+        "system": {"create_directories": True, "save_metadata": False},
+        "overlay": {"enabled": False},
+        "adaptive_timelapse": {
+            "enabled": True,
+            "interval": 30,
+            "num_frames": 0,
+            "reference_lux": 3.8,
+            "direct_brightness_control": True,
+            "brightness_damping": 0.5,
+            "light_thresholds": {"night": 10, "day": 100},
+            "night_mode": {
+                "max_exposure_time": 20.0,
+                "analogue_gain": 6,
+                "awb_enable": False,
+            },
+            "day_mode": {"awb_enable": True},
+            "transition_mode": {
+                "smooth_transition": True,
+                "target_brightness": 120,
+            },
+            "test_shot": {
+                "enabled": True,
+                "exposure_time": 0.1,
+                "analogue_gain": 1.0,
+            },
+        },
+    }
 
-    def test_p95_factor_safe_range(self, test_config_file):
-        """Test no adjustment when p95 is in safe range (<200)."""
-        timelapse = AdaptiveTimelapse(test_config_file)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+        yaml.dump(config_data, f)
+        config_path = f.name
 
-        # Safe range - no adjustment
-        assert timelapse.get_p95_highlight_factor(100.0) == 1.0
-        assert timelapse.get_p95_highlight_factor(150.0) == 1.0
-        assert timelapse.get_p95_highlight_factor(199.0) == 1.0
-
-    def test_p95_factor_warning_range(self, test_config_file):
-        """Test gentle reduction in warning range (200-220)."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # At 200 - just entering warning
-        factor_200 = timelapse.get_p95_highlight_factor(200.0)
-        assert factor_200 == 1.0
-
-        # At 210 - mid warning (should be ~0.975)
-        factor_210 = timelapse.get_p95_highlight_factor(210.0)
-        assert 0.97 < factor_210 < 0.98
-
-        # At 220 - end of warning (should be ~0.95)
-        factor_220 = timelapse.get_p95_highlight_factor(220.0)
-        assert 0.94 < factor_220 < 0.96
-
-    def test_p95_factor_critical_range(self, test_config_file):
-        """Test moderate reduction in critical range (220-240)."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # At 230 - mid critical (should be ~0.90)
-        factor_230 = timelapse.get_p95_highlight_factor(230.0)
-        assert 0.88 < factor_230 < 0.92
-
-        # At 240 - end of critical (should be ~0.85)
-        factor_240 = timelapse.get_p95_highlight_factor(240.0)
-        assert 0.84 < factor_240 < 0.86
-
-    def test_p95_factor_emergency_range(self, test_config_file):
-        """Test aggressive reduction for imminent clipping (>240)."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # At 245 - emergency (should be ~0.82)
-        factor_245 = timelapse.get_p95_highlight_factor(245.0)
-        assert 0.78 < factor_245 < 0.84
-
-        # At 250 - severe emergency (should be ~0.75)
-        factor_250 = timelapse.get_p95_highlight_factor(250.0)
-        assert 0.74 <= factor_250 <= 0.80
-
-        # At 255 - maximum (should be ~0.70)
-        factor_255 = timelapse.get_p95_highlight_factor(255.0)
-        assert factor_255 >= 0.70
-
-    def test_p95_factor_none_returns_1(self, test_config_file):
-        """Test that None p95 returns factor of 1.0."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        assert timelapse.get_p95_highlight_factor(None) == 1.0
-
-    def test_p95_factor_never_below_0_7(self, test_config_file):
-        """Test factor never goes below 0.70."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Even for impossible values
-        assert timelapse.get_p95_highlight_factor(255.0) >= 0.70
-        assert timelapse.get_p95_highlight_factor(300.0) >= 0.70
-
-    def test_p95_tracking_initialized(self, test_config_file):
-        """Test p95 tracking is initialized."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        assert hasattr(timelapse, "_last_p95")
-        assert timelapse._last_p95 is None
+    yield config_path
+    os.unlink(config_path)
 
 
 class TestDirectBrightnessControl:
     """Tests for direct brightness control (_calculate_exposure_from_brightness)."""
-
-    @pytest.fixture
-    def direct_control_config_file(self):
-        """Create config file with direct brightness control enabled."""
-        config_data = {
-            "camera": {
-                "resolution": {"width": 1280, "height": 720},
-                "transforms": {"horizontal_flip": False, "vertical_flip": False},
-                "controls": {},
-            },
-            "output": {
-                "directory": "test_photos",
-                "filename_pattern": "{name}_{counter}.jpg",
-                "project_name": "test_project",
-                "quality": 85,
-            },
-            "system": {"create_directories": True, "save_metadata": False},
-            "overlay": {"enabled": False},
-            "adaptive_timelapse": {
-                "enabled": True,
-                "interval": 30,
-                "num_frames": 0,
-                "reference_lux": 3.8,
-                "direct_brightness_control": True,
-                "brightness_damping": 0.5,
-                "light_thresholds": {"night": 10, "day": 100},
-                "night_mode": {
-                    "max_exposure_time": 20.0,
-                    "analogue_gain": 6,
-                    "awb_enable": False,
-                },
-                "day_mode": {"awb_enable": True},
-                "transition_mode": {
-                    "smooth_transition": True,
-                    "target_brightness": 120,
-                },
-                "test_shot": {
-                    "enabled": True,
-                    "exposure_time": 0.1,
-                    "analogue_gain": 1.0,
-                },
-            },
-        }
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
-            yaml.dump(config_data, f)
-            config_path = f.name
-
-        yield config_path
-        os.unlink(config_path)
 
     def test_first_frame_uses_lux_estimate(self, direct_control_config_file):
         """Test first frame uses lux-based initial estimate."""
@@ -1810,3 +1733,145 @@ class TestCoordinatedNightModeRamps:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestHighlightFactor:
+    """The pure highlight-headroom curve."""
+
+    def test_none_and_safe_return_exactly_one(self):
+        from src.auto_timelapse import highlight_factor
+
+        assert highlight_factor(None) == 1.0
+        assert highlight_factor(0) == 1.0
+        assert highlight_factor(199) == 1.0
+        # Exactly 1.0 at the boundary, so there is a real deadband rather than
+        # a factor that is forever a hair under 1.
+        assert highlight_factor(200) == 1.0
+
+    def test_monotonically_decreasing(self):
+        from src.auto_timelapse import highlight_factor
+
+        values = [highlight_factor(p) for p in range(200, 256)]
+        assert all(a >= b for a, b in zip(values, values[1:]))
+
+    def test_never_below_floor(self):
+        from src.auto_timelapse import highlight_factor
+
+        assert highlight_factor(255) >= 0.70
+        assert highlight_factor(255, floor=0.5) >= 0.5
+        assert highlight_factor(1000) >= 0.70
+
+    def test_thresholds_are_configurable(self):
+        from src.auto_timelapse import highlight_factor
+
+        assert highlight_factor(210, safe=220) == 1.0
+        assert highlight_factor(210, safe=200) < 1.0
+
+    def test_is_pure(self, caplog):
+        """No logging from inside the calculation.
+
+        A logger.warning() in here was 742 of 777 lines in the live log.
+        """
+        from src.auto_timelapse import highlight_factor
+
+        with caplog.at_level("DEBUG"):
+            highlight_factor(255)
+        assert caplog.records == []
+
+
+class TestHighlightProtection:
+    """Highlight protection as wired into the live controller."""
+
+    @pytest.fixture
+    def timelapse(self, direct_control_config_file):
+        import yaml
+
+        with open(direct_control_config_file) as f:
+            data = yaml.safe_load(f)
+        data["adaptive_timelapse"]["highlight_protection"] = {
+            "enabled": True,
+            "safe_p95": 200,
+            "warning_p95": 220,
+            "critical_p95": 240,
+            "min_scale": 0.70,
+            "slew": 0.25,
+            "apply_in_night": False,
+        }
+        with open(direct_control_config_file, "w") as f:
+            yaml.dump(data, f)
+
+        tl = AdaptiveTimelapse(direct_control_config_file)
+        tl._last_exposure_time = 0.01
+        return tl
+
+    def test_disabled_by_default(self, direct_control_config_file):
+        # No highlight_protection block at all: behaviour must be unchanged.
+        tl = AdaptiveTimelapse(direct_control_config_file)
+        assert tl._p95_enabled is False
+        assert tl._highlight_target_scale(255, LightMode.DAY) == 1.0
+
+    def test_no_effect_below_safe_threshold(self, timelapse):
+        assert timelapse._highlight_target_scale(150, LightMode.DAY) == 1.0
+
+    def test_reduces_exposure_when_highlights_clip(self, timelapse):
+        timelapse._last_p95 = 255
+        clipped = timelapse._calculate_exposure_from_brightness(120, mode=LightMode.DAY)
+
+        timelapse._last_exposure_time = 0.01
+        timelapse._p95_scale = 1.0
+        timelapse._last_p95 = 100
+        normal = timelapse._calculate_exposure_from_brightness(120, mode=LightMode.DAY)
+
+        assert clipped < normal
+
+    def test_slew_limits_a_single_frame(self, timelapse):
+        # One noisy p95 sample must not step the target all the way down.
+        first = timelapse._highlight_target_scale(255, LightMode.DAY)
+        assert first > 0.9  # a quarter of the way from 1.0 toward 0.70
+
+        for _ in range(20):
+            timelapse._highlight_target_scale(255, LightMode.DAY)
+        assert timelapse._p95_scale == pytest.approx(0.70, abs=0.01)
+
+    def test_scale_relaxes_back_when_highlights_recover(self, timelapse):
+        for _ in range(20):
+            timelapse._highlight_target_scale(255, LightMode.DAY)
+        assert timelapse._p95_scale < 0.75
+
+        for _ in range(30):
+            timelapse._highlight_target_scale(150, LightMode.DAY)
+        assert timelapse._p95_scale == pytest.approx(1.0, abs=0.01)
+
+    def test_night_is_exempt_by_default(self, timelapse):
+        assert timelapse._highlight_target_scale(255, LightMode.NIGHT) == 1.0
+        assert timelapse._highlight_target_scale(255, LightMode.DAY) < 1.0
+
+    def test_night_can_be_opted_in(self, timelapse):
+        timelapse._p95_apply_in_night = True
+        assert timelapse._highlight_target_scale(255, LightMode.NIGHT) < 1.0
+
+    def test_loop_settles_with_protection_engaged(self, timelapse):
+        """The feedback loop must reach a steady state, not hunt.
+
+        Simulates a scene where both mean brightness and p95 track exposure,
+        with p95 saturating -- the case where protection stays engaged.
+        """
+        exposure = 0.01
+        timelapse._last_exposure_time = exposure
+        history = []
+
+        for _ in range(40):
+            # Simple monotone scene model: brightness and p95 both scale with
+            # exposure, and p95 saturates at 255.
+            brightness = min(255, exposure * 12000)
+            timelapse._last_p95 = min(255, exposure * 21000)
+            exposure = timelapse._calculate_exposure_from_brightness(brightness, mode=LightMode.DAY)
+            timelapse._last_exposure_time = exposure
+            history.append(exposure)
+
+        tail = history[-8:]
+        spread = (max(tail) - min(tail)) / max(tail)
+        assert spread < 0.05, f"exposure did not settle: {tail}"
+
+        # And it settled somewhere sane, not pinned at a clamp.
+        assert 0.0001 < tail[-1] < 20.0

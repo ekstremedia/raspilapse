@@ -71,6 +71,53 @@ class BrightnessZones:
     CRITICAL_LOW = 40  # Critical underexposure, e.g. Arctic twilight
 
 
+def highlight_factor(
+    p95: Optional[float],
+    *,
+    safe: float = 200.0,
+    warning: float = 220.0,
+    critical: float = 240.0,
+    floor: float = 0.70,
+) -> float:
+    """
+    How much headroom the highlights still have, as a multiplier in [floor, 1.0].
+
+    From the Raspberry Pi camera algorithm guide: the top few percent of pixels
+    should stay at or below roughly 0.8 of full scale. Reducing exposure as p95
+    approaches saturation prevents clipping rather than correcting it after the
+    highlights are already gone.
+
+    Pure: no logging, no state. It used to log at WARNING from inside the
+    calculation, which is how one condition came to account for 95% of the log.
+
+    Args:
+        p95: 95th percentile brightness (0-255), or None
+        safe: Below this, full headroom -- returns exactly 1.0
+        warning: Gentle reduction between safe and here
+        critical: Moderate reduction between warning and here; aggressive above
+        floor: Hard lower bound on the returned factor
+
+    Returns:
+        1.0 when there is nothing to protect, down to floor when clipping
+    """
+    if p95 is None:
+        return 1.0
+
+    if p95 <= safe:
+        return 1.0
+
+    if p95 <= warning:
+        # safe -> 1.00, warning -> 0.95
+        return 1.0 - ((p95 - safe) / (warning - safe)) * 0.05
+
+    if p95 <= critical:
+        # warning -> 0.95, critical -> 0.85
+        return 0.95 - ((p95 - warning) / (critical - warning)) * 0.10
+
+    # critical -> 0.85, and downhill from there to the floor
+    return max(floor, 0.85 - ((p95 - critical) / 15) * 0.15)
+
+
 class AdaptiveTimelapse:
     """Handles adaptive timelapse capture with automatic exposure adjustment."""
 
@@ -101,6 +148,19 @@ class AdaptiveTimelapse:
         # Brightness feedback state for smooth transitions
         self._last_brightness: float = None  # Previous frame's mean brightness
         self._last_p95: float = None  # Previous frame's 95th percentile (highlight level)
+
+        # Highlight protection: scales the brightness target down when the
+        # top of the histogram approaches clipping. See _highlight_target_scale.
+        hp = self.config.get("adaptive_timelapse", {}).get("highlight_protection", {})
+        self._p95_enabled = hp.get("enabled", False)
+        self._p95_safe = hp.get("safe_p95", 200)
+        self._p95_warning = hp.get("warning_p95", 220)
+        self._p95_critical = hp.get("critical_p95", 240)
+        self._p95_floor = hp.get("min_scale", 0.70)
+        self._p95_slew = hp.get("slew", 0.25)
+        self._p95_apply_in_night = hp.get("apply_in_night", False)
+        self._p95_scale: float = 1.0
+        self._last_highlight_scale: float = 1.0
 
         # What get_camera_settings decided for the current frame, for the
         # metadata diagnostics. Written by the branch that ran, read by
@@ -790,63 +850,73 @@ class AdaptiveTimelapse:
 
         return self._underexposure_detected
 
-    def get_p95_highlight_factor(self, p95: float) -> float:
+    def _highlight_target_scale(self, p95: Optional[float], mode: str) -> float:
         """
-        Get proactive exposure reduction factor based on p95 (highlight level).
+        Slew-limited highlight-protection scale for the brightness target.
 
-        This implements proactive highlight protection from the Raspberry Pi
-        Camera Algorithm Guide: "top 2% of pixels must be at or below 0.8"
-        (upper bound constraint). Instead of waiting for pixels to clip (>245),
-        we reduce exposure when p95 approaches saturation.
+        The scale multiplies the *target* brightness rather than the
+        controller's output. Both settle -- p95 rises monotonically with
+        exposure for a fixed scene, so pulling the target down lowers p95,
+        which lets the scale relax back toward 1.0 -- but they settle
+        differently.
 
-        Philosophy: Prevent clipping BEFORE it happens, rather than correcting
-        after highlights are blown out.
-
-        Thresholds (0-255 scale):
-        - p95 < 200: No adjustment (highlights have headroom)
-        - p95 200-220: Gentle reduction (approaching saturation)
-        - p95 220-240: Moderate reduction (near saturation)
-        - p95 > 240: Aggressive reduction (imminent clipping)
+        Scaling the target leaves the loop's own fixed point intact
+        (mean == effective target), so the equilibrium depends only on the
+        highlight_protection settings. Scaling the output instead makes the
+        loop settle where ratio**damping * scale == 1, which ties how much
+        protection you actually get to brightness_damping. Simulated across
+        damping 0.3-1.0: target-scaling holds mean at 118.0 throughout, while
+        output-scaling drifts 116.4 to 118.0. Highlight behaviour should not
+        move when an unrelated tuning knob does.
 
         Args:
-            p95: 95th percentile brightness (0-255)
+            p95: 95th percentile brightness of the previous frame (0-255)
+            mode: Current light mode
 
         Returns:
-            Exposure factor (0.7-1.0, multiply target exposure by this)
+            Multiplier for the brightness target, in [min_scale, 1.0]
         """
-        if p95 is None:
+        if not self._p95_enabled:
             return 1.0
 
-        # Thresholds for highlight protection
-        safe_threshold = 200  # Below this, no adjustment needed
-        warning_threshold = 220  # Start gentle reduction
-        critical_threshold = 240  # Near clipping, more aggressive
-
-        if p95 <= safe_threshold:
+        # Night is off by default. Across 117k night frames here the mean
+        # brightness is already 90 against a target of 120, while 11% of frames
+        # exceed p95 200 -- streetlamps and the moon, not blown scenes. Cutting
+        # exposure on those makes aurora frames worse, not better.
+        if mode == LightMode.NIGHT and not self._p95_apply_in_night:
             return 1.0
 
-        if p95 <= warning_threshold:
-            # Gentle reduction: 200→1.0, 220→0.95
-            factor = 1.0 - ((p95 - safe_threshold) / (warning_threshold - safe_threshold)) * 0.05
-            logger.debug(f"[P95-Protect] Highlight warning: p95={p95:.1f} → factor={factor:.3f}")
-            return factor
+        raw = highlight_factor(
+            p95,
+            safe=self._p95_safe,
+            warning=self._p95_warning,
+            critical=self._p95_critical,
+            floor=self._p95_floor,
+        )
 
-        if p95 <= critical_threshold:
-            # Moderate reduction: 220→0.95, 240→0.85
-            factor = (
-                0.95 - ((p95 - warning_threshold) / (critical_threshold - warning_threshold)) * 0.10
-            )
-            logger.info(f"[P95-Protect] Highlight critical: p95={p95:.1f} → factor={factor:.3f}")
-            return factor
+        # Exponential slew, so one noisy p95 sample cannot step the target.
+        previous = self._p95_scale
+        self._p95_scale += self._p95_slew * (raw - self._p95_scale)
 
-        # Very high p95 (>240): Aggressive reduction to 0.70-0.85
-        # 240→0.85, 250→0.77, 255→0.70
-        factor = max(0.70, 0.85 - ((p95 - critical_threshold) / 15) * 0.15)
-        logger.warning(f"[P95-Protect] Highlight EMERGENCY: p95={p95:.1f} → factor={factor:.3f}")
-        return factor
+        # Edge-triggered logging only. Level-triggered logging of this exact
+        # condition once produced 742 of 777 lines in the log file.
+        engaged_before = previous < 0.995
+        engaged_now = self._p95_scale < 0.995
+        if engaged_now != engaged_before:
+            if engaged_now:
+                logger.info(
+                    f"[Highlight] Protection engaged: p95={p95:.0f}, "
+                    f"target scaled to {self._p95_scale:.2f}"
+                )
+            else:
+                logger.info("[Highlight] Protection released")
+        else:
+            logger.debug(f"[Highlight] p95={p95}, scale={self._p95_scale:.3f}")
+
+        return self._p95_scale
 
     def _calculate_exposure_from_brightness(
-        self, actual_brightness: float, lux: Optional[float] = None
+        self, actual_brightness: float, lux: Optional[float] = None, mode: str = LightMode.DAY
     ) -> float:
         """
         Direct proportional brightness control.
@@ -898,8 +968,14 @@ class AdaptiveTimelapse:
         # Get damping factor from config (0.5 = conservative)
         damping = adaptive_config.get("brightness_damping", 0.5)
 
+        # Highlight protection pulls the *target* down when the top of the
+        # histogram nears clipping. Scaling the target rather than the result
+        # keeps the loop single-equilibrium; see _highlight_target_scale.
+        scale = self._highlight_target_scale(self._last_p95, mode)
+        effective_target = self._target_brightness * scale
+
         # Calculate correction ratio
-        ratio = self._target_brightness / actual_brightness
+        ratio = effective_target / actual_brightness
 
         # Clamp ratio to prevent extreme single-frame corrections
         # Max 4x change per frame (ratio^0.5 = 2x actual change with 0.5 damping)
@@ -911,13 +987,16 @@ class AdaptiveTimelapse:
         # Clamp to valid range
         new_exposure = max(0.0001, min(night_max, new_exposure))
 
+        self._last_highlight_scale = scale
+
         # Log significant corrections
         if abs(ratio - 1.0) > 0.1:
             actual_change = ratio**damping
+            highlight_note = f", highlight_scale={scale:.2f}" if scale < 0.995 else ""
             logger.info(
                 f"[DirectFB] brightness={actual_brightness:.0f}, "
-                f"target={self._target_brightness}, ratio={ratio:.2f}, "
-                f"change={actual_change:.2f}x, "
+                f"target={effective_target:.0f}, ratio={ratio:.2f}, "
+                f"change={actual_change:.2f}x{highlight_note}, "
                 f"exp: {self._last_exposure_time:.4f}s → {new_exposure:.4f}s"
             )
 
@@ -1265,7 +1344,7 @@ class AdaptiveTimelapse:
             if self._last_brightness is not None and self._last_brightness > 140:
                 # Calculate ideal exposure from brightness ratio (same as transition mode)
                 target_exposure = self._calculate_exposure_from_brightness(
-                    self._last_brightness, lux=None
+                    self._last_brightness, lux=None, mode=LightMode.NIGHT
                 )
                 # Enforce night mode minimums: 60% max exposure, gain 2.0
                 # This prevents over-reduction in actual dark scenes
@@ -1376,7 +1455,9 @@ class AdaptiveTimelapse:
             # controller's own damping already limits how fast it moves.
             settings["AeEnable"] = 0
 
-            target_exposure = self._calculate_exposure_from_brightness(self._last_brightness, lux)
+            target_exposure = self._calculate_exposure_from_brightness(
+                self._last_brightness, lux, mode=LightMode.DAY
+            )
 
             # Gain stays at its floor in daylight; the shutter does the work.
             target_gain = self._interpolate_gain(1.0)
@@ -1439,7 +1520,9 @@ class AdaptiveTimelapse:
             night_max = adaptive_config["night_mode"]["max_exposure_time"]
             night_gain = adaptive_config["night_mode"]["analogue_gain"]
 
-            target_exposure = self._calculate_exposure_from_brightness(self._last_brightness, lux)
+            target_exposure = self._calculate_exposure_from_brightness(
+                self._last_brightness, lux, mode=LightMode.TRANSITION
+            )
 
             # Shutter first, then gain: hold gain at 1.0 until the shutter is
             # within 20% of its ceiling, then trade the remainder for gain.
@@ -1707,10 +1790,11 @@ class AdaptiveTimelapse:
                 diagnostics["last_brightness"] = round(self._last_brightness, 2)
             if self._last_p95 is not None:
                 diagnostics["last_p95"] = round(self._last_p95, 2)
-                # Include p95 highlight protection factor for debugging
-                p95_factor = self.get_p95_highlight_factor(self._last_p95)
-                if p95_factor < 1.0:
-                    diagnostics["p95_highlight_factor"] = round(p95_factor, 3)
+            if self._last_highlight_scale < 1.0:
+                diagnostics["highlight_scale"] = round(self._last_highlight_scale, 3)
+                diagnostics["effective_target_brightness"] = round(
+                    self._target_brightness * self._last_highlight_scale, 1
+                )
 
             # Analyze image brightness
             brightness_analysis = self._analyze_image_brightness(image_path)

@@ -213,6 +213,36 @@ adaptive_timelapse:
     # Between night and day = transition mode (gradual adjustment)
     # Automatically calculated between night and day thresholds
 
+  # Highlight protection: scale the brightness target down when the top of the
+  # histogram approaches clipping, so bright skies keep detail instead of
+  # blowing out to pure white.
+  #
+  # The scale applies to the *target*, not to the controller's output, so how
+  # much protection you get depends only on the settings below and not on
+  # brightness_damping.
+  #
+  # Set enabled: false to revert to unprotected exposure with no code change.
+  highlight_protection:
+    enabled: true
+
+    # p95 (95th percentile brightness, 0-255) thresholds.
+    # Below safe_p95 there is nothing to protect and the scale is exactly 1.0.
+    safe_p95: 200
+    warning_p95: 220
+    critical_p95: 240
+
+    # Never pull the target below this fraction of its configured value.
+    min_scale: 0.70
+
+    # How fast the scale may move per frame (0-1). Low values stop a single
+    # noisy frame from stepping the target.
+    slew: 0.25
+
+    # Off at night by default: streetlamps and the moon push p95 high while the
+    # frame as a whole is already darker than target, so protecting highlights
+    # there just makes aurora frames worse.
+    apply_in_night: false
+
   # Night mode settings (for dark conditions - stars, aurora, etc.)
   night_mode:
     # Maximum exposure time in seconds (max 20 seconds to avoid star trails)
