@@ -52,7 +52,7 @@ line length 100 (enforced by black and ruff via `pyproject.toml`).
 | `scripts/` | Installer and operator tools (shell + standalone Python) |
 | `systemd/` | Unit templates (`*.in`, substituted by `scripts/install.sh`) |
 | `config/` | `config.example.yml` is the documented schema; `config.yml` is gitignored |
-| `tests/` | pytest suite, one module per `src/` module |
+| `tests/` | pytest suite, one module per `src/` module (`__version__.py` is covered by `test_version.py`) |
 | `docs/` | User documentation |
 
 Never commit `config/config.yml` — it holds API keys. `.gitignore` covers it,
