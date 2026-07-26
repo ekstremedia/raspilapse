@@ -119,8 +119,8 @@ Creates PNG graphs in the `graphs/` directory:
 ### Analyze from Metadata Files
 
 ```bash
-python3 src/analyze_timelapse.py              # Last 24 hours
-python3 src/analyze_timelapse.py --hours 48   # Last 48 hours
+python3 scripts/db_graphs.py                  # Last 24 hours
+python3 scripts/db_graphs.py 48h              # Last 48 hours
 ```
 
 Generates detailed graphs from JSON metadata files and exports to Excel.

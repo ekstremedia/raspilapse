@@ -62,6 +62,9 @@ COLORS = {
     "wind": "#66ffaa",
     "cpu": "#ff9966",
     "load": "#cc99ff",
+    "wb_red": "#ff7766",
+    "wb_blue": "#6699ff",
+    "wb_temp": "#ffcc66",
 }
 
 # Mode colors for zone shading
@@ -211,6 +214,9 @@ def fetch_data(
         "system_cpu_temp": [],
         "system_load_1min": [],
         "sun_elevation": [],
+        "colour_gains_r": [],
+        "colour_gains_b": [],
+        "colour_temperature": [],
     }
 
     for row in rows:
@@ -235,6 +241,9 @@ def fetch_data(
             data["system_cpu_temp"].append(row["system_cpu_temp"])
             data["system_load_1min"].append(row["system_load_1min"])
             data["sun_elevation"].append(row["sun_elevation"])
+            data["colour_gains_r"].append(row["colour_gains_r"])
+            data["colour_gains_b"].append(row["colour_gains_b"])
+            data["colour_temperature"].append(row["colour_temperature"])
         except Exception as e:
             continue
 
@@ -1024,6 +1033,93 @@ def create_ml_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
     print(f"    Saved: {output_path}")
 
 
+def create_white_balance_graph(data: Dict, output_dir: Path, time_desc: str):
+    """Create a white-balance graph: colour gains plus colour temperature.
+
+    Replaces the equivalent chart from the old analyze_timelapse.py, which read
+    per-frame metadata JSON files. Those are deleted after 7 days, so it could
+    never show more than a week; these columns go back as far as the database.
+    """
+    print("  Creating white_balance.png...")
+
+    timestamps = data["timestamps"]
+    gains_r = data["colour_gains_r"]
+    gains_b = data["colour_gains_b"]
+    temps = data["colour_temperature"]
+
+    if not any(g is not None for g in gains_r):
+        print("    Skipped: no white-balance data in range")
+        return
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(FIG_WIDTH, FIG_HEIGHT * 1.5), sharex=True)
+    setup_dark_style(fig, ax1)
+    setup_dark_style(fig, ax2)
+
+    zones = find_mode_zones(timestamps, data["mode"])
+
+    # Top panel: red and blue gains. Manual WB holds these steady in day mode;
+    # visible drift means AWB is running or the seeded reference changed.
+    valid_gains = [g for g in gains_r + gains_b if g is not None]
+    add_mode_shading(ax1, zones, 0, max(valid_gains) if valid_gains else 1)
+
+    ax1.plot(
+        timestamps,
+        smooth_data([g if g is not None else float("nan") for g in gains_r]),
+        color=COLORS["wb_red"],
+        linewidth=2,
+        label="Red gain",
+        zorder=5,
+    )
+    ax1.plot(
+        timestamps,
+        smooth_data([g if g is not None else float("nan") for g in gains_b]),
+        color=COLORS["wb_blue"],
+        linewidth=2,
+        label="Blue gain",
+        zorder=5,
+    )
+    ax1.set_ylabel("Colour Gain", fontsize=12, color=TEXT_COLOR)
+    ax1.set_title(
+        f"White Balance - {time_desc}", fontsize=14, fontweight="bold", pad=15, color=TEXT_COLOR
+    )
+    legend = ax1.legend(loc="upper right", fontsize=10, facecolor=AXES_BG, edgecolor=GRID_COLOR)
+    plt.setp(legend.get_texts(), color=TEXT_COLOR)
+
+    # Bottom panel: colour temperature as the ISP reported it.
+    valid_temps = [t for t in temps if t]
+    if valid_temps:
+        add_mode_shading(ax2, zones, min(valid_temps), max(valid_temps))
+        ax2.plot(
+            timestamps,
+            smooth_data([t if t else float("nan") for t in temps]),
+            color=COLORS["wb_temp"],
+            linewidth=2,
+            label="Colour temperature",
+            zorder=5,
+        )
+        legend = ax2.legend(loc="upper right", fontsize=10, facecolor=AXES_BG, edgecolor=GRID_COLOR)
+        plt.setp(legend.get_texts(), color=TEXT_COLOR)
+    else:
+        ax2.text(
+            0.5,
+            0.5,
+            "No colour temperature recorded",
+            transform=ax2.transAxes,
+            ha="center",
+            color=TEXT_COLOR,
+        )
+
+    ax2.set_ylabel("Colour Temperature (K)", fontsize=12, color=TEXT_COLOR)
+    ax2.set_xlabel("Time", fontsize=12, fontweight="bold", color=TEXT_COLOR)
+    format_x_axis(ax2, timestamps)
+
+    fig.tight_layout()
+    output_path = output_dir / "white_balance.png"
+    plt.savefig(output_path, dpi=DPI, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"    Saved: {output_path}")
+
+
 def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: str):
     """
     Compare actual exposure to formula-predicted exposure.
@@ -1258,6 +1354,7 @@ Examples:
     # ML diagnostics graphs (for monitoring ML-first exposure system)
     create_ml_diagnostics_graph(data, output_dir, time_desc)
     create_exposure_efficiency_graph(data, output_dir, time_desc)
+    create_white_balance_graph(data, output_dir, time_desc)
 
     # Generate daily solar patterns graph from database
     if HAS_SOLAR_GRAPH:
