@@ -638,6 +638,11 @@ weather:
   # Cache duration in seconds (how long to keep weather data before refreshing)
   cache_duration: 300  # 5 minutes
 
+  # After a failed fetch, wait before trying again, doubling each consecutive
+  # failure up to this cap. Without it, an outage means one request and one
+  # error line per capture, indefinitely.
+  max_backoff_seconds: 900  # 15 minutes
+
   # Request timeout in seconds
   timeout: 5
 

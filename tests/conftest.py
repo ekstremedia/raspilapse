@@ -17,16 +17,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import logging_config  # noqa: E402
 
+# src/ modules support being imported both as `src.x` and as bare `x`, because
+# the systemd units run the scripts directly. Test modules use both styles, and
+# Python treats the two as separate module objects with separate module-level
+# state. Anything holding a process-wide cache therefore has to be reset under
+# both names.
+_STATEFUL_MODULES = ("weather",)
+
+
+def _reset_module_state() -> None:
+    logging_config.reset()
+    for name in _STATEFUL_MODULES:
+        for candidate in (name, f"src.{name}"):
+            module = sys.modules.get(candidate)
+            reset = getattr(module, "reset_cache", None)
+            if reset is not None:
+                reset()
+
 
 @pytest.fixture(autouse=True)
 def isolate_logging(tmp_path, monkeypatch):
-    """Send log output to a per-test temp directory and reset cached loggers."""
+    """Send log output to a per-test temp directory and reset cached state."""
     monkeypatch.setenv("RASPILAPSE_LOG_DIR", str(tmp_path / "logs"))
 
     # get_logger memoises by script name. Without a reset between tests, the
     # second test to ask for a given name gets the first test's handlers,
     # pointing at the first test's tmp_path.
-    logging_config.reset()
+    _reset_module_state()
 
     # If the suite is run from a systemd job, JOURNAL_STREAM would be set and
     # console: auto would resolve differently than it does interactively.
@@ -34,7 +51,7 @@ def isolate_logging(tmp_path, monkeypatch):
 
     yield
 
-    logging_config.reset()
+    _reset_module_state()
 
     # Anything created with logging.getLogger() directly, bypassing get_logger.
     for logger in logging.Logger.manager.loggerDict.values():

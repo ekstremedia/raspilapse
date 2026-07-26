@@ -1142,43 +1142,9 @@ class ImageOverlay:
             # Update our fallback cache with fresh data
             self._last_weather_data = weather_data
 
-        if weather_data:
-            data.update(
-                {
-                    "temp": self.weather._format_temperature(weather_data.get("temperature")),
-                    "temperature_outdoor": self.weather._format_temperature(
-                        weather_data.get("temperature")
-                    ),
-                    "humidity": self.weather._format_humidity(weather_data.get("humidity")),
-                    "wind": self.weather._format_wind(
-                        weather_data.get("wind_speed"), weather_data.get("wind_gust")
-                    ),
-                    "wind_speed": self.weather._format_wind_speed(weather_data.get("wind_speed")),
-                    "wind_gust": self.weather._format_wind_speed(weather_data.get("wind_gust")),
-                    "wind_dir": self.weather._format_wind_direction(weather_data.get("wind_angle")),
-                    "rain": self.weather._format_rain(weather_data.get("rain")),
-                    "rain_1h": self.weather._format_rain(weather_data.get("rain_1h")),
-                    "rain_24h": self.weather._format_rain(weather_data.get("rain_24h")),
-                    "pressure": self.weather._format_pressure(weather_data.get("pressure")),
-                }
-            )
-        else:
-            # Only show "-" if we have no data at all (first run, never succeeded)
-            data.update(
-                {
-                    "temp": "-",
-                    "temperature_outdoor": "-",
-                    "humidity": "-",
-                    "wind": "-",
-                    "wind_speed": "-",
-                    "wind_gust": "-",
-                    "wind_dir": "-",
-                    "rain": "-",
-                    "rain_1h": "-",
-                    "rain_24h": "-",
-                    "pressure": "-",
-                }
-            )
+        # format_fields fills every placeholder with "-" when there is no data
+        # at all (first run, never succeeded).
+        data.update(self.weather.format_fields(weather_data))
 
         # Add ships data if available
         if hasattr(self, "ships") and self.ships.enabled:
