@@ -143,6 +143,11 @@ python3 src/database.py --stats
 journalctl --disk-usage
 ```
 
+Rough arithmetic at 4K and a 30-second interval: about 300 KB per frame, 2,880
+frames a day, so **6-8 GB per day** before cleanup. With the default 7-day image
+retention that settles at roughly 50 GB. Halving the interval or dropping
+`output.quality` from 75 moves this proportionally.
+
 Images are removed by `raspilapse-cleanup.timer` after `KEEP_DAYS` (7 by
 default, in `scripts/cleanup_old_images.sh`). Database rows live longer —
 `database.retention_days`, 180 in the shipped example — because they hold the
@@ -163,6 +168,58 @@ alongside the units. If it is larger, the drop-in is missing:
 ```bash
 sudo journalctl --vacuum-size=200M
 ```
+
+---
+
+## Serving the images over the web
+
+If `output.directory` is under a webserver root, nginx can list the tree and
+serve the latest frame directly.
+
+```bash
+sudo apt install nginx
+```
+
+`/etc/nginx/sites-available/timelapse`:
+
+```nginx
+server {
+    listen 80;
+    server_name _;
+    root /var/www/html;
+
+    location /images/ {
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+    }
+
+    location /status.jpg {
+        alias /var/www/html/status.jpg;
+    }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/timelapse /etc/nginx/sites-enabled/
+sudo systemctl restart nginx
+```
+
+Frames are then at `http://<pi>/images/YYYY/MM/DD/`, and
+`http://<pi>/status.jpg` is whatever was captured most recently — that symlink
+is maintained by `output.symlink_latest`.
+
+## Is it capturing at the right rate?
+
+```bash
+# Frames in the last hour. At a 30s interval, expect ~120.
+find /var/www/html/images -name '*.jpg' -mmin -60 | wc -l
+
+python3 scripts/db_stats.py 1h          # the same question, from the database
+```
+
+A rate well below the expected number, with the service still `active`, is the
+stall the watchdog exists for.
 
 ---
 

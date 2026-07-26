@@ -66,7 +66,23 @@ That gives you four units:
 | `raspilapse-cleanup.timer` | Delete expired images and database rows | 02:00 |
 | `raspilapse-upload-retry.timer` | Retry failed uploads | every 30 min |
 
-`systemctl list-timers 'raspilapse-*'` is the authority on the schedule.
+`systemctl list-timers 'raspilapse-*'` is the authority on the schedule — no
+document restates it, because that is how four files came to disagree about it.
+
+Managing them:
+
+```bash
+sudo systemctl start|stop|restart raspilapse       # the capture service
+systemctl status raspilapse
+systemctl list-timers 'raspilapse-*'               # when each timer next fires
+
+sudo systemctl start raspilapse-daily-video.service # run a batch job now
+sudo systemctl start raspilapse-cleanup.service
+```
+
+The three batch units have no `[Install]` section, so they cannot be enabled
+directly — their timers own the schedule. Enabling and disabling is
+`./scripts/install.sh` and `--uninstall`.
 
 Other installer options:
 
@@ -163,13 +179,12 @@ config/         config.example.yml is the schema
 | Document | Contents |
 |----------|----------|
 | [docs/INSTALL.md](docs/INSTALL.md) | Full installation walkthrough |
-| [docs/USAGE.md](docs/USAGE.md) | Day-to-day commands |
-| [docs/SERVICE.md](docs/SERVICE.md) | systemd units and schedules |
 | [docs/EXPOSURE.md](docs/EXPOSURE.md) | Exposure control and transitions |
 | [docs/OVERLAY.md](docs/OVERLAY.md) | Overlay configuration |
 | [docs/WEATHER.md](docs/WEATHER.md) | Weather data integration |
 | [docs/TIMELAPSE_VIDEO.md](docs/TIMELAPSE_VIDEO.md) | Video, keogram, slitscan |
-| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | When something is wrong |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | When something is wrong, plus web serving and disk maths |
+| [config/README.md](config/README.md) | Working with config files |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup |
 

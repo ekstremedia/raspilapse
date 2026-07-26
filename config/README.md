@@ -111,8 +111,10 @@ sudo systemctl restart raspilapse
 
 ## Configuration Reference
 
-For detailed documentation on all configuration options, see:
-- **docs/USAGE.md** - Basic configuration guide
+`config.example.yml` is the reference: every setting is explained inline, and
+`tests/test_config_example.py` fails if it drifts from what the code reads.
+
+For the areas with more to say than fits in a comment:
 - **docs/OVERLAY.md** - Overlay system configuration
 - **docs/WEATHER.md** - Weather integration setup
 - **docs/EXPOSURE.md** - Exposure control settings

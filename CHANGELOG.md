@@ -657,7 +657,7 @@ Raspilapse v1.0.0 is production-ready for year-long operation.
 3. Documentation moved to `docs/` folder
 4. No configuration changes required
 
-See [docs/V1_RELEASE_NOTES.md](docs/V1_RELEASE_NOTES.md) for complete release details.
+See the v1.0.0 release notes on GitHub for complete release details.
 
 ---
 
