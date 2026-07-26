@@ -341,13 +341,23 @@ class UploadService:
             self.logger.error(f"[Upload] Failed to queue upload: {e}")
             return None
 
-    def get_pending_uploads(self) -> List[Dict]:
+    def get_pending_uploads(self, include_failed: bool = False) -> List[Dict]:
         """
-        Get all pending/failed uploads.
+        Get uploads awaiting retry.
+
+        'failed' is a terminal status - a row reaches it only after the retry
+        schedule has been exhausted, so the automatic queue must not pick it
+        back up. `retry_uploads.py --force` opts in explicitly.
+
+        Args:
+            include_failed: Also return rows that have been given up on
 
         Returns:
-            List of upload records with status 'pending' or 'failed'
+            List of upload records
         """
+        statuses = ("pending", "failed") if include_failed else ("pending",)
+        placeholders = ", ".join("?" for _ in statuses)
+
         try:
             with self._get_connection() as conn:
                 if conn is None:
@@ -355,9 +365,10 @@ class UploadService:
 
                 cursor = conn.cursor()
                 cursor.execute(
-                    """SELECT * FROM upload_queue
-                       WHERE status IN ('pending', 'failed')
-                       ORDER BY created_at DESC"""
+                    f"""SELECT * FROM upload_queue
+                        WHERE status IN ({placeholders})
+                        ORDER BY created_at DESC""",
+                    statuses,
                 )
                 return [dict(row) for row in cursor.fetchall()]
 
@@ -573,6 +584,15 @@ class UploadService:
             if datetime.now() < next_retry:
                 return False, f"Not due for retry until {next_retry}"
 
+        # The source video is deleted long before the queue gives up on it.
+        # Rescheduling a row whose file is gone means retrying forever, so
+        # cancel it instead of letting it accumulate attempts.
+        if not Path(upload["video_path"]).exists():
+            self.cancel_upload(upload_id)
+            msg = f"source video no longer exists: {upload['video_path']}"
+            self.logger.info(f"[Upload] Cancelled upload {upload_id} - {msg}")
+            return False, msg
+
         # Mark as uploading
         try:
             with self._get_connection() as conn:
@@ -658,7 +678,9 @@ class UploadService:
         # firing between mark-uploading and the final mark-success/failed).
         self._reset_stale_uploading_rows(stale_after_minutes=30)
 
-        pending = self.get_pending_uploads()
+        # force is an explicit "try everything again", which includes rows the
+        # scheduler has already given up on.
+        pending = self.get_pending_uploads(include_failed=force)
         self.logger.info(f"[Upload] Processing retry queue: {len(pending)} pending uploads")
 
         for upload in pending:

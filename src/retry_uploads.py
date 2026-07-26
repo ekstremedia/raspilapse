@@ -3,14 +3,16 @@
 Retry Uploads - Process the upload retry queue.
 
 Usage:
-    python3 src/retry_uploads.py           # Process queue (respects backoff timing)
-    python3 src/retry_uploads.py --force   # Retry all pending, ignore backoff
-    python3 src/retry_uploads.py --status  # Show queue status only
+    python3 src/retry_uploads.py                  # Process queue (respects backoff timing)
+    python3 src/retry_uploads.py --force          # Retry all pending, ignore backoff
+    python3 src/retry_uploads.py --status         # Show queue status only
+    python3 src/retry_uploads.py --purge-missing  # Cancel rows whose video is gone
 """
 
 import argparse
 import os
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -42,18 +44,27 @@ Examples:
 
   # Show queue status without processing
   python3 src/retry_uploads.py --status
+
+  # Cancel queued uploads whose source video has been deleted
+  python3 src/retry_uploads.py --purge-missing
         """,
     )
 
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Retry all pending uploads regardless of backoff timing",
+        help="Retry all pending uploads regardless of backoff timing, "
+        "including ones already given up on",
     )
     parser.add_argument(
         "--status",
         action="store_true",
         help="Show queue status without processing",
+    )
+    parser.add_argument(
+        "--purge-missing",
+        action="store_true",
+        help="Cancel queued uploads whose source video no longer exists",
     )
     parser.add_argument(
         "-c",
@@ -91,18 +102,39 @@ Examples:
 
     if args.status:
         # Show detailed pending uploads
-        pending = service.get_pending_uploads()
+        pending = service.get_pending_uploads(include_failed=True)
         if pending:
-            print(f"\nPending Uploads:")
+            print("\nPending Uploads:")
             for upload in pending:
+                missing = "" if Path(upload["video_path"]).exists() else "  [FILE MISSING]"
                 print(
-                    f"  [{upload['id']}] {upload['video_date']} - "
+                    f"  [{upload['id']}] {upload['video_date']} ({upload['status']}) - "
                     f"retries: {upload['retry_count']}/{upload['max_retries']}, "
-                    f"next: {upload['next_retry_at'] or 'now'}"
+                    f"next: {upload['next_retry_at'] or 'now'}{missing}"
                 )
                 if upload["last_error"]:
                     print(f"       Error: {upload['last_error'][:80]}")
         return 0
+
+    if args.purge_missing:
+        cancelled = 0
+        for upload in service.get_pending_uploads(include_failed=True):
+            if not Path(upload["video_path"]).exists():
+                if service.cancel_upload(upload["id"]):
+                    cancelled += 1
+                    print(f"  Cancelled [{upload['id']}] {upload['video_date']}")
+        print(f"\nCancelled {cancelled} upload(s) with a missing source video.")
+        return 0
+
+    # Uploading is pointless without credentials, and every attempt still burns
+    # a retry slot and writes a log line. Say so once instead.
+    upload_config = config.get("video_upload", {})
+    if not upload_config.get("url") or not upload_config.get("api_key"):
+        print(
+            "\nError: video_upload.url and video_upload.api_key must be set in "
+            f"{args.config} before uploads can be retried."
+        )
+        return 1
 
     # Process the queue
     if stats.get("pending", 0) == 0 and stats.get("uploading", 0) == 0:
@@ -112,7 +144,7 @@ Examples:
     print(f"\nProcessing upload queue (force={args.force})...")
     results = service.process_retry_queue(force=args.force)
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Processed: {results['processed']}")
     print(f"  Success:   {results['success']}")
     print(f"  Failed:    {results['failed']}")

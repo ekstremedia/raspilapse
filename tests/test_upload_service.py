@@ -235,6 +235,24 @@ class TestGetPendingUploads:
         pending = service.get_pending_uploads()
         assert len(pending) == 0
 
+    def test_excludes_failed_by_default(self, upload_config):
+        """'failed' is terminal - the automatic queue must not pick it back up."""
+        service = UploadService(upload_config)
+
+        queue_id = service.queue_upload(
+            video_path="/path/to/video.mp4",
+            keogram_path=None,
+            slitscan_path=None,
+            video_date="2026-01-21",
+        )
+        # Exhaust the retry schedule so the row lands in 'failed'
+        for _ in range(12):
+            service.mark_upload_failed(queue_id, "nope")
+
+        assert service.get_upload_by_id(queue_id)["status"] == "failed"
+        assert service.get_pending_uploads() == []
+        assert len(service.get_pending_uploads(include_failed=True)) == 1
+
 
 class TestMarkUploadStatus:
     """Test mark_upload_success and mark_upload_failed methods."""
@@ -624,6 +642,22 @@ class TestRetrySingleUpload:
         success, message = service.retry_single_upload(queue_id)
         assert success is False
         assert "already completed" in message.lower()
+
+    def test_retry_cancels_when_source_video_is_gone(self, upload_config):
+        """A queued upload whose video was deleted is cancelled, not rescheduled."""
+        service = UploadService(upload_config)
+
+        queue_id = service.queue_upload("/no/such/video.mp4", None, None, "2026-01-21")
+
+        with patch("src.upload_service.requests.post") as mock_post:
+            success, message = service.retry_single_upload(queue_id, force=True)
+
+        mock_post.assert_not_called()
+        assert success is False
+        assert "no longer exists" in message
+        # cancel_upload removes the row, so it never comes back around
+        assert service.get_upload_by_id(queue_id) is None
+        assert service.get_pending_uploads(include_failed=True) == []
 
     def test_retry_respects_backoff(self, upload_config, temp_video_file):
         """Test that retry respects backoff timing (without force)."""
