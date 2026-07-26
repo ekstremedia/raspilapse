@@ -5,13 +5,13 @@ Perfect for 24/7 timelapses that capture both daylight and nighttime scenes,
 including stars and aurora activity.
 """
 
-import os
+import signal
 import sys
 import time
-import signal
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
+
 import yaml
 
 # Optional: Sun position calculation for polar regions
@@ -25,15 +25,23 @@ except ImportError:
 
 # Handle imports for both module and script execution
 try:
-    from src.logging_config import configure_logging, get_logger
     from src.capture_image import CameraConfig, ImageCapture
-    from src.exposure import BrightnessZones, ExposureController, LightMode, highlight_factor
     from src.database import CaptureDatabase
+
+    # BrightnessZones and highlight_factor are re-exported for callers and
+    # tests that still import them from here.
+    from src.exposure import (  # noqa: F401
+        BrightnessZones,
+        ExposureController,
+        LightMode,
+        highlight_factor,
+    )
+    from src.logging_config import configure_logging, get_logger
     from src.system_monitor import SystemMonitor
 except ImportError:
-    from logging_config import configure_logging, get_logger
     from capture_image import CameraConfig, ImageCapture
-    from exposure import BrightnessZones, ExposureController, LightMode, highlight_factor
+    from exposure import ExposureController, LightMode
+    from logging_config import configure_logging, get_logger
 
     try:
         from database import CaptureDatabase
@@ -304,8 +312,8 @@ class AdaptiveTimelapse:
 
         # Analyze image brightness
         try:
-            from PIL import Image
             import numpy as np
+            from PIL import Image
 
             # Open image and convert to grayscale
             img = Image.open(test_image_path)
@@ -438,8 +446,8 @@ class AdaptiveTimelapse:
             Dictionary with brightness metrics
         """
         try:
-            from PIL import Image
             import numpy as np
+            from PIL import Image
 
             with Image.open(image_path) as img:
                 # Convert to grayscale for brightness analysis
@@ -828,40 +836,14 @@ class AdaptiveTimelapse:
                             if not brightness_metrics:
                                 brightness_metrics = self._analyze_image_brightness(image_path)
                             if brightness_metrics:
-                                actual_brightness = brightness_metrics.get("mean_brightness")
-
-                                # Dynamic target: boost brightness on overcast days
-                                std_brightness = brightness_metrics.get("std_brightness")
-                                old_target = self._target_brightness
-                                self._target_brightness = self._get_dynamic_target_brightness(
-                                    std_brightness
-                                )
-                                if self._target_brightness != old_target:
-                                    # Only log when the adjustment is meaningful — most
-                                    # ticks move the target by ±1 and just spam INFO.
-                                    if abs(self._target_brightness - old_target) >= 5:
-                                        logger.info(
-                                            f"[Overcast] Dynamic target: {old_target} → {self._target_brightness} "
-                                            f"(std_brightness={std_brightness:.1f})"
-                                        )
-                                    else:
-                                        logger.debug(
-                                            f"[Overcast] Dynamic target: {old_target} → {self._target_brightness} "
-                                            f"(std_brightness={std_brightness:.1f})"
-                                        )
-
-                                # These two are the entire input to the exposure
-                                # controller. _apply_brightness_feedback used to write
-                                # _last_brightness as a side effect while computing a
-                                # correction factor nothing read.
-                                self._last_brightness = actual_brightness
-                                self._last_p95 = brightness_metrics.get("percentile_95")
-                                # Check for overexposure and enable fast ramp-down if needed
-                                self._check_overexposure(brightness_metrics)
-                                # Check for underexposure at min exposure and enable fast recovery
-                                self._check_underexposure(brightness_metrics)
+                                # The whole input to the exposure controller for the
+                                # next frame: measured brightness, highlight level,
+                                # the dynamic target and the over/under flags.
+                                self.exposure.observe_frame(brightness_metrics)
                         except Exception as e:
-                            logger.debug(f"Could not apply brightness feedback: {e}")
+                            # Losing this means the controller reacts to a stale
+                            # measurement forever, so it is not a debug-level event.
+                            logger.warning(f"Could not apply brightness feedback: {e}")
 
                     # Update day WB reference from actual capture metadata
                     # This allows us to learn good daylight WB values for smooth transitions

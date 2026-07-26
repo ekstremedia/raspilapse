@@ -1,13 +1,14 @@
 """Tests for auto_timelapse module."""
 
 import os
+import re
+import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 import yaml
-
-import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -349,8 +350,8 @@ class TestAdaptiveTimelapse:
 
     def test_take_test_shot(self, test_config_file):
         """Test taking a test shot."""
-        import tempfile
         import json
+        import tempfile
 
         # Create metadata file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -1877,3 +1878,70 @@ class TestHighlightProtection:
 
         # And it settled somewhere sane, not pinned at a clamp.
         assert 0.0001 < tail[-1] < 20.0
+
+
+class TestFeedbackWiring:
+    """The capture loop must actually deliver measurements to the controller.
+
+    A refactor once left run() writing _last_brightness onto AdaptiveTimelapse
+    after that state had moved to ExposureController. Nothing raised: the write
+    just created a dead attribute, the real one kept its startup seed value, and
+    the exposure loop reacted to a measurement from minutes earlier. Unit tests
+    of both halves passed; only the camera showed it.
+    """
+
+    def test_observe_frame_updates_the_controller(self, direct_control_config_file):
+        tl = AdaptiveTimelapse(direct_control_config_file)
+
+        tl.exposure.observe_frame(
+            {
+                "mean_brightness": 137.0,
+                "percentile_95": 231.0,
+                "std_brightness": 55.0,
+                "overexposed_percent": 0.0,
+                "underexposed_percent": 0.0,
+            }
+        )
+
+        assert tl.exposure.last_brightness == 137.0
+        assert tl.exposure._last_p95 == 231.0
+
+    def test_capture_loop_never_assigns_controller_state_to_self(self, direct_control_config_file):
+        """Static check on AdaptiveTimelapse's source.
+
+        Assigning `self._last_brightness = ...` inside AdaptiveTimelapse is
+        always a bug now: that name belongs to ExposureController. Python
+        happily creates a new attribute instead of raising, so only a check
+        like this catches it -- calling observe_frame() directly in a test
+        would not, because the broken code path is in run().
+        """
+        import inspect
+
+        source = inspect.getsource(AdaptiveTimelapse)
+        controller_state = {
+            name
+            for name in vars(AdaptiveTimelapse(direct_control_config_file).exposure)
+            if name.startswith("_")
+        }
+
+        offenders = sorted(
+            name for name in controller_state if re.search(rf"self\.{name}\s*=[^=]", source)
+        )
+        assert not offenders, (
+            "AdaptiveTimelapse assigns state that belongs to ExposureController: "
+            f"{offenders}. Route it through the controller instead."
+        )
+
+    def test_controller_reacts_to_the_reported_brightness(self, direct_control_config_file):
+        """Too bright -> shorter exposure. The sign of the loop."""
+        tl = AdaptiveTimelapse(direct_control_config_file)
+        tl.exposure._last_exposure_time = 0.02
+
+        tl.exposure.observe_frame({"mean_brightness": 200.0, "percentile_95": 210.0})
+        settings = tl.exposure.get_camera_settings(LightMode.DAY, lux=500)
+        assert settings["ExposureTime"] < 0.02 * 1_000_000
+
+        tl.exposure._last_exposure_time = 0.02
+        tl.exposure.observe_frame({"mean_brightness": 60.0, "percentile_95": 90.0})
+        settings = tl.exposure.get_camera_settings(LightMode.DAY, lux=500)
+        assert settings["ExposureTime"] > 0.02 * 1_000_000
