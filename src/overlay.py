@@ -33,7 +33,14 @@ except ImportError:
     from system_monitor import SystemMonitor
 
 try:
-    from src.overlay_draw import format_slot, measure_widest, text_height, text_width
+    from src.overlay_draw import (
+        draw_divider,
+        draw_gradient_bar,
+        format_slot,
+        measure_widest,
+        text_height,
+        text_width,
+    )
 
     # Re-exported: these used to live here, and callers and tests still import
     # them from this module.
@@ -44,7 +51,14 @@ try:
         TideData,
     )
 except ImportError:
-    from overlay_draw import format_slot, measure_widest, text_height, text_width
+    from overlay_draw import (
+        draw_divider,
+        draw_gradient_bar,
+        format_slot,
+        measure_widest,
+        text_height,
+        text_width,
+    )
     from overlay_sources import (  # noqa: F401
         AuroraData,
         CachedJsonSource,
@@ -564,26 +578,8 @@ class ImageOverlay:
             return (margin, img_height - bbox_height - margin)
 
     def _draw_gradient_bar(self, draw, img_width: int, bar_height: int, base_color: List[int]):
-        """
-        Draw a gradient background bar that fades from solid to transparent.
-
-        Args:
-            draw: ImageDraw object
-            img_width: Image width
-            bar_height: Height of the bar
-            base_color: Base RGBA color [R, G, B, A]
-        """
-        # Create gradient from top to bottom
-        r, g, b, max_alpha = base_color
-
-        for y in range(bar_height):
-            # Calculate alpha based on position (fade out towards bottom)
-            alpha_ratio = 1.0 - (y / bar_height) * 0.3  # Fade 30% at bottom
-            alpha = int(max_alpha * alpha_ratio)
-
-            # Draw horizontal line with calculated alpha
-            color = (r, g, b, alpha)
-            draw.rectangle([0, y, img_width, y + 1], fill=color)
+        """Draw the gradient background bar. See overlay_draw.draw_gradient_bar."""
+        draw_gradient_bar(draw, img_width, bar_height, base_color)
 
     def _draw_ship_boxes(
         self,
@@ -873,15 +869,13 @@ class ImageOverlay:
                             # Add gap for next section
                             aurora_section_width += section_gap
 
-                            # Draw subtle vertical divider line to left of aurora section
-                            divider_x = aurora_x - int(section_gap * 0.5)
-                            divider_y1 = y1
-                            divider_y2 = y2 + line_height - int(padding * 0.3)
-                            divider_color = font_color[:3] + (60,)  # Very subtle
-                            draw.line(
-                                [(divider_x, divider_y1), (divider_x, divider_y2)],
-                                fill=divider_color,
-                                width=1,
+                            # Subtle vertical rule to the left of the aurora section
+                            draw_divider(
+                                draw,
+                                x=aurora_x - int(section_gap * 0.5),
+                                y_top=y1,
+                                y_bottom=y2 + line_height - int(padding * 0.3),
+                                color=font_color[:3] + (60,),
                             )
                     except Exception as aurora_err:
                         logger.error(f"Failed to draw aurora widget: {aurora_err}", exc_info=True)

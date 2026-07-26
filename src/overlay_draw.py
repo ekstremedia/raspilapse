@@ -67,28 +67,6 @@ def draw_divider(draw, x: int, y_top: int, y_bottom: int, color, width: int = 1)
     draw.line([(x, y_top), (x, y_bottom)], fill=color, width=width)
 
 
-def draw_right_aligned(
-    draw,
-    text: str,
-    *,
-    right_edge: int,
-    y: int,
-    font,
-    fill,
-    font_size: int = 20,
-) -> int:
-    """
-    Draw `text` ending at `right_edge`.
-
-    Returns:
-        The x coordinate the text starts at, so a caller can place a divider
-        or the next section beside it.
-    """
-    x = right_edge - text_width(draw, text, font, font_size)
-    draw.text((x, y), text, font=font, fill=fill)
-    return x
-
-
 def measure_widest(draw, texts, font, font_size: int = 20) -> int:
     """
     Width of the widest of several strings.
@@ -99,15 +77,20 @@ def measure_widest(draw, texts, font, font_size: int = 20) -> int:
     return max((text_width(draw, t, font, font_size) for t in texts), default=0)
 
 
-def draw_gradient_bar(draw, img_width: int, bar_height: int, base_color, steps: int = 40) -> None:
+def draw_gradient_bar(draw, img_width: int, bar_height: int, base_color) -> None:
     """
-    Draw the top bar as a vertical gradient fading to transparent.
+    Draw the top bar as a vertical gradient, fading toward the image.
 
-    A hard-edged bar draws the eye; a fade lets the image show through.
+    A hard-edged bar draws the eye to itself; fading the bottom 30% lets the
+    scene show through where the text isn't.
+
+    Args:
+        draw: PIL ImageDraw target
+        img_width: Full image width
+        bar_height: Height of the bar in pixels
+        base_color: RGBA sequence; the A is the alpha at the very top
     """
-    r, g, b, a = base_color
-    for i in range(steps):
-        y_start = int(i * bar_height / steps)
-        y_end = int((i + 1) * bar_height / steps)
-        alpha = int(a * (1 - i / steps))
-        draw.rectangle([(0, y_start), (img_width, y_end)], fill=(r, g, b, alpha))
+    r, g, b, max_alpha = base_color
+    for y in range(bar_height):
+        alpha = int(max_alpha * (1.0 - (y / bar_height) * 0.3))
+        draw.rectangle([0, y, img_width, y + 1], fill=(r, g, b, alpha))
