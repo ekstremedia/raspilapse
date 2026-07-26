@@ -3,199 +3,192 @@
 ![Tests](https://github.com/ekstremedia/raspilapse/workflows/Tests/badge.svg)
 [![codecov](https://codecov.io/gh/ekstremedia/raspilapse/branch/main/graph/badge.svg)](https://codecov.io/gh/ekstremedia/raspilapse)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A Python library for creating timelapses with Raspberry Pi Camera. Supports adaptive day/night exposure, image overlays, and optimized long exposures up to 20 seconds.
+Continuous timelapse capture for the Raspberry Pi camera. Runs 24/7, adapts
+exposure from daylight through twilight to 20-second night exposures without
+flicker, burns an information overlay into each frame, and assembles a video
+once a day.
+
+Built for a camera at 68°N, where "day" and "night" stop meaning what they
+usually do, so the exposure logic works from measured brightness and sun
+elevation rather than the clock.
 
 ## Requirements
 
-- Raspberry Pi (any model with CSI port)
-- Camera Module V2, V3, or HQ Camera
-- Raspberry Pi OS Bullseye or later
-- Python 3.9+
+- Raspberry Pi with a CSI camera port
+- Camera Module V2, V3 or HQ
+- Raspberry Pi OS Bookworm (Bullseye works; it ships Python 3.9)
+- Roughly 6 GB of disk per day at 4K/30s, before cleanup
 
-## Installation
+## Install
 
 ```bash
-# Enable camera interface
-sudo raspi-config  # Interface Options → Camera → Enable → Reboot
-
-# Install dependencies
 sudo apt update
-sudo apt install -y python3-picamera2 python3-yaml python3-pil
+sudo apt install -y python3-picamera2 python3-yaml python3-pil python3-numpy \
+                    python3-requests python3-requests-toolbelt python3-matplotlib ffmpeg
 
-# Clone and configure
+# astral 3.x is needed for sun elevation; the packaged version is too old
+pip3 install --break-system-packages 'astral>=3.2'
+
 git clone https://github.com/ekstremedia/raspilapse.git
 cd raspilapse
 cp config/config.example.yml config/config.yml
-
-# Test capture
-python3 src/capture_image.py
+nano config/config.yml     # at minimum: location, output.project_name, output.directory
 ```
 
-## Running as a Service
+Check everything is in place before installing any services:
 
-For 24/7 operation:
+```bash
+./scripts/install.sh --check
+```
+
+Take one frame to confirm the camera works:
+
+```bash
+python3 src/auto_timelapse.py --test
+```
+
+Then install the systemd units:
 
 ```bash
 ./scripts/install.sh
-sudo systemctl status raspilapse
+sudo systemctl start raspilapse
 ```
 
-Images save to `/var/www/html/images/YYYY/MM/DD/` by default.
+That gives you four units:
+
+| Unit | What it does | When |
+|------|--------------|------|
+| `raspilapse.service` | Continuous capture | always |
+| `raspilapse-daily-video.timer` | Yesterday's video, keogram, slitscan | 05:00 |
+| `raspilapse-cleanup.timer` | Delete expired images and database rows | 02:00 |
+| `raspilapse-upload-retry.timer` | Retry failed uploads | every 30 min |
+
+`systemctl list-timers 'raspilapse-*'` is the authority on the schedule.
+
+Other installer options:
+
+```bash
+./scripts/install.sh --only capture,cleanup   # a subset
+./scripts/install.sh --with-watchdog          # restart on stalled capture (runs as root)
+./scripts/install.sh --dry-run                # print the units, install nothing
+./scripts/install.sh --uninstall
+```
 
 ## Configuration
 
-Edit `config/config.yml`:
+`config/config.example.yml` is the documented schema — every setting is
+explained there, and a test fails if it drifts from what the code reads. Copy
+it to `config/config.yml`, which is gitignored because it holds your API keys.
 
-```yaml
-camera:
-  resolution:
-    width: 1920
-    height: 1080
+The settings most worth understanding:
 
-output:
-  directory: "captured_images"
-  filename_pattern: "{name}_%Y_%m_%d_%H_%M_%S.jpg"
-  project_name: "timelapse"
-  quality: 95
+| Setting | Why it matters |
+|---------|----------------|
+| `location.latitude` / `longitude` | Sun elevation drives mode selection. Wrong location means wrong day/night boundaries. |
+| `output.directory` | Where frames land. Needs to exist and be writable. |
+| `adaptive_timelapse.interval` | Seconds between frames. 30 is a good default. |
+| `adaptive_timelapse.reference_lux` | Overall brightness. Raise for brighter images. |
+| `adaptive_timelapse.transition_mode.target_brightness` | What the exposure loop aims for, 0-255. |
+| `logging.level` | `INFO` while setting up, `WARNING` for 24/7. |
 
-timelapse:
-  interval: 30  # seconds between captures
+## How exposure works
 
-adaptive_timelapse:
-  enabled: true
-  light_thresholds:
-    night: 10    # lux
-    day: 100     # lux
-  night_mode:
-    max_exposure_time: 20.0  # seconds
-    analogue_gain: 6.0
+Each cycle takes a fixed-settings test shot, measures its brightness, picks a
+mode, and sets the camera:
 
-overlay:
-  enabled: true
-  position: "bottom-left"
-  camera_name: "My Camera"
+```
+mode      = f(smoothed lux, sun elevation)      night | transition | day
+exposure  = current * (target / measured) ** damping
 ```
 
-## Key Features
+Direct proportional feedback rather than a lookup table, so it converges in
+three to five frames and needs no per-camera calibration beyond
+`reference_lux`. Shutter does the work first; gain only rises once the shutter
+is within 20% of its ceiling.
 
-**Adaptive Exposure** - Automatically switches between day/night modes based on ambient light, with smooth transitions to prevent flickering. Fast overexposure detection prevents "light flash" at dawn.
+| Mode | Exposure | Gain |
+|------|----------|------|
+| Day | brightness feedback | pinned at floor |
+| Transition | brightness feedback | ramps once the shutter nears max |
+| Night | up to 20 s, reduced if the scene is bright | up to configured max |
 
-**ML-Based Learning** - Lightweight machine learning that continuously improves exposure predictions. Learns optimal settings for each time of day, with Aurora-safe logic for night photography. Trust builds gradually from 0% to 80% as predictions prove accurate.
+White balance is manual in every mode — AWB drifting between frames is the main
+cause of colour flicker in a timelapse. Optional highlight protection lowers the
+brightness target when the top of the histogram nears clipping, so bright skies
+keep detail.
 
-**Per-Camera Brightness Tuning** - Configurable `reference_lux` allows tuning brightness for each camera based on scene and sensor sensitivity.
-
-**Long Exposure Optimization** - 20-second exposures complete in ~20 seconds (not 100+) through proper libcamera configuration.
-
-**Image Overlays** - Configurable text overlays with timestamps, camera settings, and weather data.
-
-**Analysis Tools** - Generate graphs from the capture database:
-```bash
-python3 scripts/db_graphs.py           # Last 24 hours (default)
-python3 scripts/db_graphs.py 6h        # Last 6 hours
-python3 scripts/db_graphs.py 7d        # Last 7 days
-python3 scripts/db_stats.py --all      # View database statistics
-```
-
-**Video Generation with Deflicker** - Create timelapse videos with FFMPEG deflicker filter to smooth any remaining exposure transitions:
-```bash
-python3 src/make_timelapse.py  # Uses config defaults (05:00 to 05:00)
-python3 src/make_timelapse.py --start 07:00 --end 15:00 --today
-```
+See [docs/EXPOSURE.md](docs/EXPOSURE.md) for the details.
 
 ## Usage
 
 ```bash
-# Single capture
-python3 src/capture_image.py
+python3 src/auto_timelapse.py --test     # one frame, then exit
+python3 src/status.py                    # service state, config summary, recent captures
+python3 src/capture_image.py             # single capture, no adaptive logic
 
-# Adaptive timelapse (manual)
-python3 src/auto_timelapse.py
-
-# Test single frame
-python3 src/auto_timelapse.py --test
-
-# Check status
-python3 src/status.py
-
-# Generate video (default: 05:00 yesterday to 05:00 today)
-python3 src/make_timelapse.py
-
-# Generate video for specific time range
+python3 src/make_timelapse.py            # video for the configured window
 python3 src/make_timelapse.py --start 07:00 --end 15:00 --today
+python3 src/daily_timelapse.py --date 2026-07-25   # video + keogram + upload
+
+python3 scripts/db_stats.py 24h          # capture statistics
+python3 scripts/db_graphs.py 7d          # graphs into graphs/
+python3 src/database.py --stats          # database size and retention
+python3 src/database.py --prune --dry-run
 ```
 
-## Project Structure
+Logs are in `logs/<script>.log`. Under systemd the application log goes there
+rather than to the journal, so lines are not stored twice; `journalctl -u
+raspilapse` still shows systemd and libcamera output.
+
+## Layout
 
 ```
-raspilapse/
-├── src/                    # Source code
-│   ├── auto_timelapse.py   # Adaptive day/night capture
-│   ├── capture_image.py    # Core capture module
-│   ├── make_timelapse.py   # Video generation
-│   ├── overlay.py          # Image overlays
-│   └── status.py           # Status display
-├── scripts/                # Utility scripts
-│   ├── db_graphs.py        # Generate graphs from database
-│   ├── db_stats.py         # View database statistics
-│   └── install.sh          # Service installation
-├── config/                 # Configuration files
-├── systemd/                # Service files
-├── docs/                   # Documentation
-└── tests/                  # Unit tests
+src/            auto_timelapse.py   capture loop, scheduling, lifecycle
+                exposure.py         all exposure decisions and their state
+                capture_image.py    Picamera2 wrapper
+                overlay.py          burned-in overlay
+                database.py         SQLite storage + maintenance CLI
+                make_timelapse.py   ffmpeg video assembly
+                daily_timelapse.py  daily video + upload
+scripts/        install.sh, cleanup, watchdog, graph and stats tools
+systemd/        unit templates, rendered by install.sh
+config/         config.example.yml is the schema
 ```
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [INSTALL.md](docs/INSTALL.md) | Installation guide |
-| [SERVICE.md](docs/SERVICE.md) | Systemd service setup |
-| [OVERLAY.md](docs/OVERLAY.md) | Overlay configuration |
-| [TIMELAPSE_VIDEO.md](docs/TIMELAPSE_VIDEO.md) | Video generation with deflicker |
-| [TRANSITION_SMOOTHING.md](docs/TRANSITION_SMOOTHING.md) | Day/night transition system |
-| [CLAUDE.md](docs/CLAUDE.md) | Technical reference (Picamera2) |
+| Document | Contents |
+|----------|----------|
+| [docs/INSTALL.md](docs/INSTALL.md) | Full installation walkthrough |
+| [docs/USAGE.md](docs/USAGE.md) | Day-to-day commands |
+| [docs/SERVICE.md](docs/SERVICE.md) | systemd units and schedules |
+| [docs/EXPOSURE.md](docs/EXPOSURE.md) | Exposure control and transitions |
+| [docs/OVERLAY.md](docs/OVERLAY.md) | Overlay configuration |
+| [docs/WEATHER.md](docs/WEATHER.md) | Weather data integration |
+| [docs/TIMELAPSE_VIDEO.md](docs/TIMELAPSE_VIDEO.md) | Video, keogram, slitscan |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | When something is wrong |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup |
 
 ## Troubleshooting
 
-**Camera not detected:**
 ```bash
-rpicam-still -o test.jpg  # Test hardware
-sudo raspi-config         # Check interface enabled
+./scripts/install.sh --check      # dependencies and config
+python3 src/status.py             # is it capturing?
+tail -f logs/auto_timelapse.log   # what is it doing?
+rpicam-still -o /tmp/test.jpg     # is the camera alive at all?
 ```
 
-**Import errors:**
-```bash
-sudo apt install -y python3-picamera2  # Use apt, not pip
-```
+Camera not detected: check the ribbon cable, then `sudo raspi-config`.
+Permission denied on the camera: `sudo usermod -aG video $USER`, then log out
+and back in. Import errors for picamera2: install it with apt, never pip.
 
-**Permission denied:**
-```bash
-sudo usermod -aG video $USER  # Add to video group, then re-login
-```
-
-## Development
-
-```bash
-# Run tests
-python3 -m pytest tests/ -v
-
-# Format code
-black src/ tests/ --line-length=100
-
-# Or use Makefile
-make format && make test
-```
+More in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+MIT — see [LICENSE](LICENSE).
 
-Copyright © 2024-2025 Terje Nesthus
-
-## Author
-
-**Terje Nesthus** - [ekstremedia.no](https://ekstremedia.no)
+Copyright © 2024-2026 Terje Nesthus · [ekstremedia.no](https://ekstremedia.no)

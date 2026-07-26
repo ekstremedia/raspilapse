@@ -115,7 +115,7 @@ For detailed documentation on all configuration options, see:
 - **docs/USAGE.md** - Basic configuration guide
 - **docs/OVERLAY.md** - Overlay system configuration
 - **docs/WEATHER.md** - Weather integration setup
-- **docs/ADAPTIVE_TIMELAPSE_FLOW.md** - Adaptive timelapse settings
+- **docs/EXPOSURE.md** - Exposure control settings
 
 ## Troubleshooting
 

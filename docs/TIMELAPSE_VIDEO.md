@@ -616,6 +616,6 @@ The upload sends:
 
 ## See Also
 
-- [CLAUDE.md](CLAUDE.md) - Main project documentation
-- [ADAPTIVE_TIMELAPSE_FLOW.md](ADAPTIVE_TIMELAPSE_FLOW.md) - Adaptive timelapse flow
+- [../README.md](../README.md) - Project overview
+- [EXPOSURE.md](EXPOSURE.md) - Exposure control and transitions
 - [config/config.yml](config/config.yml) - Full configuration reference

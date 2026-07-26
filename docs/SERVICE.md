@@ -6,7 +6,7 @@ This guide explains how to run Raspilapse continuously as a background service.
 
 ```bash
 # Install and start the service
-./install_service.sh
+./scripts/install.sh
 sudo systemctl start raspilapse
 sudo systemctl status raspilapse
 sudo journalctl -u raspilapse -f
@@ -44,7 +44,7 @@ systemctl list-timers | grep raspilapse
 
 ```bash
 cd /home/pi/raspilapse
-./install_service.sh
+./scripts/install.sh
 ```
 
 This will:
@@ -301,7 +301,7 @@ sudo systemctl restart nginx
 ## Uninstallation
 
 ```bash
-./uninstall_service.sh
+./scripts/install.sh --uninstall
 
 # Or manually:
 sudo systemctl stop raspilapse
@@ -324,7 +324,7 @@ sudo systemctl daemon-reload
 
 ### Scripts
 - `/home/pi/raspilapse/src/auto_timelapse.py`
-- `/home/pi/raspilapse/src/make_timelapse_daily.py`
+- `src/daily_timelapse.py`
 - `/home/pi/raspilapse/scripts/cleanup_old_images.sh`
 
 ## Quick Reference

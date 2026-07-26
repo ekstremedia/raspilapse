@@ -153,7 +153,7 @@ The `raspilapse-daily-video.timer` creates videos automatically at 05:00 each da
 ./scripts/install_daily_video.sh
 ```
 
-See [DAILY_VIDEO.md](DAILY_VIDEO.md) for configuration.
+See [TIMELAPSE_VIDEO.md](TIMELAPSE_VIDEO.md) for configuration.
 
 ## Common Operations
 
@@ -277,4 +277,4 @@ adaptive_timelapse:
 - [SERVICE.md](SERVICE.md) - Systemd service management
 - [OVERLAY.md](OVERLAY.md) - Image overlay configuration
 - [TIMELAPSE_VIDEO.md](TIMELAPSE_VIDEO.md) - Video generation
-- [MAINTENANCE.md](MAINTENANCE.md) - Long-term operation
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - When something is wrong
