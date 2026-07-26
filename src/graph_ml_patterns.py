@@ -23,28 +23,9 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-def get_db_path() -> str:
-    """Get database path from config or default."""
-    project_root = Path(__file__).parent.parent
-    default_path = project_root / "data" / "timelapse.db"
-
-    # Try to load from config
-    config_path = project_root / "config" / "config.yml"
-    if config_path.exists():
-        try:
-            import yaml
-
-            with open(config_path) as f:
-                config = yaml.safe_load(f)
-            db_path = config.get("database", {}).get("path", str(default_path))
-            if not os.path.isabs(db_path):
-                db_path = project_root / db_path
-            return str(db_path)
-        except (OSError, yaml.YAMLError):
-            pass  # Fall back to default path
-
-    return str(default_path)
+from src.config_utils import get_db_path  # noqa: E402,F401
 
 
 def fetch_daily_lux_data(db_path: str, days: int = 14) -> dict:
@@ -312,20 +293,6 @@ def create_solar_pattern_graph(db_path: str, output_path: str, days: int = 14):
 
     print(f"    Saved: {output_path}")
     return True
-
-
-# Keep these for backwards compatibility with db_graphs.py imports
-def load_ml_state(state_file: str) -> dict:
-    """Load ML state from file (legacy compatibility)."""
-    import json
-
-    if not os.path.exists(state_file):
-        return {}
-    try:
-        with open(state_file, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
 
 
 def main():

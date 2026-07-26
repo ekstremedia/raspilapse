@@ -208,40 +208,6 @@ def create_keogram(
         return False
 
 
-def create_keogram_from_images(
-    images: List[Path],
-    output_path: Path,
-    quality: int = 95,
-    crop_top_percent: float = 7.0,
-    crop_bottom_percent: float = 0.0,
-    logger: Optional[logging.Logger] = None,
-) -> bool:
-    """
-    Convenience function to create keogram from a list of image paths.
-
-    This is the main entry point for integration with make_timelapse.py.
-
-    Args:
-        images: List of image paths (sorted chronologically)
-        output_path: Output path for the keogram
-        quality: JPEG quality (1-100)
-        crop_top_percent: Percentage to crop from top (default 7% for overlay bar)
-        crop_bottom_percent: Percentage to crop from bottom
-        logger: Optional logger
-
-    Returns:
-        True if successful
-    """
-    return create_keogram(
-        images,
-        output_path,
-        quality=quality,
-        crop_top_percent=crop_top_percent,
-        crop_bottom_percent=crop_bottom_percent,
-        logger=logger,
-    )
-
-
 def create_slitscan(
     image_paths: List[Path],
     output_path: Path,
@@ -416,40 +382,6 @@ def create_slitscan(
         if logger:
             logger.error(msg)
         return False
-
-
-def create_slitscan_from_images(
-    images: List[Path],
-    output_path: Path,
-    quality: int = 95,
-    crop_top_percent: float = 7.0,
-    crop_bottom_percent: float = 0.0,
-    logger: Optional[logging.Logger] = None,
-) -> bool:
-    """
-    Convenience function to create slitscan from a list of image paths.
-
-    This is the main entry point for integration with make_timelapse.py.
-
-    Args:
-        images: List of image paths (sorted chronologically)
-        output_path: Output path for the slitscan
-        quality: JPEG quality (1-100)
-        crop_top_percent: Percentage to crop from top (default 7% for overlay bar)
-        crop_bottom_percent: Percentage to crop from bottom
-        logger: Optional logger
-
-    Returns:
-        True if successful
-    """
-    return create_slitscan(
-        images,
-        output_path,
-        quality=quality,
-        crop_top_percent=crop_top_percent,
-        crop_bottom_percent=crop_bottom_percent,
-        logger=logger,
-    )
 
 
 def main():

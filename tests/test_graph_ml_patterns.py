@@ -255,31 +255,6 @@ class TestCreateSolarPatternGraph:
             assert os.path.exists(output_path)
 
 
-class TestLoadMlState:
-    """Tests for legacy load_ml_state function (backwards compatibility)."""
-
-    def test_load_valid_state(self):
-        """Test loading valid JSON file."""
-        import json
-        from src.graph_ml_patterns import load_ml_state
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            state = {"test_key": "test_value"}
-            json.dump(state, f)
-            f.flush()
-
-            result = load_ml_state(f.name)
-            assert result["test_key"] == "test_value"
-            os.unlink(f.name)
-
-    def test_load_nonexistent_returns_empty(self):
-        """Test loading nonexistent file returns empty dict."""
-        from src.graph_ml_patterns import load_ml_state
-
-        result = load_ml_state("/nonexistent/file.json")
-        assert result == {}
-
-
 class TestMainFunction:
     """Tests for main CLI function."""
 

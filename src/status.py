@@ -32,6 +32,8 @@ class StatusDisplay:
         self.config_path = config_path
         self.config = self._load_config()
 
+    # Kept as a method rather than delegating to config_utils.load_config so the
+    # coloured, user-facing error handling below stays where the user sees it.
     def _load_config(self) -> Dict:
         """Load configuration from YAML file."""
         config_file = Path(self.config_path)

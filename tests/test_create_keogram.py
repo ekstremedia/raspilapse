@@ -5,9 +5,9 @@ Tests the keogram and slitscan generation functionality including:
 - Colors class for ANSI terminal output
 - find_images function for finding images in directory
 - create_keogram function for creating keogram from images
-- create_keogram_from_images convenience wrapper
+- create_keogram (integration entry point)
 - create_slitscan function for creating slitscan from images
-- create_slitscan_from_images convenience wrapper
+- create_slitscan (integration entry point)
 - main CLI function
 """
 
@@ -32,9 +32,7 @@ from create_keogram import (
     print_info,
     find_images,
     create_keogram,
-    create_keogram_from_images,
     create_slitscan,
-    create_slitscan_from_images,
     main,
 )
 
@@ -344,12 +342,12 @@ class TestCreateKeogram:
 
 
 class TestCreateKeogramFromImages:
-    """Tests for create_keogram_from_images convenience function."""
+    """Tests for create_keogram as make_timelapse calls it."""
 
     def test_wrapper_function(self, sample_images, temp_dir):
         """Test the convenience wrapper function."""
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram_from_images(sample_images, output_path)
+        result = create_keogram(sample_images, output_path)
 
         assert result is True
         assert output_path.exists()
@@ -359,7 +357,7 @@ class TestCreateKeogramFromImages:
         output_path = temp_dir / "keogram.jpg"
         logger = logging.getLogger("test")
 
-        result = create_keogram_from_images(
+        result = create_keogram(
             sample_images,
             output_path,
             quality=90,
@@ -516,12 +514,12 @@ class TestCreateSlitscan:
 
 
 class TestCreateSlitscanFromImages:
-    """Tests for create_slitscan_from_images convenience function."""
+    """Tests for create_slitscan as make_timelapse calls it."""
 
     def test_wrapper_function(self, sample_images, temp_dir):
         """Test the convenience wrapper function."""
         output_path = temp_dir / "slitscan.jpg"
-        result = create_slitscan_from_images(sample_images, output_path)
+        result = create_slitscan(sample_images, output_path)
 
         assert result is True
         assert output_path.exists()
@@ -531,7 +529,7 @@ class TestCreateSlitscanFromImages:
         output_path = temp_dir / "slitscan.jpg"
         logger = logging.getLogger("test")
 
-        result = create_slitscan_from_images(
+        result = create_slitscan(
             sample_images,
             output_path,
             quality=90,

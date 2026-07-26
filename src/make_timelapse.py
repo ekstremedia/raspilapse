@@ -23,74 +23,20 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
+    from src.colors import Colors, print_info, print_section, print_subsection
+    from src.config_utils import load_config as _load_config
     from src.logging_config import configure_logging, get_logger
-    from src.create_keogram import create_keogram_from_images, create_slitscan_from_images
+    from src.create_keogram import create_keogram, create_slitscan
 except ModuleNotFoundError:
+    from colors import Colors, print_info, print_section, print_subsection
+    from config_utils import load_config as _load_config
     from logging_config import configure_logging, get_logger
-    from create_keogram import create_keogram_from_images, create_slitscan_from_images
-
-
-# ANSI color codes for pretty output
-class Colors:
-    """ANSI color codes for terminal output."""
-
-    HEADER = "\033[95m"
-    BLUE = "\033[94m"
-    CYAN = "\033[96m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    BOLD = "\033[1m"
-    UNDERLINE = "\033[4m"
-    END = "\033[0m"
-
-    @staticmethod
-    def header(text: str) -> str:
-        return f"{Colors.BOLD}{Colors.CYAN}{text}{Colors.END}"
-
-    @staticmethod
-    def success(text: str) -> str:
-        return f"{Colors.GREEN}{text}{Colors.END}"
-
-    @staticmethod
-    def error(text: str) -> str:
-        return f"{Colors.RED}{text}{Colors.END}"
-
-    @staticmethod
-    def warning(text: str) -> str:
-        return f"{Colors.YELLOW}{text}{Colors.END}"
-
-    @staticmethod
-    def info(text: str) -> str:
-        return f"{Colors.BLUE}{text}{Colors.END}"
-
-    @staticmethod
-    def bold(text: str) -> str:
-        return f"{Colors.BOLD}{text}{Colors.END}"
-
-
-def print_section(title: str):
-    """Print a section header."""
-    print(f"\n{Colors.header('═' * 70)}")
-    print(f"{Colors.header(f'  {title}')}")
-    print(f"{Colors.header('═' * 70)}")
-
-
-def print_subsection(title: str):
-    """Print a subsection header."""
-    print(f"\n{Colors.bold(title)}")
-    print(Colors.CYAN + "─" * 70 + Colors.END)
-
-
-def print_info(label: str, value: str):
-    """Print an info line with label and value."""
-    print(f"  {Colors.BOLD}{label}:{Colors.END} {value}")
+    from create_keogram import create_keogram, create_slitscan
 
 
 def load_config(config_path: str = "config/config.yml") -> dict:
     """Load configuration from YAML file."""
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+    return _load_config(config_path)
 
 
 def parse_time(time_str: str) -> Tuple[int, int]:
@@ -725,7 +671,7 @@ Examples:
                 keogram_filename = f"keogram_{output_file.stem}.jpg"
             keogram_file = video_path / keogram_filename
 
-        keogram_success = create_keogram_from_images(
+        keogram_success = create_keogram(
             images,
             keogram_file,
             quality=95,
@@ -750,7 +696,7 @@ Examples:
             slitscan_filename = f"slitscan_{output_file.stem}.jpg"
         slitscan_file = video_path / slitscan_filename
 
-        slitscan_success = create_slitscan_from_images(
+        slitscan_success = create_slitscan(
             images,
             slitscan_file,
             quality=95,

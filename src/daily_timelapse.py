@@ -16,8 +16,6 @@ import yaml
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
-import requests
-import logging
 
 # Add project root to path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,168 +23,75 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
+    from src.config_utils import load_config
     from src.logging_config import configure_logging, get_logger
     from src.upload_service import UploadService
 except ModuleNotFoundError:
+    from config_utils import load_config
     from logging_config import configure_logging, get_logger
     from upload_service import UploadService
 
 
-def load_config(config_path: str) -> dict:
-    """Load configuration from YAML file."""
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+def _find_dated_file(video_dir: Path, patterns: list, date_str: str) -> Path:
+    """
+    Return the newest file matching the first pattern that hits.
+
+    Patterns are ordered most to least specific, and each is tried both nested
+    and flat. Newest by mtime rather than alphabetically, so a regenerated file
+    wins over the original.
+
+    Args:
+        video_dir: Directory to search
+        patterns: Glob patterns, most specific first
+        date_str: YYYY-MM-DD, also used to confirm the match really is that day
+
+    Returns:
+        The matching path, or None
+    """
+    for pattern in patterns:
+        matches = [m for m in video_dir.glob(pattern) if date_str in m.name]
+        if matches:
+            return max(matches, key=lambda p: p.stat().st_mtime)
+    return None
+
+
+def _dated_patterns(prefix: str, project_name: str, date_str: str, suffix: str) -> list:
+    """Build the nested-then-flat glob list for a prefixed, date-stamped file."""
+    stem = f"{prefix}_{project_name}_{date_str}" if prefix else f"{project_name}_{date_str}"
+    loose = f"{prefix}*{date_str}" if prefix else f"{project_name}_{date_str}"
+    return [
+        f"**/{stem}_*{suffix}",
+        f"**/{stem}*{suffix}",
+        f"**/{loose}*{suffix}",
+        f"{stem}_*{suffix}",
+        f"{stem}*{suffix}",
+        f"{loose}*{suffix}",
+    ]
 
 
 def find_video_file(video_dir: Path, project_name: str, date: datetime.date) -> Path:
     """Find the generated video file for a given date."""
-    # Look for video with yesterday's date in the filename
-    # Format: project_YYYY-MM-DD_0500-0500.mp4 or project_YYYY-MM-DD_0500_to_YYYY-MM-DD_0500.mp4
+    # e.g. project_2026-07-25_0500-0500.mp4
     date_str = date.strftime("%Y-%m-%d")
-
-    patterns = [
-        f"**/{project_name}_{date_str}_*.mp4",
-        f"**/{project_name}_{date_str}*.mp4",
-        f"{project_name}_{date_str}_*.mp4",
-        f"{project_name}_{date_str}*.mp4",
-    ]
-
-    for pattern in patterns:
-        matches = list(video_dir.glob(pattern))
-        if matches:
-            # Return most recently modified file (not alphabetically sorted)
-            return max(matches, key=lambda p: p.stat().st_mtime)
-
-    return None
+    return _find_dated_file(
+        video_dir, _dated_patterns("", project_name, date_str, ".mp4"), date_str
+    )
 
 
 def find_keogram_file(video_dir: Path, project_name: str, date: datetime.date) -> Path:
     """Find the generated keogram file for a given date."""
     date_str = date.strftime("%Y-%m-%d")
-
-    patterns = [
-        f"**/keogram_{project_name}_{date_str}*.jpg",
-        f"**/keogram*{date_str}*.jpg",
-        f"keogram_{project_name}_{date_str}*.jpg",
-        f"keogram*{date_str}*.jpg",
-    ]
-
-    for pattern in patterns:
-        matches = list(video_dir.glob(pattern))
-        if matches:
-            # Filter to only include files with the target date
-            date_matches = [m for m in matches if date_str in m.name]
-            if date_matches:
-                # Return most recently modified file (not alphabetically sorted)
-                return max(date_matches, key=lambda p: p.stat().st_mtime)
-
-    return None
+    return _find_dated_file(
+        video_dir, _dated_patterns("keogram", project_name, date_str, ".jpg"), date_str
+    )
 
 
 def find_slitscan_file(video_dir: Path, project_name: str, date: datetime.date) -> Path:
     """Find the generated slitscan file for a given date."""
     date_str = date.strftime("%Y-%m-%d")
-
-    patterns = [
-        f"**/slitscan_{project_name}_{date_str}*.jpg",
-        f"**/slitscan*{date_str}*.jpg",
-        f"slitscan_{project_name}_{date_str}*.jpg",
-        f"slitscan*{date_str}*.jpg",
-    ]
-
-    for pattern in patterns:
-        matches = list(video_dir.glob(pattern))
-        if matches:
-            # Filter to only include files with the target date
-            date_matches = [m for m in matches if date_str in m.name]
-            if date_matches:
-                # Return most recently modified file (not alphabetically sorted)
-                return max(date_matches, key=lambda p: p.stat().st_mtime)
-
-    return None
-
-
-def upload_to_server(
-    video_path: Path,
-    keogram_path: Path,
-    slitscan_path: Path,
-    date: str,
-    upload_config: dict,
-    camera_id: str,
-    logger: logging.Logger,
-) -> bool:
-    """Upload timelapse video and images to the webserver."""
-
-    url = upload_config["url"]
-    api_key = upload_config["api_key"]
-
-    logger.info(f"Uploading to: {url}")
-    logger.info(f"Video: {video_path}")
-    logger.info(f"Date: {date}")
-
-    files = {}
-    file_handles = []  # Keep track of open files to close later
-
-    try:
-        # Open all files
-        if video_path and video_path.exists():
-            f = open(video_path, "rb")
-            file_handles.append(f)
-            files["video"] = f
-        else:
-            logger.error(f"Video file not found: {video_path}")
-            return False
-
-        if keogram_path and keogram_path.exists():
-            f = open(keogram_path, "rb")
-            file_handles.append(f)
-            files["keogram"] = f
-            logger.info(f"Keogram: {keogram_path}")
-
-        if slitscan_path and slitscan_path.exists():
-            f = open(slitscan_path, "rb")
-            file_handles.append(f)
-            files["slitscan"] = f
-            logger.info(f"Slitscan: {slitscan_path}")
-
-        # Prepare request data
-        data = {
-            "title": video_path.name,
-            "date": date,
-            "camera_id": camera_id,
-        }
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-        }
-
-        logger.info(f"Uploading files: {list(files.keys())}")
-
-        # Send POST request
-        response = requests.post(url, files=files, data=data, headers=headers, timeout=300)
-
-        if response.status_code == 200:
-            logger.info("Upload successful!")
-            logger.info(f"Response: {response.text}")
-            return True
-        else:
-            logger.error(f"Upload failed with status {response.status_code}")
-            logger.error(f"Response: {response.text}")
-            return False
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Upload request failed: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"Upload error: {e}")
-        return False
-    finally:
-        # Close all file handles
-        for f in file_handles:
-            try:
-                f.close()
-            except Exception:
-                pass
+    return _find_dated_file(
+        video_dir, _dated_patterns("slitscan", project_name, date_str, ".jpg"), date_str
+    )
 
 
 def main():

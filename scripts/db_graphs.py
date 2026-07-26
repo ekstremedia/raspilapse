@@ -147,65 +147,19 @@ def plot_gradient_line(ax, x_data, y_data, linewidth=2.5):
     ax.autoscale()
 
 
+from src.config_utils import get_db_path  # noqa: E402
+from src.config_utils import parse_time_arg_or_exit  # noqa: E402
+from src.config_utils import format_duration as _format_duration  # noqa: E402
+
+
 def parse_time_arg(time_str: str) -> timedelta:
-    """Parse time string like '5m', '1h', '24h', '7d' into timedelta."""
-    if not time_str:
-        return timedelta(hours=24)  # Default
-
-    time_str = time_str.lower().strip()
-
-    # Handle with or without leading dash
-    if time_str.startswith("-"):
-        time_str = time_str[1:]
-
-    try:
-        if time_str.endswith("m"):
-            return timedelta(minutes=int(time_str[:-1]))
-        elif time_str.endswith("h"):
-            return timedelta(hours=int(time_str[:-1]))
-        elif time_str.endswith("d"):
-            return timedelta(days=int(time_str[:-1]))
-        else:
-            # Assume hours if no unit
-            return timedelta(hours=int(time_str))
-    except ValueError:
-        print(f"Invalid time format: {time_str}")
-        print("Use format like: 5m, 1h, 24h, 7d")
-        sys.exit(1)
+    """Parse a duration like '5m', '1h', '24h', '7d'. Defaults to 24 hours."""
+    return parse_time_arg_or_exit(time_str, default=timedelta(hours=24))
 
 
 def format_duration(seconds: float) -> str:
-    """Format seconds into human readable duration."""
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    elif seconds < 3600:
-        return f"{seconds/60:.0f}m"
-    elif seconds < 86400:
-        return f"{seconds/3600:.0f}h"
-    else:
-        return f"{seconds/86400:.0f}d"
-
-
-def get_db_path() -> str:
-    """Get database path from config or default."""
-    default_path = project_root / "data" / "timelapse.db"
-
-    # Try to load from config
-    config_path = project_root / "config" / "config.yml"
-    if config_path.exists():
-        try:
-            import yaml
-
-            with open(config_path) as f:
-                config = yaml.safe_load(f)
-            db_path = config.get("database", {}).get("path", str(default_path))
-            if not os.path.isabs(db_path):
-                db_path = project_root / db_path
-            return str(db_path)
-        except Exception:
-            pass
-
-    return str(default_path)
+    """Format seconds without decimals, as this tool's labels expect."""
+    return _format_duration(seconds, precision=0)
 
 
 def fetch_data(
