@@ -281,6 +281,76 @@ def build():
         ],
     }
 
+    # --- clipped-pixel thresholds ----------------------------------------
+    # The metering acts on the clipped fraction as well as the mean, at 5% and
+    # 3%. Reaching those needs a frame whose highlights are gone while its mean
+    # is unremarkable -- a night scene with a streetlamp in it, which this
+    # camera sees every winter.
+    #
+    # The closed-loop simulation derives the clipped fraction from the spread
+    # of the frame, so sweeping the spread at fixed light is what walks it
+    # through the thresholds. Holding the spread fixed, as the earlier attempt
+    # did, left the fraction pinned near zero and the release threshold could
+    # be changed with nothing noticing.
+    def spread_frame(spread, mean=100.0):
+        return {
+            "raw_lux": 5.0,
+            "sun_elevation": None,
+            "brightness": {
+                "mean_brightness": float(mean),
+                "median_brightness": float(mean),
+                "std_brightness": float(spread),
+                "percentile_5": 20.0,
+                "percentile_25": 60.0,
+                "percentile_75": 140.0,
+                "percentile_95": 200.0,
+                "underexposed_percent": 0.0,
+                "overexposed_percent": 0.0,
+            },
+            # 100 brightness out of a 20-second exposure at gain 1: a scene
+            # near the dark end of the ladder. That is deliberate. The
+            # clipped-pixel flags do one thing -- pick the rate -- and the rate
+            # is position-scaled, so anywhere but the dark end the ordinary
+            # rate already exceeds the recovery rate and the flags cannot
+            # change the output. A brighter version of this sequence reached
+            # 3.5% clipping and still caught nothing.
+            "capture_metadata": {
+                "ExposureTime": 20_000_000,
+                "AnalogueGain": 1.0,
+                "ColourGains": DAY_GAINS,
+                "Lux": 5.0,
+            },
+            "test_metadata": {
+                "ExposureTime": 200000,
+                "AnalogueGain": 1,
+                "ColourGains": DAY_GAINS,
+                "Lux": 5.0,
+            },
+        }
+
+    # The light also has to keep moving. Held steady, the loop converges, the
+    # measurement sits on the target, and the rate limit has no gap left to
+    # close -- so which rate it picked stops mattering and the thresholds go
+    # unobserved again. Alternating the scene between two levels keeps it
+    # chasing, which is the state in which a rate is a rate.
+    spreads = list(range(40, 125, 2))
+    sequences["synthetic_clipping_sweep"] = {
+        "description": (
+            "a dark scene with a bright light source in it, alternating "
+            "between two levels while its highlights spread wider and wider -- "
+            "walking the clipped-pixel fraction through the 3% and 5% "
+            "thresholds at a point on the ladder, and in a state of the loop, "
+            "where the resulting rate change is visible"
+        ),
+        "config": REPLAY_CONFIG,
+        "seed": {"exposure_time": 20.0, "analogue_gain": 1.0, "brightness": 100.0},
+        "frames": [
+            spread_frame(spread, mean)
+            for spread in spreads + spreads[::-1]
+            for mean in (100.0, 55.0)
+        ],
+    }
+
     # --- hybrid brightness overrides -------------------------------------
     # Day-level lux with a dark frame forces TRANSITION, and night-level lux
     # with a bright frame does the same from the other side.

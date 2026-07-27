@@ -1,14 +1,18 @@
 """Record golden outputs for every replay sequence.
 
-Run this ONCE against known-good code, commit the result, and never run it
-again to "fix" a failing test -- re-recording turns a regression into a new
-baseline, which is the one way this whole apparatus can fail silently.
+Run this against known-good code, commit the result, and never run it to "fix"
+a failing test -- re-recording turns a regression into a new baseline, which is
+the one way this whole apparatus can fail silently.
 
     python3 tests/replay/record_golden.py
 
-If a golden file genuinely must change (an intended behaviour change, e.g. the
-exposure ladder), re-record in its own commit, with nothing else in the diff,
-so the exposure change is reviewable as an exposure change.
+The bar for re-recording: the commit's whole purpose is the behaviour change,
+the commit message says so, and something other than these tests says the new
+behaviour is better. `compare.py` is that something -- it runs both
+controllers against the same recorded light, closed-loop, and reports which
+exposes it more accurately and with less flicker.
+
+Re-recorded once so far, for the exposure ladder.
 """
 
 import sys

@@ -59,7 +59,7 @@ class Decision:
     mode: str
     lux: Optional[float]
     raw_lux: Optional[float]
-    transition_position: Optional[float]
+    ladder_position: Optional[float]
     settings: Dict[str, Any]
 
 
@@ -88,7 +88,6 @@ class AdaptiveTimelapse:
         # Polar awareness - sun position for high latitude locations (68°N)
         self._location = None
         self._sun_elevation: float = None  # Current sun elevation in degrees
-        self._civil_twilight_threshold = -6.0  # Default: Civil twilight
         self._init_location()
 
         # Database storage for capture history
@@ -141,7 +140,6 @@ class AdaptiveTimelapse:
             lat = location_config.get("latitude", 68.7)
             lon = location_config.get("longitude", 15.4)
             tz = location_config.get("timezone", "Europe/Oslo")
-            self._civil_twilight_threshold = location_config.get("civil_twilight_threshold", -6.0)
 
             self._location = LocationInfo(
                 name="Timelapse Location",
@@ -150,10 +148,7 @@ class AdaptiveTimelapse:
                 latitude=lat,
                 longitude=lon,
             )
-            logger.info(
-                f"[Polar] Location initialized: {lat}°N, {lon}°E "
-                f"(Civil twilight threshold: {self._civil_twilight_threshold}°)"
-            )
+            logger.info(f"[Sun] Location: {lat}°N, {lon}°E - elevation will be recorded")
         except Exception as e:
             logger.warning(f"Could not initialize location: {e}")
             self._location = None
@@ -266,31 +261,15 @@ class AdaptiveTimelapse:
             logger.debug(f"Could not calculate sun elevation: {e}")
             return None
 
-    def _is_polar_day(self, lux: float = None) -> bool:
-        """
-        Check if we're in Polar Day conditions (Civil Twilight override).
-
-        In polar regions, even when lux is low, we should stay in Day mode
-        if the sun is above the civil twilight threshold (-6°) to capture
-        beautiful twilight colors with AWB instead of locked night settings.
-
-        Args:
-            lux: Current measured lux (for logging)
-
-        Returns:
-            True if sun elevation indicates Polar Day (civil twilight or brighter)
-        """
-        sun_elev = self._get_sun_elevation()
-        if sun_elev is None:
-            return False
-
-        is_polar_day = sun_elev > self._civil_twilight_threshold
-        if is_polar_day:
-            logger.debug(
-                f"[Polar] Civil twilight override: Sun={sun_elev:.1f}° > {self._civil_twilight_threshold}° "
-                f"(forcing Day mode despite lux={f'{lux:.1f}' if lux is not None else 'N/A'})"
-            )
-        return is_polar_day
+    # _is_polar_day used to live here. It forced Day mode whenever the sun was
+    # above civil twilight, overriding the lux-based mode decision entirely.
+    #
+    # Its stated purpose -- "capture twilight colours with AWB instead of
+    # locked night settings" -- had not been true for a long time: Day mode
+    # sets AwbEnable to 0 like every other mode. What it actually did was pin
+    # gain at its floor and skip the night exposure floor, and it existed
+    # because absolute lux thresholds do not survive being moved to another
+    # latitude. The ladder has no thresholds to override.
 
     def _load_config(self) -> Dict:
         """Load configuration from YAML file."""
@@ -511,7 +490,6 @@ class AdaptiveTimelapse:
         mode: str,
         lux: float = None,
         raw_lux: float = None,
-        transition_position: float = None,
     ) -> bool:
         """
         Enrich saved metadata with diagnostic information.
@@ -525,7 +503,6 @@ class AdaptiveTimelapse:
             mode: Current light mode
             lux: Smoothed lux value
             raw_lux: Raw lux value before smoothing
-            transition_position: Position in transition (0-1), None if not transition
 
         Returns:
             True if successful, False otherwise
@@ -542,9 +519,6 @@ class AdaptiveTimelapse:
                 "mode": mode,
                 "smoothed_lux": round(lux, 4) if lux is not None else None,
                 "raw_lux": round(raw_lux, 4) if raw_lux is not None else None,
-                "transition_position": (
-                    round(transition_position, 4) if transition_position is not None else None
-                ),
                 "sun_elevation": (
                     round(self._sun_elevation, 2) if self._sun_elevation is not None else None
                 ),
@@ -552,6 +526,9 @@ class AdaptiveTimelapse:
 
             # Everything the controller decided, recorded when it decided it.
             # This used to re-run the whole exposure calculation from scratch.
+            # ladder_position comes from here rather than being passed in: the
+            # loop got it from the controller to begin with, and two sources
+            # for one key meant they could disagree.
             diagnostics.update(self.exposure.diagnostics())
 
             # Analyze image brightness
@@ -670,9 +647,10 @@ class AdaptiveTimelapse:
     def _meter(self) -> Decision:
         """Measure the light and decide what the camera should do.
 
-        Takes the fixed-settings test shot, turns it into a lux figure, picks a
-        mode and asks the controller for settings. Everything here is decision;
-        nothing touches the frame that gets kept.
+        The metering shot's job is now narrower than it was. It no longer picks
+        a mode -- the controller does that from measured brightness alone -- so
+        what it contributes is a lux figure for the record and, at the day/night
+        boundary, the only AWB reading in the system.
         """
         test_image_path, test_metadata = self.take_test_shot()
         raw_lux = self.calculate_lux(test_image_path, test_metadata)
@@ -686,27 +664,23 @@ class AdaptiveTimelapse:
 
         lux = self.exposure.smooth_lux(raw_lux)
 
-        # Keep this on its own line. It is what populates self._sun_elevation,
-        # and Python evaluates arguments left to right: inlined into the call
-        # below, the attribute was read before the call that fills it, and the
-        # first frame after every restart passed None.
-        is_polar_day = self._is_polar_day(lux)
-        raw_mode = self.exposure.determine_mode(lux, self._sun_elevation, is_polar_day)
-        mode = self.exposure.apply_hysteresis(raw_mode)
+        # Recorded, not consulted. Sun elevation is an interesting thing to
+        # have alongside a frame at 68°N, and it is what graph_solar_patterns.py
+        # plots against, but nothing decides anything from it any more.
+        self._get_sun_elevation()
 
-        position = self.exposure.transition_position(lux) if mode == LightMode.TRANSITION else None
+        settings = self.exposure.decide()
+        mode = self.exposure.last_mode
 
         self._seed_across_mode_change(mode, test_metadata)
-        if mode == LightMode.TRANSITION and position is not None:
-            self.exposure.log_transition_progress(lux, position)
         self._previous_mode = mode
 
         return Decision(
             mode=mode,
             lux=lux,
             raw_lux=raw_lux,
-            transition_position=position,
-            settings=self.exposure.get_camera_settings(mode, lux),
+            ladder_position=self.exposure.ladder_position,
+            settings=settings,
         )
 
     def _prefer_seeded_lux_if_saturated(self, test_image_path: str, raw_lux: float) -> float:
@@ -747,16 +721,20 @@ class AdaptiveTimelapse:
             self.exposure.reset_seed_state()
             logger.info("[Holy Grail] Returned to Day mode - seed state reset")
 
-    def _reuse_last_decision(self) -> Decision:
-        """What to shoot when no test shot was taken this frame."""
-        mode = self.exposure.last_mode or LightMode.DAY
-        lux = self.exposure.smoothed_lux
+    def _decide_without_metering(self) -> Decision:
+        """What to shoot when no metering shot was taken this frame.
+
+        The controller does not need one. It closes on the brightness of the
+        frame it just took, so it can decide with no fresh lux at all -- the
+        only thing missing is an updated figure for the record.
+        """
+        settings = self.exposure.decide()
         return Decision(
-            mode=mode,
-            lux=lux,
+            mode=self.exposure.last_mode,
+            lux=self.exposure.smoothed_lux,
             raw_lux=None,
-            transition_position=None,
-            settings=self.exposure.get_camera_settings(mode, lux),
+            ladder_position=self.exposure.ladder_position,
+            settings=settings,
         )
 
     def _observe(self, capture: ImageCapture, image_path: str) -> Optional[Dict]:
@@ -814,7 +792,6 @@ class AdaptiveTimelapse:
                 mode=decision.mode,
                 lux=decision.lux,
                 raw_lux=decision.raw_lux,
-                transition_position=decision.transition_position,
             )
 
         capture_metadata = self._read_capture_metadata(metadata_path)
@@ -898,9 +875,9 @@ class AdaptiveTimelapse:
                         # alone cannot say which of them failed, and the frame
                         # silently falls back to the last mode.
                         logger.error(f"Test shot failed: {e}", exc_info=True)
-                        decision = self._reuse_last_decision()
+                        decision = self._decide_without_metering()
                 else:
-                    decision = self._reuse_last_decision()
+                    decision = self._decide_without_metering()
                     lux_str = f"{decision.lux:.2f}" if decision.lux is not None else "N/A"
                     logger.debug(
                         f"Skipping test shot (frame {self.frame_count}), "

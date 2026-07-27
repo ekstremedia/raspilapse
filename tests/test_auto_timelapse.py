@@ -260,82 +260,6 @@ class TestAdaptiveTimelapse:
             os.unlink(test_image)
             os.rmdir(temp_dir)
 
-    def test_determine_light_mode(self, test_config_file):
-        """Test light mode determination."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Night
-        assert timelapse.exposure.determine_mode(5.0) == LightMode.NIGHT
-
-        # Day
-        assert timelapse.exposure.determine_mode(500.0) == LightMode.DAY
-
-        # Transition
-        assert timelapse.exposure.determine_mode(50.0) == LightMode.TRANSITION
-
-    def test_get_camera_settings_night(self, test_config_file):
-        """Test camera settings for night mode."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.exposure.get_camera_settings(LightMode.NIGHT, lux=5.0)
-
-        assert "ExposureTime" in settings
-        assert "AnalogueGain" in settings
-        assert "AeEnable" in settings
-        assert settings["AeEnable"] == 0  # Auto-exposure disabled
-        assert settings["AwbEnable"] == 0  # AWB disabled for night
-
-    def test_get_camera_settings_day(self, test_config_file):
-        """Test camera settings for day mode with smooth exposure transitions."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.exposure.get_camera_settings(LightMode.DAY, lux=500.0)
-
-        # Day mode now uses manual exposure with smooth transitions (prevents ISO jumps)
-        # smooth_exposure_in_day_mode defaults to True
-        assert "AeEnable" in settings
-        assert settings["AeEnable"] == 0  # Manual exposure control
-        assert "ExposureTime" in settings  # Calculated exposure
-        assert "AnalogueGain" in settings  # Calculated gain
-        # With smooth_wb_in_day_mode (default True), AWB is disabled
-        # and manual interpolated ColourGains are used instead
-        assert settings["AwbEnable"] == 0
-        assert "ColourGains" in settings
-
-    def test_get_camera_settings_transition(self, test_config_file):
-        """Test camera settings for transition mode."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.exposure.get_camera_settings(LightMode.TRANSITION, lux=50.0)
-
-        assert "ExposureTime" in settings
-        assert "AnalogueGain" in settings
-
-        # Transition should have intermediate values
-        night_gain = timelapse.config["adaptive_timelapse"]["night_mode"]["analogue_gain"]
-        assert settings["AnalogueGain"] <= night_gain
-
-    def test_get_camera_settings_transition_long_exposure(self, test_config_file):
-        """Test transition mode always uses manual WB for smooth transitions."""
-        # Add colour_gains to night_mode config
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["adaptive_timelapse"]["night_mode"]["colour_gains"] = [1.8, 1.5]
-
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Test long exposure (>1s) - should use manual WB
-        settings_long = timelapse.exposure.get_camera_settings(LightMode.TRANSITION, lux=15.0)
-        assert settings_long["AwbEnable"] == 0  # AWB disabled
-        assert "ColourGains" in settings_long  # Manual gains set
-
-        # Test short exposure (<1s) - should ALSO use manual WB
-        # (smooth transitions always use interpolated manual WB to prevent flickering)
-        settings_short = timelapse.exposure.get_camera_settings(LightMode.TRANSITION, lux=98.0)
-        assert settings_short["AwbEnable"] == 0  # AWB always disabled in transition
-        assert "ColourGains" in settings_short  # Interpolated gains used
-
     def test_signal_handler(self, test_config_file):
         """Test signal handler stops the timelapse."""
         timelapse = AdaptiveTimelapse(test_config_file)
@@ -398,77 +322,6 @@ class TestAdaptiveTimelapse:
             lux = timelapse.calculate_lux("/fake/path.jpg", metadata)
             assert isinstance(lux, float)
             assert lux > 0
-
-    def test_get_camera_settings_night_with_colour_gains(self, test_config_file):
-        """Test night mode applies manual colour gains."""
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["adaptive_timelapse"]["night_mode"]["colour_gains"] = [1.8, 1.5]
-
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.exposure.get_camera_settings(LightMode.NIGHT)
-
-        assert "ColourGains" in settings
-        assert settings["ColourGains"] == (1.8, 1.5)
-
-    def test_get_camera_settings_day_manual_exposure(self, test_config_file):
-        """Test day mode with manual exposure."""
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["adaptive_timelapse"]["day_mode"]["exposure_time"] = 0.01  # 10ms
-        config_data["adaptive_timelapse"]["day_mode"]["analogue_gain"] = 1.0
-
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.exposure.get_camera_settings(LightMode.DAY)
-
-        assert settings["AeEnable"] == 0  # Manual mode
-        assert "ExposureTime" in settings
-        assert "AnalogueGain" in settings
-
-    def test_get_camera_settings_day_with_brightness(self, test_config_file):
-        """Test day mode brightness adjustment."""
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["adaptive_timelapse"]["day_mode"]["brightness"] = 0.2
-
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.exposure.get_camera_settings(LightMode.DAY)
-
-        assert "Brightness" in settings
-        assert settings["Brightness"] == 0.2
-
-    def test_get_camera_settings_transition_no_smooth(self, test_config_file):
-        """Transition mode ignores the obsolete smooth_transition switch.
-
-        It used to select a fallback arm that hardcoded a 5-second exposure and
-        gain 2.5 regardless of the light -- reachable in broad daylight.
-        """
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["adaptive_timelapse"]["transition_mode"]["smooth_transition"] = False
-
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.exposure.get_camera_settings(LightMode.TRANSITION, lux=50.0)
-
-        assert "ExposureTime" in settings
-        assert settings["ExposureTime"] != int(5.0 * 1_000_000)
-        assert settings["AeEnable"] == 0
 
     def test_close_camera_fast(self, test_config_file):
         """Test fast camera close method."""
@@ -586,16 +439,17 @@ class TestPolarAwareness:
             "latitude": 68.7,
             "longitude": 15.4,
             "timezone": "Europe/Oslo",
-            "civil_twilight_threshold": -6.0,
         }
         with open(test_config_file, "w") as f:
             yaml.dump(config_data, f)
 
         timelapse = AdaptiveTimelapse(test_config_file)
 
-        # Location should be initialized (if astral is available)
-        # The test is valid regardless of astral availability
-        assert timelapse._civil_twilight_threshold == -6.0
+        # Location is recorded alongside each frame now, not used to decide
+        # anything. Without astral there is simply no elevation to record.
+        if timelapse._location is None:
+            pytest.skip("astral not available")
+        assert timelapse._get_sun_elevation() is not None
 
     def test_init_location_without_config(self, test_config_file):
         """Test location initialization without config."""
@@ -604,14 +458,6 @@ class TestPolarAwareness:
         # Without location config, location should be None
         assert timelapse._location is None
 
-    def test_is_polar_day_returns_false_without_location(self, test_config_file):
-        """Test polar day returns False when no location configured."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        result = timelapse._is_polar_day(lux=100.0)
-
-        assert result is False
-
     def test_get_sun_elevation_without_location(self, test_config_file):
         """Test sun elevation returns None without location."""
         timelapse = AdaptiveTimelapse(test_config_file)
@@ -619,34 +465,6 @@ class TestPolarAwareness:
         result = timelapse._get_sun_elevation()
 
         assert result is None
-
-    def test_polar_day_check_is_what_populates_sun_elevation(self, test_config_file):
-        """The order of these two matters, and nothing else enforces it.
-
-        `run()` passes `self._sun_elevation` and `self._is_polar_day(lux)` to
-        determine_mode. Python evaluates arguments left to right, so with the
-        call written inline the attribute was read *before* the call that fills
-        it -- and the first frame after every restart sent None into a `:.1f`,
-        losing mode selection, hysteresis and WB seeding to the except below.
-        """
-        with open(test_config_file) as f:
-            config_data = yaml.safe_load(f)
-        config_data["location"] = {
-            "latitude": 68.7,
-            "longitude": 15.4,
-            "timezone": "Europe/Oslo",
-            "civil_twilight_threshold": -6.0,
-        }
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        if timelapse._location is None:
-            pytest.skip("astral not available")
-
-        assert timelapse._sun_elevation is None, "unset until something asks for it"
-        timelapse._is_polar_day(lux=100.0)
-        assert timelapse._sun_elevation is not None, "_is_polar_day must populate it"
 
     def test_run_reads_sun_elevation_after_the_call_that_sets_it(self):
         """Static check: the inline form is invisible to every runtime test.
@@ -723,12 +541,23 @@ class TestDiagnosticEnrichment:
 
             shutil.rmtree(temp_dir)
 
-    def test_enrich_metadata_with_transition_position(self, test_config_file):
-        """Test transition position is added to diagnostics."""
+    def test_enrich_metadata_with_ladder_position(self, test_config_file):
+        """Where on the exposure ladder the frame sat is recorded with it.
+
+        Sourced from the controller rather than passed in by the loop. The two
+        were briefly both, and disagreed: the loop's argument was overwritten
+        by the controller's own value, silently.
+        """
         import json
 
         timelapse = AdaptiveTimelapse(test_config_file)
         timelapse._sun_elevation = 5.0
+
+        # Put the controller somewhere identifiable on the ladder.
+        timelapse.exposure.seed_from_capture(exposure_time=10.0, analogue_gain=3.0)
+        timelapse.exposure.decide()
+        expected = timelapse.exposure.ladder_position
+        assert 0.0 < expected < 1.0, "the seed should be mid-ladder"
 
         temp_dir = tempfile.mkdtemp()
         try:
@@ -746,7 +575,6 @@ class TestDiagnosticEnrichment:
                 image_path,
                 LightMode.TRANSITION,
                 lux=100.0,
-                transition_position=0.5,
             )
 
             assert result is True
@@ -755,7 +583,7 @@ class TestDiagnosticEnrichment:
                 enriched = json.load(f)
 
             assert "diagnostics" in enriched
-            assert enriched["diagnostics"]["transition_position"] == 0.5
+            assert enriched["diagnostics"]["ladder_position"] == pytest.approx(expected, abs=1e-4)
         finally:
             import shutil
 
@@ -958,7 +786,7 @@ class TestFeedbackWiring:
         )
 
         assert tl.exposure.last_brightness == 137.0
-        assert tl.exposure._last_p95 == 231.0
+        assert tl.exposure.meter.p95 == 231.0
 
     def test_capture_loop_never_assigns_controller_state_to_self(self, direct_control_config_file):
         """Static check on AdaptiveTimelapse's source.
@@ -989,13 +817,11 @@ class TestFeedbackWiring:
     def test_controller_reacts_to_the_reported_brightness(self, direct_control_config_file):
         """Too bright -> shorter exposure. The sign of the loop."""
         tl = AdaptiveTimelapse(direct_control_config_file)
-        tl.exposure._last_exposure_time = 0.02
 
+        tl.exposure.seed_from_capture(exposure_time=0.02, analogue_gain=1.0)
         tl.exposure.observe_frame({"mean_brightness": 200.0, "percentile_95": 210.0})
-        settings = tl.exposure.get_camera_settings(LightMode.DAY, lux=500)
-        assert settings["ExposureTime"] < 0.02 * 1_000_000
+        assert tl.exposure.decide()["ExposureTime"] < 0.02 * 1_000_000
 
-        tl.exposure._last_exposure_time = 0.02
+        tl.exposure.seed_from_capture(exposure_time=0.02, analogue_gain=1.0)
         tl.exposure.observe_frame({"mean_brightness": 60.0, "percentile_95": 90.0})
-        settings = tl.exposure.get_camera_settings(LightMode.DAY, lux=500)
-        assert settings["ExposureTime"] > 0.02 * 1_000_000
+        assert tl.exposure.decide()["ExposureTime"] > 0.02 * 1_000_000

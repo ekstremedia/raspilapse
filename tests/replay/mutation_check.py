@@ -13,8 +13,27 @@ sequences/ are the residue of this script, not the other way round. If you add
 a constant to the controller, add a mutation for it, watch it survive, then add
 the input that kills it.
 
-The source file is restored in a finally, but it is edited in place while the
-script runs: do not interrupt it with uncommitted changes to the controller.
+The source files are restored in a finally, but they are edited in place while
+the script runs: do not interrupt it with uncommitted changes to them.
+
+Two constants are deliberately absent, having been shown unreachable rather
+than merely unreached:
+
+    ladder.label's `gain > 1.0` clause never decides on its own, because
+    allocate() raises gain only once the shutter is at its ceiling, which
+    already satisfies the knee. It is covered directly in test_ladder.py.
+
+    the brightness floor in _required_exposure -- any value below
+    target/MAX_CORRECTION, 30 at the default target, gives the same clamped
+    ratio. It keeps the division defined and is not a tuning knob.
+
+One more is absent for a different reason. metering's clipped-pixel release
+threshold needs four conditions at once to show up in a rendered frame: a mean
+between the underexposure release and the overexposure release, a clipped
+fraction between 3% and 4%, a ladder position past 0.87 so that the recovery
+rate exceeds the ordinary one, and a loop that has not yet converged. That is a
+real corner rather than dead code, and it is pinned directly in
+test_metering.py instead.
 """
 
 import argparse
@@ -26,115 +45,190 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
-# Located at import time so the mutations keep working across the package move.
-CANDIDATE_TARGETS = [
-    REPO / "raspilapse" / "camera" / "exposure.py",
-    REPO / "raspilapse" / "camera" / "exposure" / "__init__.py",
-    REPO / "src" / "exposure.py",
-]
+LADDER = "raspilapse/camera/ladder.py"
+EXPOSURE = "raspilapse/camera/exposure.py"
+METERING = "raspilapse/camera/metering.py"
 
-# (description, needle, replacement). The needle must appear at least once.
+# (file, description, needle, replacement). The needle must appear at least once.
 MUTATIONS = [
+    # --- the ladder itself ------------------------------------------------
+    (LADDER, "night knee", "NIGHT_KNEE = 0.8", "NIGHT_KNEE = 0.81"),
+    (LADDER, "day knee", "DAY_KNEE = 0.01", "DAY_KNEE = 0.011"),
+    (LADDER, "shortest usable shutter", "MIN_SHUTTER_S = 0.0001", "MIN_SHUTTER_S = 0.00011"),
     (
-        "night exposure floor",
-        "exposure_floor = night_max * 0.6",
-        "exposure_floor = night_max * 0.61",
+        LADDER,
+        "shutter fills before gain",
+        "shutter = min(required, max_shutter)",
+        "shutter = min(required * 0.99, max_shutter)",
     ),
     (
-        "transition shutter knee",
-        "if target_exposure >= night_max * 0.8:",
-        "if target_exposure >= night_max * 0.81:",
-    ),
-    ("feedback ratio upper clamp", "min(4.0, ratio))", "min(3.99, ratio))"),
-    ("feedback ratio lower clamp", "ratio = max(0.25,", "ratio = max(0.26,"),
-    ("overexposure warning", "brightness_warning = 150", "brightness_warning = 149"),
-    ("overexposure critical", "brightness_critical = 170", "brightness_critical = 169"),
-    ("overexposure release", "brightness_safe = 130", "brightness_safe = 131"),
-    ("clipped-pixel warning", "overexposed_warning = 5", "overexposed_warning = 6"),
-    ("clipped-pixel release", "overexposed_safe = 3", "overexposed_safe = 4"),
-    ("underexposure warning", "brightness_warning = 90", "brightness_warning = 91"),
-    ("underexposure critical", "brightness_critical = 70", "brightness_critical = 71"),
-    ("underexposure release", "brightness_safe = 105", "brightness_safe = 106"),
-    (
-        "day gain floor",
-        "target_gain = self._interpolate_gain(1.0)",
-        "target_gain = self._interpolate_gain(1.01)",
+        LADDER,
+        "gain covers the remainder",
+        "gain = required / shutter if shutter > 0 else 1.0",
+        "gain = required / shutter * 0.99 if shutter > 0 else 1.0",
     ),
     (
-        "night gain floor (reduction path)",
-        "target_gain = max(2.0, current_gain * brightness_ratio**0.5)",
-        "target_gain = max(2.1, current_gain * brightness_ratio**0.5)",
+        LADDER,
+        "gain floor",
+        "gain = max(1.0, min(max_gain, gain))",
+        "gain = max(1.001, min(max_gain, gain))",
     ),
     (
-        "night gain floor (default path)",
-        "target_gain = max(2.0, min(night_gain, target_gain))",
-        "target_gain = max(2.1, min(night_gain, target_gain))",
+        LADDER,
+        "gain ceiling",
+        "gain = max(1.0, min(max_gain, gain))",
+        "gain = max(1.0, min(max_gain * 0.99, gain))",
     ),
     (
-        "night brightness-feedback gate",
-        "self._last_brightness is not None and self._last_brightness > 140:",
-        "self._last_brightness is not None and self._last_brightness > 141:",
+        LADDER,
+        "ladder position scale",
+        "return max(0.0, min(1.0, into / span))",
+        "return max(0.0, min(1.0, into / span * 0.99))",
     ),
-    ("entering-night gain speed", "base_gain_speed = 0.04", "base_gain_speed = 0.045"),
-    ("entering-night exposure speed", "base_exposure_speed = 0.03", "base_exposure_speed = 0.035"),
+    # --- the feedback loop -------------------------------------------------
     (
-        "entering-night proximity throttle",
-        "throttle = max(0.3, 1.0 - (proximity - 0.8) * 2)",
-        "throttle = max(0.35, 1.0 - (proximity - 0.8) * 2)",
+        EXPOSURE,
+        "cold start exposure",
+        "COLD_START_EXPOSURE_S = 0.02",
+        "COLD_START_EXPOSURE_S = 0.021",
+    ),
+    (EXPOSURE, "correction ceiling", "MAX_CORRECTION = 4.0", "MAX_CORRECTION = 3.99"),
+    (EXPOSURE, "correction floor", "MIN_CORRECTION = 0.25", "MIN_CORRECTION = 0.26"),
+    (
+        EXPOSURE,
+        "damping default",
+        'self._damping = adaptive.get("brightness_damping", 0.5)',
+        'self._damping = adaptive.get("brightness_damping", 0.5) * 0.99',
     ),
     (
+        EXPOSURE,
+        "feedback applies the ratio",
+        "required = self._required * (ratio**self._damping)",
+        "required = self._required * (ratio**self._damping) * 0.99",
+    ),
+    (
+        EXPOSURE,
+        "rate limit interpolation",
+        "moved = 10 ** (log_last + speed * (log_target - log_last))",
+        "moved = 10 ** (log_last + speed * 0.99 * (log_target - log_last))",
+    ),
+    # --- white balance -----------------------------------------------------
+    (
+        EXPOSURE,
+        "white-balance cross-fade direction",
+        "day[0] + into * (night[0] - day[0]),",
+        "day[0] + (1 - into) * (night[0] - day[0]),",
+    ),
+    (
+        EXPOSURE,
+        "white-balance slew",
+        "+ self._wb_speed * (target[0] - self._last_colour_gains[0]),",
+        "+ self._wb_speed * 0.99 * (target[0] - self._last_colour_gains[0]),",
+    ),
+    (
+        EXPOSURE,
+        "cross-fade spans the transition band",
+        "return max(0.0, min(1.0, (position - day_edge) / (night_edge - day_edge)))",
+        "return max(0.0, min(1.0, (position - day_edge) / (night_edge - day_edge) * 0.99))",
+    ),
+    # --- metering ----------------------------------------------------------
+    (
+        METERING,
+        "overexposure warning",
+        "warning, critical, safe = 150, 170, 130",
+        "warning, critical, safe = 149, 170, 130",
+    ),
+    (
+        METERING,
+        "overexposure critical",
+        "warning, critical, safe = 150, 170, 130",
+        "warning, critical, safe = 150, 169, 130",
+    ),
+    (
+        METERING,
+        "overexposure release",
+        "warning, critical, safe = 150, 170, 130",
+        "warning, critical, safe = 150, 170, 131",
+    ),
+    (
+        METERING,
+        "clipped-pixel warning",
+        "clipped_warning, clipped_safe = 5, 3",
+        "clipped_warning, clipped_safe = 6, 3",
+    ),
+    (
+        METERING,
+        "underexposure warning",
+        "warning, critical, safe = 90, 70, 105",
+        "warning, critical, safe = 91, 70, 105",
+    ),
+    (
+        METERING,
+        "underexposure critical",
+        "warning, critical, safe = 90, 70, 105",
+        "warning, critical, safe = 90, 71, 105",
+    ),
+    (
+        METERING,
+        "underexposure release",
+        "warning, critical, safe = 90, 70, 105",
+        "warning, critical, safe = 90, 70, 106",
+    ),
+    (
+        METERING,
+        "rate scales along the ladder",
+        "smooth = position * self._normal_speed + (1.0 - position) * 1.0",
+        "smooth = position * self._normal_speed + (1.0 - position) * 0.99",
+    ),
+    (
+        METERING,
+        "recovery only hurries",
+        "return max(smooth, recovery)",
+        "return min(smooth, recovery)",
+    ),
+    (
+        METERING,
+        "overcast boost",
+        "self._base_target + self._overcast_boost * (1.0 - into)",
+        "self._base_target + self._overcast_boost * (1.0 - into) * 0.99",
+    ),
+    (
+        METERING,
+        "overcast full-boost branch",
+        "return min(self._base_target + self._overcast_boost, self._max_target)",
+        "return min(self._base_target + self._overcast_boost - 1, self._max_target)",
+    ),
+    (
+        METERING,
         "highlight protection slew",
         "self._p95_scale += self._p95_slew * (raw - self._p95_scale)",
         "self._p95_scale += self._p95_slew * (raw - self._p95_scale) * 0.99",
     ),
     (
-        "hysteresis frame count",
-        "if self._mode_hold_count >= self._hysteresis_frames:",
-        "if self._mode_hold_count > self._hysteresis_frames:",
+        METERING,
+        "highlight curve, gentle segment",
+        "return 1.0 - ((p95 - safe) / (warning - safe)) * 0.05",
+        "return 1.0 - ((p95 - safe) / (warning - safe)) * 0.051",
     ),
     (
-        "lux EMA weighting",
-        "self._smoothed_lux = alpha * raw_lux + (1 - alpha) * self._smoothed_lux",
-        "self._smoothed_lux = (1 - alpha) * raw_lux + alpha * self._smoothed_lux",
-    ),
-    ("overcast target boost", "self._overcast_boost", "0 * self._overcast_boost"),
-    (
-        "white-balance cross-fade direction",
-        "red = night_gains[0] + position * (day_gains[0] - night_gains[0])",
-        "red = night_gains[0] + (1-position) * (day_gains[0] - night_gains[0])",
+        METERING,
+        "highlight curve, moderate segment",
+        "return 0.95 - ((p95 - warning) / (critical - warning)) * 0.10",
+        "return 0.95 - ((p95 - warning) / (critical - warning)) * 0.101",
     ),
     (
-        "exposure log-space interpolation",
-        "log_new = log_last + speed * (log_target - log_last)",
-        "log_new = log_last + speed * 0.99 * (log_target - log_last)",
+        METERING,
+        "highlight curve, steep segment",
+        "return max(floor, 0.85 - ((p95 - critical) / 15) * 0.15)",
+        "return max(floor, 0.85 - ((p95 - critical) / 15) * 0.151)",
     ),
     (
-        "hybrid override, bright side",
-        "brightness > BrightnessZones.WARNING_HIGH",
-        "brightness > BrightnessZones.WARNING_HIGH * 1.02",
+        METERING,
+        "highlight protection off at the dark end",
+        "if dark and not self._p95_apply_in_dark:",
+        "if False and not self._p95_apply_in_dark:",
     ),
-    (
-        "hybrid override, dark side",
-        "brightness < BrightnessZones.WARNING_LOW",
-        "brightness < BrightnessZones.WARNING_LOW * 0.98",
-    ),
-    ("night threshold comparison", "if lux < night_threshold:", "if lux <= night_threshold:"),
-    ("day threshold comparison", "elif lux > day_threshold:", "elif lux >= day_threshold:"),
-    (
-        "exposure hard ceiling",
-        "new_exposure = max(0.0001, min(20.0, new_exposure))",
-        "new_exposure = max(0.0001, min(19.9, new_exposure))",
-    ),
-    ("gain interpolation ceiling", "max(1.0, min(16.0,", "max(1.0, min(15.9,"),
-    ("gain interpolation floor", "max(1.0, min(16.0,", "max(1.001, min(16.0,"),
 ]
-
-
-def find_target() -> Path:
-    for path in CANDIDATE_TARGETS:
-        if path.exists():
-            return path
-    raise SystemExit(f"could not find the exposure module; looked in {CANDIDATE_TARGETS}")
 
 
 def golden_tests_fail() -> bool:
@@ -153,33 +247,40 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.list:
-        for description, needle, _ in MUTATIONS:
-            print(f"  {description:38} {needle}")
+        for relative, description, needle, _ in MUTATIONS:
+            print(f"  {Path(relative).name:14} {description:38} {needle}")
         return 0
 
-    target = find_target()
-    original = target.read_text()
+    targets = {relative: REPO / relative for relative, _, _, _ in MUTATIONS}
+    for relative, path in targets.items():
+        if not path.exists():
+            raise SystemExit(f"missing {relative}")
+
+    originals = {relative: path.read_text() for relative, path in targets.items()}
 
     with tempfile.TemporaryDirectory() as tmp:
-        backup = Path(tmp) / target.name
-        shutil.copy2(target, backup)
+        for relative, path in targets.items():
+            shutil.copy2(path, Path(tmp) / Path(relative).name)
 
         survivors = []
         try:
-            for description, needle, replacement in MUTATIONS:
-                if needle not in original:
+            for relative, description, needle, replacement in MUTATIONS:
+                source = originals[relative]
+                if needle not in source:
                     survivors.append((description, "needle not found -- mutation is stale"))
                     print(f"  STALE    {description}")
                     continue
 
-                target.write_text(original.replace(needle, replacement, 1))
+                targets[relative].write_text(source.replace(needle, replacement, 1))
                 if golden_tests_fail():
                     print(f"  caught   {description}")
                 else:
                     survivors.append((description, "golden tests still passed"))
                     print(f"  SURVIVED {description}")
+                targets[relative].write_text(source)
         finally:
-            shutil.copy2(backup, target)
+            for relative, path in targets.items():
+                path.write_text(originals[relative])
 
     print()
     if survivors:

@@ -199,22 +199,18 @@ class StatusDisplay:
             f"{Colors.DIM}({captures_per_min:.1f} captures/min){Colors.RESET}"
         )
 
-        # Light thresholds
-        thresholds = adaptive["light_thresholds"]
+        # The exposure ladder's ends. This used to print the lux thresholds that
+        # selected between three modes; there are no thresholds now, and the
+        # camera's own limits are what actually bound what it can do.
+        night = adaptive["night_mode"]
         print(
-            f"  {Colors.BRIGHT_BLUE}Day Mode:{Colors.RESET}    >{thresholds['day']} lux "
+            f"  {Colors.BRIGHT_BLUE}Brightest:{Colors.RESET}   1/10000s at gain 1 "
             f"{Colors.YELLOW}☀️{Colors.RESET}"
         )
         print(
-            f"  {Colors.BRIGHT_BLUE}Night Mode:{Colors.RESET}  <{thresholds['night']} lux "
+            f"  {Colors.BRIGHT_BLUE}Darkest:{Colors.RESET}     "
+            f"{night['max_exposure_time']}s at gain {night['analogue_gain']} "
             f"{Colors.BRIGHT_MAGENTA}🌙{Colors.RESET}"
-        )
-
-        # Night mode settings
-        night = adaptive["night_mode"]
-        print(
-            f"  {Colors.BRIGHT_BLUE}Max Exposure:{Colors.RESET} {night['max_exposure_time']}s "
-            f"{Colors.DIM}(ISO {int(night['analogue_gain'] * 100)}){Colors.RESET}"
         )
 
         # Output directory

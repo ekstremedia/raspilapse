@@ -17,10 +17,6 @@ location:
   longitude: 15.4
   # Timezone (for accurate sun calculations)
   timezone: "Europe/Oslo"
-  # Civil twilight threshold (degrees below horizon)
-  # Sun > this value = force Day mode even if lux is low
-  civil_twilight_threshold: -6.0
-
 # Camera Settings
 camera:
   # Image resolution (width x height)
@@ -176,31 +172,11 @@ adaptive_timelapse:
   # Enable adaptive exposure based on light conditions
   enabled: true
 
-  # Reference lux - controls overall image brightness
-  # Higher = brighter images, Lower = darker images
-  # Tune per-camera based on scene and sensor sensitivity
-  # Typical range: 2.5 (darker) to 4.5 (brighter), default 3.8
-  reference_lux: 3.8
-
   # Interval between captures in seconds
   interval: 30
 
   # Total number of frames to capture (0 = unlimited, runs continuously)
   num_frames: 0
-
-  # Light level thresholds (based on calculated lux from metadata)
-  # These values determine when to switch between day/night/transition modes
-  light_thresholds:
-    # Lux below this = night mode (long exposure)
-    # Lower values = transition starts earlier (prevents morning overexposure)
-    # Recommended: 3 (starts transition before sky gets too bright)
-    night: 3
-
-    # Lux above this = day mode (normal exposure)
-    day: 80
-
-    # Between night and day = transition mode (gradual adjustment)
-    # Automatically calculated between night and day thresholds
 
   # How hard the exposure loop corrects toward the brightness target each frame:
   #     new_exposure = current * (target / measured) ** brightness_damping
@@ -292,34 +268,17 @@ adaptive_timelapse:
     # Higher = faster response but more jitter
     lux_smoothing_factor: 0.3
 
-    # Hysteresis frames: number of consecutive frames required before mode change
-    # Prevents rapid flipping between modes when lux is near threshold
-    # Higher = more stable but slower transitions (2-5 recommended)
-    hysteresis_frames: 3
-
     # White balance transition speed (0.0-1.0)
     # How quickly WB gains change towards target per frame
     # Lower = smoother color transitions (0.1-0.2 recommended)
     # Higher = faster but may show color jumps
     wb_transition_speed: 0.15
 
-    # Gain (ISO) transition speed (0.0-1.0)
-    # How quickly gain changes towards target per frame
-    # Lower = smoother ISO transitions (0.05-0.15 recommended)
-    # Higher = faster but may show brightness jumps
-    gain_transition_speed: 0.10
-
     # Exposure time transition speed (0.0-1.0)
     # How quickly exposure changes towards target per frame
     # Uses logarithmic interpolation for natural brightness changes
     # Lower = smoother transitions (0.05-0.15 recommended)
     exposure_transition_speed: 0.10
-
-    # Use smooth WB interpolation even in day mode
-    # When true, always uses manual WB gains (interpolated)
-    # When false, uses camera's AWB in full day mode (legacy behavior)
-    smooth_wb_in_day_mode: true
-
 
     # === BRIGHTNESS FEEDBACK SETTINGS ===
     # These settings enable real-time brightness correction for butter-smooth

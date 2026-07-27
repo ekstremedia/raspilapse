@@ -1,18 +1,34 @@
 """Drive ExposureController through the capture loop's exact call order.
 
 `replay()` is a transcription of the per-frame sequence in the capture loop --
-smooth, decide, hysteresis, seed, settings, observe. Keep it in step with that
-loop: if the loop's ordering changes, this must change with it, or the golden
-files stop meaning anything.
+smooth, decide, seed, observe. Keep it in step with that loop: if the loop's
+ordering changes, this must change with it, or the golden files stop meaning
+anything.
+
+The loop it drives is closed. The sequences store the brightness each frame
+actually measured, but that measurement is a property of the exposure the
+camera happened to be using at the time, so feeding it back to a controller
+that would have chosen differently is not a replay of anything -- the
+controller acts, the measurement does not respond, and it acts again. What the
+sequences really carry is one number per frame that belongs to the scene rather
+than the camera:
+
+    luminance = measured brightness / (shutter x gain)
+
+Play that at the controller, and show it the brightness its own choice would
+have produced. See scene_luminance() and observe().
 
 The controller is imported through `load_controller()` rather than a plain
-import so this module works either side of the package move, and the golden
-files recorded before it stay directly comparable after.
+import so this module works either side of the package move.
 """
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+# A sensor cannot report more than this.
+SATURATED = 255.0
 
 SEQUENCE_DIR = Path(__file__).parent / "sequences"
 GOLDEN_DIR = Path(__file__).parent / "golden"
@@ -105,42 +121,96 @@ def _round_floats(value: Any, places: int = 6) -> Any:
     return value
 
 
+def scene_luminance(frame: Dict) -> Optional[float]:
+    """What the scene was doing, independent of how it was photographed.
+
+    The brightness the sensor would report at an exposure product of 1.0.
+    None where the frame carries no usable metadata.
+    """
+    metadata = frame.get("capture_metadata") or {}
+    brightness = (frame.get("brightness") or {}).get("mean_brightness")
+    exposure_us = metadata.get("ExposureTime")
+    gain = metadata.get("AnalogueGain") or 1.0
+
+    if not brightness or not exposure_us:
+        return None
+
+    product = (exposure_us / 1e6) * gain
+    return brightness / product if product > 0 else None
+
+
+def _tail_fraction(mean: float, std: float, threshold: float) -> float:
+    """Share of a normal distribution beyond `threshold`, as a percentage.
+
+    Used to estimate how much of a frame clips. It was a step function to begin
+    with -- 0% or 100% -- which meant the simulated frames never produced a
+    clipped fraction anywhere near the 3% and 5% thresholds the metering acts
+    on, and two of those constants could be changed without any test noticing.
+    """
+    if std is None or std <= 0:
+        return 100.0 if mean >= threshold else 0.0
+    return 100.0 * 0.5 * math.erfc((threshold - mean) / (std * math.sqrt(2.0)))
+
+
+def observe(luminance: float, product: float, frame: Dict) -> Dict:
+    """What the sensor would report for this scene at this exposure.
+
+    First order: brightness is proportional to light times exposure, clipped at
+    the top of the range. The spread is carried across from the recorded frame
+    and scaled by the same factor, and the clipped and crushed fractions come
+    from the tails of a normal of that mean and spread -- crude, but continuous,
+    which the step function it replaced was not.
+    """
+    brightness = max(0.0, min(SATURATED, luminance * product))
+
+    recorded = frame.get("brightness") or {}
+    recorded_mean = recorded.get("mean_brightness") or 1.0
+    scale = (luminance * product) / recorded_mean if recorded_mean else 1.0
+
+    recorded_std = recorded.get("std_brightness")
+    std = recorded_std * scale if recorded_std else None
+    unclipped_mean = luminance * product
+
+    return {
+        "mean_brightness": brightness,
+        "percentile_95": max(0.0, min(SATURATED, (recorded.get("percentile_95") or 0) * scale)),
+        "std_brightness": min(std, 128.0) if std is not None else None,
+        "overexposed_percent": round(_tail_fraction(unclipped_mean, std, 245.0), 4),
+        "underexposed_percent": round(_tail_fraction(-unclipped_mean, std, -10.0), 4),
+    }
+
+
+def exposure_product(settings: Dict) -> float:
+    return (settings.get("ExposureTime", 0) / 1e6) * settings.get("AnalogueGain", 1.0)
+
+
 def replay(sequence: Dict, controller_cls: Optional[Any] = None) -> List[Dict]:
-    """Run one recorded sequence through the controller.
+    """Run one recorded sequence through the controller, closed-loop.
 
     Returns one record per frame: the settings dict handed to the camera, the
-    mode chosen, and the diagnostics block written into the frame's metadata.
+    mode chosen, the brightness those settings would have produced, and the
+    diagnostics block written into the frame's metadata.
     """
     if controller_cls is None:
         controller_cls = load_controller()
     modes = load_modes()
 
-    config = sequence["config"]
-    controller = controller_cls(config)
+    controller = controller_cls(sequence["config"])
 
     seed = sequence.get("seed")
     if seed:
         controller.seed_from_capture(**seed)
-
-    civil_twilight = config.get("location", {}).get("civil_twilight_threshold", -6)
 
     results: List[Dict] = []
     previous_mode: Optional[str] = None
     last_day_capture_metadata: Optional[Dict] = None
 
     for frame in sequence["frames"]:
-        raw_lux = frame["raw_lux"]
-        sun_elevation = frame.get("sun_elevation")
+        # Lux is still measured and recorded, but nothing decides from it.
+        lux = controller.smooth_lux(frame["raw_lux"])
 
-        lux = controller.smooth_lux(raw_lux)
-
-        # The loop asks its own location for polar day, then passes the answer
-        # in. Mirrored here rather than imported so the harness does not depend
-        # on astral being installed.
-        is_polar_day = sun_elevation is not None and sun_elevation > civil_twilight
-
-        raw_mode = controller.determine_mode(lux, sun_elevation, is_polar_day)
-        mode = controller.apply_hysteresis(raw_mode)
+        settings = controller.decide()
+        mode = controller.last_mode
 
         entering_manual = previous_mode == modes.DAY and mode in (
             modes.TRANSITION,
@@ -154,23 +224,25 @@ def replay(sequence: Dict, controller_cls: Optional[Any] = None) -> List[Dict]:
 
         previous_mode = mode
 
-        settings = controller.get_camera_settings(mode, lux)
+        # --- the frame is taken here ---
+
+        luminance = scene_luminance(frame)
+        measured = None
+        if luminance is not None:
+            metrics = observe(luminance, exposure_product(settings), frame)
+            measured = metrics["mean_brightness"]
+            controller.observe_frame(metrics)
 
         results.append(
             {
                 "mode": mode,
-                "raw_mode": raw_mode,
+                "ladder_position": _round_floats(controller.ladder_position),
                 "smoothed_lux": _round_floats(lux),
+                "measured_brightness": _round_floats(measured, 3),
                 "settings": _round_floats(settings),
                 "diagnostics": _round_floats(controller.diagnostics()),
             }
         )
-
-        # --- everything below happens after the frame is taken ---
-
-        brightness = frame.get("brightness")
-        if brightness:
-            controller.observe_frame(brightness)
 
         capture_metadata = frame.get("capture_metadata")
         if capture_metadata and mode == modes.DAY:
