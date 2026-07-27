@@ -140,12 +140,12 @@ Without it the code falls back to English and logs a warning.
 
 ## Applying an overlay after the fact
 
-`src/apply_overlay.py` re-renders onto existing images using their sidecar
+`raspilapse/cli/apply_overlay.py` re-renders onto existing images using their sidecar
 metadata JSON:
 
 ```bash
-python3 src/apply_overlay.py /var/www/html/images/2026/07/27/*.jpg --output-dir /tmp/out
-python3 src/apply_overlay.py frame.jpg --overwrite
+python3 -m raspilapse.cli.overlay /var/www/html/images/2026/07/27/*.jpg --output-dir /tmp/out
+python3 -m raspilapse.cli.overlay frame.jpg --overwrite
 ```
 
 Useful for trying a template change without waiting for the next capture.

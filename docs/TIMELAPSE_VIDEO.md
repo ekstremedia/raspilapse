@@ -4,7 +4,7 @@ Generate timelapse videos from captured images using the `make_timelapse.py` scr
 
 ## Overview
 
-The timelapse video generator (`src/make_timelapse.py`) creates smooth timelapse videos from images captured by the Raspilapse system. It supports:
+The timelapse video generator (`raspilapse/video/timelapse.py`) creates smooth timelapse videos from images captured by the Raspilapse system. It supports:
 
 - **Time-based selection** - Select images by start/end time
 - **Automatic file finding** - Searches date-organized directories
@@ -20,35 +20,35 @@ The timelapse video generator (`src/make_timelapse.py`) creates smooth timelapse
 Create a 24-hour timelapse using default times from config (05:00 yesterday to 05:00 today):
 
 ```bash
-python3 src/make_timelapse.py
+python3 -m raspilapse.cli.timelapse
 ```
 
 ### Common Examples
 
 ```bash
 # Default: uses config times (05:00 yesterday to 05:00 today)
-python3 src/make_timelapse.py
+python3 -m raspilapse.cli.timelapse
 
 # Custom time range (20:00 yesterday to 08:00 today)
-python3 src/make_timelapse.py --start 20:00 --end 08:00
+python3 -m raspilapse.cli.timelapse --start 20:00 --end 08:00
 
 # Same-day timelapse (07:00 to 15:00 today)
-python3 src/make_timelapse.py --start 07:00 --end 15:00 --today
+python3 -m raspilapse.cli.timelapse --start 07:00 --end 15:00 --today
 
 # Specific date range
-python3 src/make_timelapse.py --start 07:00 --end 15:00 --start-date 2025-12-24 --end-date 2025-12-25
+python3 -m raspilapse.cli.timelapse --start 07:00 --end 15:00 --start-date 2025-12-24 --end-date 2025-12-25
 
 # Test with first 100 images only
-python3 src/make_timelapse.py --limit 100
+python3 -m raspilapse.cli.timelapse --limit 100
 
 # Custom framerate (30 fps instead of 25)
-python3 src/make_timelapse.py --fps 30
+python3 -m raspilapse.cli.timelapse --fps 30
 
 # Custom output filename
-python3 src/make_timelapse.py --output my_timelapse.mp4
+python3 -m raspilapse.cli.timelapse --output my_timelapse.mp4
 
 # Use custom config file
-python3 src/make_timelapse.py -c config/custom.yml
+python3 -m raspilapse.cli.timelapse -c config/custom.yml
 ```
 
 ## Configuration
@@ -127,7 +127,7 @@ video:
 ## Command-Line Arguments
 
 ```
-python3 src/make_timelapse.py [OPTIONS]
+python3 -m raspilapse.cli.timelapse [OPTIONS]
 
 Time Selection:
   --start TIME        Start time in HH:MM format (default: from config, else 00:00)
@@ -299,7 +299,7 @@ To test video generation quickly without processing all images:
 
 ```bash
 # Generate video from first 50 images only
-python3 src/make_timelapse.py --start 20:00 --end 08:00 --limit 50
+python3 -m raspilapse.cli.timelapse --start 20:00 --end 08:00 --limit 50
 ```
 
 This is useful for:
@@ -440,7 +440,7 @@ video:
 
 Then use it:
 ```bash
-python3 src/make_timelapse.py --start 04:00 --end 04:00 -c config/custom.yml
+python3 -m raspilapse.cli.timelapse --start 04:00 --end 04:00 -c config/custom.yml
 ```
 
 ### Batch Processing
@@ -453,7 +453,7 @@ Generate multiple timelapses:
 
 for day in {0..6}; do
     date=$(date -d "$day days ago" +%Y-%m-%d)
-    python3 src/make_timelapse.py \
+    python3 -m raspilapse.cli.timelapse \
         --start 00:00 --end 23:59 \
         --output "daily_${date}.mp4"
 done
@@ -531,16 +531,16 @@ By default, keograms crop 7% from the top to remove the overlay bar:
 
 ```bash
 # Create keogram from a day's images
-python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/
+python3 -m raspilapse.video.keogram --dir /var/www/html/images/2025/12/24/
 
 # Custom output location
-python3 src/create_keogram.py --dir /path/to/images --output keogram.jpg
+python3 -m raspilapse.video.keogram --dir /path/to/images --output keogram.jpg
 
 # Adjust crop (e.g., larger overlay)
-python3 src/create_keogram.py --dir /path/to/images --crop-top 10
+python3 -m raspilapse.video.keogram --dir /path/to/images --crop-top 10
 
 # No cropping (include overlay in keogram)
-python3 src/create_keogram.py --dir /path/to/images --no-crop
+python3 -m raspilapse.video.keogram --dir /path/to/images --no-crop
 ```
 
 ### Keogram Output
@@ -570,7 +570,7 @@ For example, with 1920px wide images and 960 frames:
 
 ```bash
 # Create video with both keogram and slitscan
-python3 src/make_timelapse.py --slitscan
+python3 -m raspilapse.cli.timelapse --slitscan
 
 # The slitscan is optional - by default only keogram is generated
 ```
@@ -579,13 +579,13 @@ python3 src/make_timelapse.py --slitscan
 
 ```bash
 # Create slitscan from a day's images
-python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/ --slitscan
+python3 -m raspilapse.video.keogram --dir /var/www/html/images/2025/12/24/ --slitscan
 
 # Custom output location
-python3 src/create_keogram.py --dir /path/to/images --slitscan --output slitscan_custom.jpg
+python3 -m raspilapse.video.keogram --dir /path/to/images --slitscan --output slitscan_custom.jpg
 
 # No cropping (include overlay in slitscan)
-python3 src/create_keogram.py --dir /path/to/images --slitscan --no-crop
+python3 -m raspilapse.video.keogram --dir /path/to/images --slitscan --no-crop
 ```
 
 ### Slitscan Output
@@ -595,14 +595,14 @@ Slitscans are saved alongside videos and keograms:
 
 ### Daily Timelapse with Slitscan
 
-The daily timelapse service (`src/daily_timelapse.py`) automatically generates slitscan along with keogram and uploads both to the server:
+The daily timelapse service (`raspilapse/video/daily.py`) automatically generates slitscan along with keogram and uploads both to the server:
 
 ```bash
 # Manual run (slitscan is generated by default)
-python3 src/daily_timelapse.py
+python3 -m raspilapse.cli.daily
 
 # Dry run to see what would be done
-python3 src/daily_timelapse.py --dry-run
+python3 -m raspilapse.cli.daily --dry-run
 ```
 
 The upload sends:

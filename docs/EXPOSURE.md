@@ -3,7 +3,7 @@
 How Raspilapse decides what the camera should do, from noon to midnight and
 back, without visible steps between frames.
 
-All of it lives in `src/exposure.py`. `ExposureController` owns every piece of
+All of it lives in `raspilapse/camera/exposure.py`. `ExposureController` owns every piece of
 per-frame state; `auto_timelapse.py` feeds it measurements and asks it for
 settings.
 

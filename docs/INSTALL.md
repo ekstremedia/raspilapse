@@ -118,7 +118,7 @@ Fix anything it reports before continuing.
 ## 5. One test frame
 
 ```bash
-python3 src/auto_timelapse.py --test
+python3 -m raspilapse.cli.capture --test
 ```
 
 Captures a single frame through the full adaptive path and exits. Check the
@@ -161,7 +161,7 @@ camera no longer producing frames.
 ## 7. Confirm
 
 ```bash
-python3 src/status.py
+python3 -m raspilapse.cli.status
 systemctl list-timers 'raspilapse-*'
 tail -f logs/auto_timelapse.log
 ls -lt /var/www/html/images/$(date +%Y/%m/%d)/ | head

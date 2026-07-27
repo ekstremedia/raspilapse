@@ -6,15 +6,11 @@ than raising.
 """
 
 import glob
-import os
-import sys
 
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.overlay_draw import (  # noqa: E402
+from raspilapse.overlay.layout import (  # noqa: E402
     draw_divider,
     draw_gradient_bar,
     format_slot,

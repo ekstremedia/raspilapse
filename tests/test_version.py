@@ -1,12 +1,8 @@
 """Tests for version module."""
 
-import sys
 from pathlib import Path
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from __version__ import (
+from raspilapse.__version__ import (
     __author__,
     __description__,
     __email__,
@@ -79,4 +75,4 @@ def test_pyproject_reads_version_dynamically():
     """pyproject must not hardcode a fourth copy of the version."""
     pyproject = (Path(__file__).parent.parent / "pyproject.toml").read_text()
     assert 'dynamic = ["version"]' in pyproject
-    assert 'version = {attr = "src.__version__.__version__"}' in pyproject
+    assert 'version = {attr = "raspilapse.__version__.__version__"}' in pyproject

@@ -1,16 +1,13 @@
 """Tests for simplified overlay structure."""
 
 import os
-import sys
 import tempfile
 from unittest.mock import patch
 
 import pytest
 from PIL import Image
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.overlay import ImageOverlay
+from raspilapse.overlay.render import ImageOverlay
 
 
 @pytest.fixture

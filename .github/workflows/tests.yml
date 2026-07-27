@@ -43,15 +43,15 @@ jobs:
 
     - name: Lint with ruff
       run: |
-        ruff check src/ scripts/ tests/
+        ruff check raspilapse/ scripts/ tests/
 
     - name: Check code formatting with black
       run: |
-        black --check src/ scripts/ tests/
+        black --check raspilapse/ scripts/ tests/
 
     - name: Run tests with pytest
       run: |
-        pytest tests/ -v --cov=src --cov-branch --cov-report=term-missing --cov-report=xml
+        pytest tests/ -v --cov=raspilapse --cov-branch --cov-report=term-missing --cov-report=xml
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
@@ -82,12 +82,16 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements-dev.txt
 
+    # Advisory. The dual-import idiom's `no-redef` suppression is gone, and
+    # verified to leave no no-redef errors behind, but ~60 pre-existing errors
+    # remain -- mostly Any leaking out of config.get(). Clearing those is a
+    # typing pass of its own, not part of the reorganisation.
     - name: Type check with mypy
       run: |
-        mypy src/ --ignore-missing-imports --no-strict-optional
+        mypy raspilapse/ --ignore-missing-imports --no-strict-optional
       continue-on-error: true
 
-  compatibility-check:
+  install-check:
     runs-on: ubuntu-latest
 
     steps:
@@ -99,21 +103,32 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Install dependencies
+    # This replaces a job that verified the flat `cd src && import x` half of
+    # the dual-import idiom, which no longer exists. What matters now is that a
+    # fresh install works and the console scripts resolve.
+    - name: Install the package
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install -e .
 
-    - name: Check for syntax errors
+    - name: Verify every module imports
       run: |
-        python -m py_compile src/*.py scripts/*.py tests/*.py
+        python - <<'PY'
+        import importlib, pkgutil, raspilapse
+        failed = []
+        for module in pkgutil.walk_packages(raspilapse.__path__, "raspilapse."):
+            try:
+                importlib.import_module(module.name)
+            except Exception as error:
+                failed.append(f"{module.name}: {error}")
+        for line in failed:
+            print("FAIL", line)
+        raise SystemExit(1 if failed else 0)
+        PY
 
-    - name: Verify modules import the way systemd runs them
+    - name: Verify every console script resolves
       run: |
-        # The units run `python3 src/auto_timelapse.py`, so sys.path[0] is src/
-        # and the flat half of the dual-import idiom is what production uses.
-        # Importing as `src.x` in CI would never exercise that path.
-        cd src
-        for module in logging_config config_utils colors exposure weather database; do
-          python -c "import $module" && echo "ok $module"
+        for script in capture status snapshot timelapse daily overlay db retry-uploads; do
+          command -v "raspilapse-$script" >/dev/null || { echo "missing raspilapse-$script"; exit 1; }
+          echo "ok raspilapse-$script"
         done

@@ -1,7 +1,6 @@
 """Tests for daily timelapse generation features."""
 
 import os
-import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -10,9 +9,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.make_timelapse import (
+from raspilapse.video.timelapse import (
     find_images_in_range,
     main,
     parse_time,
@@ -57,9 +54,9 @@ def mock_config_file(test_config):
 class TestDefaultTwentyFourHours:
     """Test default 24-hour mode."""
 
-    @patch("src.make_timelapse.find_images_in_range")
-    @patch("src.make_timelapse.create_video")
-    @patch("src.make_timelapse.load_config")
+    @patch("raspilapse.video.timelapse.find_images_in_range")
+    @patch("raspilapse.video.timelapse.create_video")
+    @patch("raspilapse.video.timelapse.load_config")
     @patch("sys.argv")
     def test_no_args_defaults_to_24_hours(
         self, mock_argv, mock_load_config, mock_create_video, mock_find_images
@@ -126,8 +123,8 @@ class TestDefaultTwentyFourHours:
 class TestDailyNaming:
     """Test daily video naming convention."""
 
-    @patch("src.make_timelapse.find_images_in_range")
-    @patch("src.make_timelapse.create_video")
+    @patch("raspilapse.video.timelapse.find_images_in_range")
+    @patch("raspilapse.video.timelapse.create_video")
     def test_daily_video_naming(self, mock_create_video, mock_find_images, mock_config_file):
         """Test that daily videos use simplified naming."""
         mock_find_images.return_value = [Path("/test/img.jpg")]
@@ -146,8 +143,8 @@ class TestDailyNaming:
         assert "_to_" in str(output_file)
         assert output_file.suffix == ".mp4"
 
-    @patch("src.make_timelapse.find_images_in_range")
-    @patch("src.make_timelapse.create_video")
+    @patch("raspilapse.video.timelapse.find_images_in_range")
+    @patch("raspilapse.video.timelapse.create_video")
     def test_custom_range_naming(self, mock_create_video, mock_find_images, mock_config_file):
         """Test that custom time ranges use different naming."""
         mock_find_images.return_value = [Path("/test/img.jpg")]
@@ -174,8 +171,8 @@ class TestDailyNaming:
 class TestOutputDirectory:
     """Test output directory override."""
 
-    @patch("src.make_timelapse.find_images_in_range")
-    @patch("src.make_timelapse.create_video")
+    @patch("raspilapse.video.timelapse.find_images_in_range")
+    @patch("raspilapse.video.timelapse.create_video")
     @patch("os.makedirs")
     def test_output_dir_override(
         self, mock_makedirs, mock_create_video, mock_find_images, mock_config_file
@@ -202,8 +199,8 @@ class TestOutputDirectory:
 
             assert str(output_file).startswith(custom_dir)
 
-    @patch("src.make_timelapse.find_images_in_range")
-    @patch("src.make_timelapse.create_video")
+    @patch("raspilapse.video.timelapse.find_images_in_range")
+    @patch("raspilapse.video.timelapse.create_video")
     def test_output_dir_creates_if_missing(
         self, mock_create_video, mock_find_images, mock_config_file
     ):
@@ -228,7 +225,7 @@ class TestOutputDirectory:
 class TestErrorHandling:
     """Test error handling in make_timelapse."""
 
-    @patch("src.make_timelapse.load_config")
+    @patch("raspilapse.video.timelapse.load_config")
     def test_missing_config_file(self, mock_load):
         """Test handling of missing config file."""
         mock_load.side_effect = FileNotFoundError()
@@ -238,7 +235,7 @@ class TestErrorHandling:
 
         assert result == 1  # Should return error code
 
-    @patch("src.make_timelapse.find_images_in_range")
+    @patch("raspilapse.video.timelapse.find_images_in_range")
     def test_no_images_found(self, mock_find_images, mock_config_file):
         """No images is 'nothing to do' (exit 2), not an error (exit 1)."""
         mock_find_images.return_value = []
@@ -248,8 +245,8 @@ class TestErrorHandling:
 
         assert result == 2
 
-    @patch("src.make_timelapse.find_images_in_range")
-    @patch("src.make_timelapse.create_video")
+    @patch("raspilapse.video.timelapse.find_images_in_range")
+    @patch("raspilapse.video.timelapse.create_video")
     def test_video_creation_failure(self, mock_create_video, mock_find_images, mock_config_file):
         """Test handling of video creation failure."""
         mock_find_images.return_value = [Path("/test/img.jpg")]
@@ -331,8 +328,8 @@ class TestImageFinding:
 class TestCameraNameUsage:
     """Test camera name from overlay config."""
 
-    @patch("src.make_timelapse.find_images_in_range")
-    @patch("src.make_timelapse.create_video")
+    @patch("raspilapse.video.timelapse.find_images_in_range")
+    @patch("raspilapse.video.timelapse.create_video")
     def test_uses_camera_name_from_overlay(self, mock_create_video, mock_find_images):
         """Test that camera name is read from overlay config."""
         config = {

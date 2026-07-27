@@ -1,15 +1,10 @@
 """Tests for system monitoring module."""
 
-import sys
-from pathlib import Path
 from unittest.mock import Mock, mock_open, patch
 
 import pytest
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from system_monitor import SystemMonitor
+from raspilapse.system import SystemMonitor
 
 
 @pytest.fixture

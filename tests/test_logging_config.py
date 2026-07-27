@@ -2,15 +2,12 @@
 
 import logging
 import os
-import sys
 import tempfile
 
 import pytest
 import yaml
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.logging_config import LoggerConfig, get_logger
+from raspilapse.logging_setup import LoggerConfig, get_logger
 
 
 @pytest.fixture
@@ -399,7 +396,7 @@ class TestConfigure:
     """configure_logging() retroactively applies config to already-created loggers."""
 
     def test_configure_updates_existing_logger(self, tmp_path):
-        from src import logging_config
+        from raspilapse import logging_setup as logging_config
 
         quiet = tmp_path / "quiet.yml"
         quiet.write_text(

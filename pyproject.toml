@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raspilapse"
-# src/__version__.py is the single source of truth. See [tool.setuptools.dynamic].
+# raspilapse/__version__.py is the single source of truth. See [tool.setuptools.dynamic].
 dynamic = ["version"]
 description = "A Python library for creating timelapses with Raspberry Pi Camera"
 readme = "README.md"
@@ -60,6 +60,19 @@ dev = [
     "packaging>=21.0",
 ]
 
+[project.scripts]
+raspilapse-capture = "raspilapse.cli.capture:main"
+raspilapse-status = "raspilapse.cli.status:main"
+raspilapse-snapshot = "raspilapse.cli.snapshot:main"
+raspilapse-timelapse = "raspilapse.cli.timelapse:main"
+raspilapse-daily = "raspilapse.cli.daily:main"
+raspilapse-overlay = "raspilapse.cli.apply_overlay:main"
+raspilapse-db = "raspilapse.cli.db:main"
+raspilapse-retry-uploads = "raspilapse.cli.retry_uploads:main"
+
+[tool.setuptools.packages.find]
+include = ["raspilapse*"]
+
 [project.urls]
 "Homepage" = "https://github.com/ekstremedia/raspilapse"
 "Bug Tracker" = "https://github.com/ekstremedia/raspilapse/issues"
@@ -102,18 +115,18 @@ markers = [
 
 [tool.mypy]
 python_version = "3.9"
-# Every src/ module supports being imported both as `src.x` and as bare `x`,
-# because the systemd units run the scripts directly. mypy sees the fallback
-# arm of that try/except as a redefinition. It is deliberate and project-wide,
-# so flagging it at ~40 sites is noise rather than signal.
-disable_error_code = ["no-redef"]
+# no-redef used to be disabled here. Every module carried a
+# `try: from src.x / except ImportError: from x` block, because the systemd
+# units ran the modules as scripts, and mypy read the fallback arm as a
+# redefinition at ~40 sites. The package has one import path per module now,
+# so the suppression is gone and redefinitions are real again.
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 no_strict_optional = true
 
 [tool.coverage.run]
-source = ["src"]
+source = ["raspilapse"]
 omit = [
     "*/test_*.py",
     "*/__pycache__/*",
@@ -130,7 +143,7 @@ exclude_lines = [
 ]
 
 [tool.setuptools.dynamic]
-version = {attr = "src.__version__.__version__"}
+version = {attr = "raspilapse.__version__.__version__"}
 
 [tool.ruff]
 line-length = 100
@@ -149,8 +162,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# The dual-import idiom (try src.x / except x) needs imports after sys.path edits.
-"src/*.py" = ["E402"]
+# raspilapse/*.py used to need E402 for the dual-import idiom, which required
+# imports after a sys.path edit. The package no longer edits sys.path, so the
+# exemption is gone and import placement is checked like anywhere else.
 "scripts/*.py" = ["E402"]
 # Tests bind results to names for readability even when only the side effect
 # matters, and often ignore the loop index. Neither is worth flagging there.

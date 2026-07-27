@@ -2,7 +2,6 @@
 
 import os
 import re
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,9 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.auto_timelapse import AdaptiveTimelapse, LightMode
+from raspilapse.daemon import AdaptiveTimelapse, LightMode
 
 
 @pytest.fixture
@@ -360,7 +357,7 @@ class TestAdaptiveTimelapse:
 
         try:
             # Mock ImageCapture class completely
-            with patch("src.auto_timelapse.ImageCapture") as mock_capture_class:
+            with patch("raspilapse.daemon.ImageCapture") as mock_capture_class:
                 # Mock the context manager
                 mock_instance = MagicMock()
                 mock_capture_class.return_value.__enter__.return_value = mock_instance
@@ -660,7 +657,7 @@ class TestPolarAwareness:
         """
         import ast
 
-        src = Path(__file__).resolve().parent.parent / "src" / "auto_timelapse.py"
+        src = Path(__file__).resolve().parent.parent / "raspilapse" / "daemon.py"
         for node in ast.walk(ast.parse(src.read_text())):
             if not isinstance(node, ast.Call):
                 continue
@@ -865,7 +862,7 @@ class TestMainFunction:
         )
 
         # Import and run main
-        from src.auto_timelapse import main
+        from raspilapse.daemon import main
 
         result = main()
         assert result == 1
@@ -874,7 +871,7 @@ class TestMainFunction:
         """Test main with --help flag."""
         monkeypatch.setattr("sys.argv", ["auto_timelapse.py", "--help"])
 
-        from src.auto_timelapse import main
+        from raspilapse.daemon import main
 
         with pytest.raises(SystemExit) as exc_info:
             main()

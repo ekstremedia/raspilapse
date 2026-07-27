@@ -24,15 +24,15 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
-    from src.colors import Colors, print_info, print_section, print_subsection
-    from src.config_utils import load_config as _load_config
-    from src.create_keogram import create_keogram, create_slitscan
-    from src.logging_config import configure_logging, get_logger
+    from raspilapse.config import load_config as _load_config
+    from raspilapse.console import Colors, print_info, print_section, print_subsection
+    from raspilapse.logging_setup import configure_logging, get_logger
+    from raspilapse.video.keogram import create_keogram, create_slitscan
 except ModuleNotFoundError:
-    from colors import Colors, print_info, print_section, print_subsection
-    from config_utils import load_config as _load_config
-    from create_keogram import create_keogram, create_slitscan
-    from logging_config import configure_logging, get_logger
+    from raspilapse.config import load_config as _load_config
+    from raspilapse.console import Colors, print_info, print_section, print_subsection
+    from raspilapse.logging_setup import configure_logging, get_logger
+    from raspilapse.video.keogram import create_keogram, create_slitscan
 
 
 def load_config(config_path: str = "config/config.yml") -> dict:

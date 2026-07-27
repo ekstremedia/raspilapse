@@ -26,7 +26,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 
-from src.config_utils import (  # noqa: E402
+from raspilapse.config import (  # noqa: E402
     format_duration,
     get_db_path,
     parse_time_arg_or_exit,  # noqa: E402

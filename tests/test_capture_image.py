@@ -3,7 +3,6 @@
 import json
 import os
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -11,9 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.capture_image import CameraConfig, ImageCapture, capture_single_image
+from raspilapse.camera.capture import CameraConfig, ImageCapture, capture_single_image
 
 
 @pytest.fixture

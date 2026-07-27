@@ -10,12 +10,8 @@ import argparse
 import sys
 from pathlib import Path
 
-try:
-    from src.logging_config import configure_logging, get_logger
-    from src.overlay import apply_overlay_to_image
-except ImportError:
-    from logging_config import configure_logging, get_logger
-    from overlay import apply_overlay_to_image
+from raspilapse.logging_setup import configure_logging, get_logger
+from raspilapse.overlay.render import apply_overlay_to_image
 
 logger = get_logger("apply_overlay")
 

@@ -7,17 +7,13 @@ every 30 minutes; a config state must not paint the unit red forever).
 """
 
 import os
-import sys
 from unittest.mock import patch
 
 import pytest
 import yaml
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from src.retry_uploads import main  # noqa: E402
-from src.upload_service import UploadService  # noqa: E402
+from raspilapse.cli.retry_uploads import main  # noqa: E402
+from raspilapse.storage.upload import UploadService  # noqa: E402
 
 
 @pytest.fixture

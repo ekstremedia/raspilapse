@@ -1,18 +1,13 @@
 """Tests for weather data fetcher module."""
 
 import json
-import sys
 import urllib.error
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from weather import WeatherData
+from raspilapse.overlay.sources.weather import WeatherData
 
 
 @pytest.fixture

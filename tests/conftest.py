@@ -8,31 +8,23 @@ logs/script_name.log and logs/test_script.log, created by the logging tests.
 """
 
 import logging
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from raspilapse import logging_setup
+from raspilapse.overlay.sources import weather
 
-from src import logging_config  # noqa: E402
-
-# src/ modules support being imported both as `src.x` and as bare `x`, because
-# the systemd units run the scripts directly. Test modules use both styles, and
-# Python treats the two as separate module objects with separate module-level
-# state. Anything holding a process-wide cache therefore has to be reset under
-# both names.
-_STATEFUL_MODULES = ("weather",)
+# Every module holding process-wide cached state. This used to have to reset
+# each one twice, under both `x` and `src.x`, because the flat layout let the
+# same file be imported under two names with two copies of its module-level
+# state. There is one name per module now.
+_STATEFUL_MODULES = (weather,)
 
 
 def _reset_module_state() -> None:
-    logging_config.reset()
-    for name in _STATEFUL_MODULES:
-        for candidate in (name, f"src.{name}"):
-            module = sys.modules.get(candidate)
-            reset = getattr(module, "reset_cache", None)
-            if reset is not None:
-                reset()
+    logging_setup.reset()
+    for module in _STATEFUL_MODULES:
+        module.reset_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -67,5 +59,5 @@ def log_dir(tmp_path, monkeypatch):
     path = tmp_path / "logs"
     path.mkdir(exist_ok=True)
     monkeypatch.setenv("RASPILAPSE_LOG_DIR", str(path))
-    logging_config.reset()
+    logging_setup.reset()
     return str(path)

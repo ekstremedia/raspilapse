@@ -7,18 +7,14 @@ this, so it is worth pinning the contract down.
 """
 
 import json
-import os
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-import src.overlay_sources as overlay_sources  # noqa: E402
-from src.overlay_sources import (  # noqa: E402
+import raspilapse.overlay.sources.json_sources as overlay_sources  # noqa: E402
+from raspilapse.overlay.sources.json_sources import (  # noqa: E402
     AuroraData,
     CachedJsonSource,
     ShipsData,

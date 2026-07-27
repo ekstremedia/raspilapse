@@ -17,54 +17,26 @@ except ImportError as e:
         "Pillow is required for overlay functionality. Install with: pip3 install Pillow"
     ) from e
 
-try:
-    from src.logging_config import get_logger
-except ImportError:
-    from logging_config import get_logger
+from raspilapse.logging_setup import get_logger
+from raspilapse.overlay.layout import (
+    draw_divider,
+    draw_gradient_bar,
+    format_slot,
+    measure_widest,
+    text_height,
+    text_width,
+)
 
-try:
-    from src.weather import WeatherData
-except ImportError:
-    from weather import WeatherData
-
-try:
-    from src.system_monitor import SystemMonitor
-except ImportError:
-    from system_monitor import SystemMonitor
-
-try:
-    from src.overlay_draw import (
-        draw_divider,
-        draw_gradient_bar,
-        format_slot,
-        measure_widest,
-        text_height,
-        text_width,
-    )
-
-    # Re-exported: these used to live here, and callers and tests still import
-    # them from this module.
-    from src.overlay_sources import (  # noqa: F401
-        AuroraData,
-        CachedJsonSource,
-        ShipsData,
-        TideData,
-    )
-except ImportError:
-    from overlay_draw import (
-        draw_divider,
-        draw_gradient_bar,
-        format_slot,
-        measure_widest,
-        text_height,
-        text_width,
-    )
-    from overlay_sources import (  # noqa: F401
-        AuroraData,
-        CachedJsonSource,
-        ShipsData,
-        TideData,
-    )
+# Re-exported: these used to live here, and callers and tests still import
+# them from this module.
+from raspilapse.overlay.sources.json_sources import (  # noqa: F401
+    AuroraData,
+    CachedJsonSource,
+    ShipsData,
+    TideData,
+)
+from raspilapse.overlay.sources.weather import WeatherData
+from raspilapse.system import SystemMonitor
 
 logger = get_logger("overlay")
 

@@ -28,11 +28,11 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
-    from src.colors import Colors, print_info, print_section
-    from src.logging_config import configure_logging, get_logger
+    from raspilapse.console import Colors, print_info, print_section
+    from raspilapse.logging_setup import configure_logging, get_logger
 except ModuleNotFoundError:
-    from colors import Colors, print_info, print_section
-    from logging_config import configure_logging, get_logger
+    from raspilapse.console import Colors, print_info, print_section
+    from raspilapse.logging_setup import configure_logging, get_logger
 
 
 def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:

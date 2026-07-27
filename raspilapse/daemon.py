@@ -24,34 +24,19 @@ except ImportError:
     ASTRAL_AVAILABLE = False
 
 # Handle imports for both module and script execution
-try:
-    from src.capture_image import CameraConfig, ImageCapture
-    from src.database import CaptureDatabase
+from raspilapse.camera.capture import CameraConfig, ImageCapture
 
-    # BrightnessZones and highlight_factor are re-exported for callers and
-    # tests that still import them from here.
-    from src.exposure import (  # noqa: F401
-        BrightnessZones,
-        ExposureController,
-        LightMode,
-        highlight_factor,
-    )
-    from src.logging_config import configure_logging, get_logger
-    from src.system_monitor import SystemMonitor
-except ImportError:
-    from capture_image import CameraConfig, ImageCapture
-    from exposure import ExposureController, LightMode
-    from logging_config import configure_logging, get_logger
-
-    try:
-        from database import CaptureDatabase
-    except ImportError:
-        CaptureDatabase = None  # Database module not available
-
-    try:
-        from system_monitor import SystemMonitor
-    except ImportError:
-        SystemMonitor = None  # System monitor not available
+# BrightnessZones and highlight_factor are re-exported for callers and
+# tests that still import them from here.
+from raspilapse.camera.exposure import (  # noqa: F401
+    BrightnessZones,
+    ExposureController,
+    LightMode,
+    highlight_factor,
+)
+from raspilapse.logging_setup import configure_logging, get_logger
+from raspilapse.storage.database import CaptureDatabase
+from raspilapse.system import SystemMonitor
 
 # Initialize logger
 logger = get_logger("auto_timelapse")

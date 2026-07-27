@@ -10,9 +10,7 @@ Tests the daily timelapse runner including:
 - Main CLI function
 """
 
-import os
 import shutil
-import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -21,10 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from daily_timelapse import (
+from raspilapse.video.daily import (
     find_keogram_file,
     find_video_file,
     load_config,
@@ -316,7 +311,7 @@ class TestMainCLI:
             ],
         )
 
-        with patch("daily_timelapse.subprocess.run") as mock_run:
+        with patch("raspilapse.video.daily.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             main()
 
@@ -436,7 +431,7 @@ class TestMainCLI:
             ],
         )
 
-        with patch("daily_timelapse.subprocess.run") as mock_run:
+        with patch("raspilapse.video.daily.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1)  # Failure
 
             result = main()
@@ -459,10 +454,10 @@ class TestMainCLI:
             ],
         )
 
-        with patch("daily_timelapse.subprocess.run") as mock_run:
+        with patch("raspilapse.video.daily.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=2)  # nothing to render
 
-            with patch("daily_timelapse.UploadService") as mock_upload:
+            with patch("raspilapse.video.daily.UploadService") as mock_upload:
                 result = main()
 
             # No upload should be attempted when there is no video
@@ -565,7 +560,7 @@ class TestMainCLI:
         )
 
         # Mock UploadService since the code now uses it instead of direct requests
-        with patch("daily_timelapse.UploadService") as mock_upload_service_class:
+        with patch("raspilapse.video.daily.UploadService") as mock_upload_service_class:
             mock_service = MagicMock()
             mock_upload_service_class.return_value = mock_service
             # Simulate upload failure
@@ -680,7 +675,7 @@ class TestCompleteWorkflow:
             ],
         )
 
-        with patch("daily_timelapse.subprocess.run") as mock_run:
+        with patch("raspilapse.video.daily.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
 
             result = main()

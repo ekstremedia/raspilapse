@@ -6,16 +6,12 @@ existed twice before this module, with quietly different defaults (1h vs 24h,
 both tools' output.
 """
 
-import os
-import sys
 from datetime import timedelta
 
 import pytest
 import yaml
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.config_utils import (  # noqa: E402
+from raspilapse.config import (  # noqa: E402
     PROJECT_ROOT,
     format_duration,
     get_db_path,

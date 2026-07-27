@@ -15,9 +15,9 @@
 
 **BEFORE SUBMITTING, VERIFY:**
 
-- [ ] ✅ **Code formatted with Black** (`make format` or `black src/ tests/ --line-length=100`)
+- [ ] ✅ **Code formatted with Black** (`make format` or `black raspilapse/ tests/ --line-length=100`)
 - [ ] ✅ **All tests pass** (`make test` or `python3 -m pytest tests/ -v`)
-- [ ] ✅ **Black check passes** (`make check` or `black --check src/ tests/`)
+- [ ] ✅ **Black check passes** (`make check` or `black --check raspilapse/ tests/`)
 - [ ] 📝 Code has docstrings and comments where needed
 - [ ] 🧪 Added tests for new features (if applicable)
 - [ ] 📖 Updated documentation (if needed)
@@ -40,5 +40,5 @@
 **Did you format your code with Black?** ← Most common CI failure!
 
 ```bash
-make format  # or: black src/ tests/ --line-length=100
+make format  # or: black raspilapse/ tests/ --line-length=100
 ```

@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 EXAMPLE = PROJECT_ROOT / "config" / "config.example.yml"
-CODE_DIRS = (PROJECT_ROOT / "src", PROJECT_ROOT / "scripts")
+CODE_DIRS = (PROJECT_ROOT / "raspilapse", PROJECT_ROOT / "scripts")
 
 # Keys that are read dynamically or only by external consumers, so the string
 # never appears literally in this repo. Each needs a reason.
@@ -30,7 +30,7 @@ ALLOWED_UNUSED = {
 # Config the code reads that the example deliberately leaves out.
 ALLOWED_UNDOCUMENTED = {
     # Absent means "keep everything"; the example ships an explicit value.
-    "database.retention_days",
+    "raspilapse.storage.database.retention_days",
 }
 
 

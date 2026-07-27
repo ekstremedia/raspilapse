@@ -15,7 +15,6 @@ Exponential backoff: 5min, 10min, 20min, 40min, 80min... capped at 24h
 
 import os
 import sqlite3
-import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,17 +29,8 @@ try:
 except ImportError:  # pragma: no cover - exercised via patching in tests
     MultipartEncoder = None
 
-# Add project root to path for imports
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-try:
-    from src.database import apply_schema
-    from src.logging_config import get_logger
-except ImportError:
-    from database import apply_schema
-    from logging_config import get_logger
+from raspilapse.logging_setup import get_logger
+from raspilapse.storage.database import apply_schema
 
 # Exponential backoff settings
 BASE_RETRY_DELAY_MINUTES = 5

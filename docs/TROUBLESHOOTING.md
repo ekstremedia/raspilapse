@@ -4,7 +4,7 @@ Start here:
 
 ```bash
 ./scripts/install.sh --check      # dependencies and config, changes nothing
-python3 src/status.py             # service state, config summary, recent captures
+python3 -m raspilapse.cli.status             # service state, config summary, recent captures
 tail -f logs/auto_timelapse.log   # what it is doing right now
 systemctl status raspilapse
 ```
@@ -107,7 +107,7 @@ python3 scripts/db_graphs.py 24h    # then look at graphs/brightness.png
 ```bash
 systemctl status raspilapse-daily-video
 systemctl list-timers 'raspilapse-*'
-python3 src/daily_timelapse.py --date 2026-07-25   # run it by hand
+python3 -m raspilapse.cli.daily --date 2026-07-25   # run it by hand
 ```
 
 **"No images for &lt;date&gt;"** is not a failure — it exits 0. The camera was
@@ -119,14 +119,14 @@ off, or cleanup already removed that day's frames.
 **Uploads are queued and never sent.**
 
 ```bash
-python3 src/retry_uploads.py --status
+python3 -m raspilapse.cli.retry_uploads --status
 ```
 
 Rows sitting at `pending` with `[FILE MISSING]` have outlived their source
 video. Clear them:
 
 ```bash
-python3 src/retry_uploads.py --purge-missing
+python3 -m raspilapse.cli.retry_uploads --purge-missing
 ```
 
 If `video_upload.url` or `api_key` is empty, the retry service says so and exits
@@ -139,7 +139,7 @@ If `video_upload.url` or `api_key` is empty, the retry service says so and exits
 ```bash
 df -h
 du -sh /var/www/html/images logs data
-python3 src/database.py --stats
+python3 -m raspilapse.cli.db --stats
 journalctl --disk-usage
 ```
 
@@ -158,8 +158,8 @@ Reclaiming space after a large prune needs an explicit vacuum, which is slow and
 needs free disk equal to the database size:
 
 ```bash
-python3 src/database.py --prune
-python3 src/database.py --vacuum
+python3 -m raspilapse.cli.db --prune
+python3 -m raspilapse.cli.db --vacuum
 ```
 
 The journal is capped at 200 MB by `systemd/journald-raspilapse.conf`, installed

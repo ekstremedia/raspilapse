@@ -1,14 +1,9 @@
 """Tests for colors module."""
 
-import sys
 from io import StringIO
-from pathlib import Path
 from unittest.mock import patch
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from colors import Colors, print_info, print_section
+from raspilapse.console import Colors, print_info, print_section
 
 
 class TestColorsConstants:

@@ -16,10 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
-try:
-    from src.logging_config import get_logger
-except ImportError:
-    from logging_config import get_logger
+from raspilapse.logging_setup import get_logger
 
 logger = get_logger("weather")
 

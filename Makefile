@@ -17,11 +17,11 @@ help:
 
 format:
 	@echo "🎨 Formatting code with Black..."
-	black src/ scripts/ tests/
+	black raspilapse/ scripts/ tests/
 
 check:
 	@echo "✅ Checking code formatting..."
-	black --check src/ scripts/ tests/
+	black --check raspilapse/ scripts/ tests/
 
 test:
 	@echo "🧪 Running tests..."
@@ -29,11 +29,11 @@ test:
 
 test-cov:
 	@echo "📊 Running tests with coverage..."
-	python3 -m pytest tests/ -v --cov=src --cov-report=term-missing --cov-report=xml
+	python3 -m pytest tests/ -v --cov=raspilapse --cov-report=term-missing --cov-report=xml
 
 lint:
 	@echo "🔍 Linting code..."
-	ruff check src/ scripts/ tests/
+	ruff check raspilapse/ scripts/ tests/
 
 all: format lint check test
 	@echo "✅ All checks passed! Ready to commit."

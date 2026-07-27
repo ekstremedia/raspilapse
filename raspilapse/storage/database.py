@@ -10,7 +10,7 @@ the lux, brightness and weather history the graphs are built from. Only
 image_path goes stale.
 
 Usage:
-    from src.database import CaptureDatabase
+    from raspilapse.storage.database import CaptureDatabase
 
     db = CaptureDatabase(config)
     db.store_capture(image_path, metadata, mode, lux, brightness_metrics, weather_data)
@@ -29,20 +29,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 # Handle imports for both module and script execution
-try:
-    from src.logging_config import configure_logging, get_logger
-except ImportError:
-    try:
-        from logging_config import configure_logging, get_logger
-    except ImportError:
-        import logging
-
-        def get_logger(name):
-            return logging.getLogger(name)
-
-        def configure_logging(config_path=None):
-            pass
-
+from raspilapse.logging_setup import configure_logging, get_logger
 
 logger = get_logger("database")
 

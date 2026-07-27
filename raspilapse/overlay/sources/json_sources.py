@@ -14,10 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-try:
-    from src.logging_config import get_logger
-except ImportError:
-    from logging_config import get_logger
+from raspilapse.logging_setup import get_logger
 
 logger = get_logger("overlay")
 

@@ -9,18 +9,15 @@ own job -- lifecycle, scheduling and the wiring between the two.
 """
 
 import os
-import sys
 import tempfile
 
 import pytest
 import yaml
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.auto_timelapse import AdaptiveTimelapse  # noqa: E402
-from src.exposure import (
+from raspilapse.camera.exposure import (
     LightMode,
 )  # noqa: E402,F401
+from raspilapse.daemon import AdaptiveTimelapse  # noqa: E402
 
 
 @pytest.fixture
@@ -983,7 +980,7 @@ class TestHighlightFactor:
     """The pure highlight-headroom curve."""
 
     def test_none_and_safe_return_exactly_one(self):
-        from src.auto_timelapse import highlight_factor
+        from raspilapse.daemon import highlight_factor
 
         assert highlight_factor(None) == 1.0
         assert highlight_factor(0) == 1.0
@@ -993,20 +990,20 @@ class TestHighlightFactor:
         assert highlight_factor(200) == 1.0
 
     def test_monotonically_decreasing(self):
-        from src.auto_timelapse import highlight_factor
+        from raspilapse.daemon import highlight_factor
 
         values = [highlight_factor(p) for p in range(200, 256)]
         assert all(a >= b for a, b in zip(values, values[1:]))
 
     def test_never_below_floor(self):
-        from src.auto_timelapse import highlight_factor
+        from raspilapse.daemon import highlight_factor
 
         assert highlight_factor(255) >= 0.70
         assert highlight_factor(255, floor=0.5) >= 0.5
         assert highlight_factor(1000) >= 0.70
 
     def test_thresholds_are_configurable(self):
-        from src.auto_timelapse import highlight_factor
+        from raspilapse.daemon import highlight_factor
 
         assert highlight_factor(210, safe=220) == 1.0
         assert highlight_factor(210, safe=200) < 1.0
@@ -1016,7 +1013,7 @@ class TestHighlightFactor:
 
         A logger.warning() in here was 742 of 777 lines in the live log.
         """
-        from src.auto_timelapse import highlight_factor
+        from raspilapse.daemon import highlight_factor
 
         with caplog.at_level("DEBUG"):
             highlight_factor(255)
@@ -1152,7 +1149,7 @@ class TestPartialSeedResilience:
         reach an interpolation with a zero-width band. Asserted rather than
         assumed, because it is the kind of invariant a later edit could break.
         """
-        from src.auto_timelapse import highlight_factor
+        from raspilapse.daemon import highlight_factor
 
         for safe in range(0, 260, 20):
             for warning in range(0, 260, 20):
@@ -1186,7 +1183,7 @@ class TestBrightnessZones:
 
     def test_brightness_zones_defined(self):
         """Test that BrightnessZones class is properly defined."""
-        from src.auto_timelapse import BrightnessZones
+        from raspilapse.daemon import BrightnessZones
 
         assert BrightnessZones.EMERGENCY_HIGH == 180
         assert BrightnessZones.WARNING_HIGH == 160
@@ -1196,7 +1193,7 @@ class TestBrightnessZones:
 
     def test_zones_are_ordered(self):
         """The landmarks must stay monotonic for the mode override to make sense."""
-        from src.auto_timelapse import BrightnessZones
+        from raspilapse.daemon import BrightnessZones
 
         assert (
             BrightnessZones.CRITICAL_LOW
@@ -1235,14 +1232,14 @@ class TestHybridModeDetection:
 
         (tmp_path / "output").mkdir(exist_ok=True)
 
-        from src.auto_timelapse import AdaptiveTimelapse
+        from raspilapse.daemon import AdaptiveTimelapse
 
         timelapse = AdaptiveTimelapse(str(config_path))
         return timelapse
 
     def test_standard_night_mode(self, timelapse):
         """Test standard night mode detection."""
-        from src.auto_timelapse import LightMode
+        from raspilapse.daemon import LightMode
 
         # Low lux, no brightness data
         timelapse.exposure._last_brightness = None
@@ -1251,7 +1248,7 @@ class TestHybridModeDetection:
 
     def test_standard_day_mode(self, timelapse):
         """Test standard day mode detection."""
-        from src.auto_timelapse import LightMode
+        from raspilapse.daemon import LightMode
 
         # High lux, no brightness data
         timelapse.exposure._last_brightness = None
@@ -1260,7 +1257,7 @@ class TestHybridModeDetection:
 
     def test_standard_transition_mode(self, timelapse):
         """Test standard transition mode detection."""
-        from src.auto_timelapse import LightMode
+        from raspilapse.daemon import LightMode
 
         # Mid lux, no brightness data
         timelapse.exposure._last_brightness = None
@@ -1269,7 +1266,7 @@ class TestHybridModeDetection:
 
     def test_night_mode_overexposed_override(self, timelapse):
         """Test hybrid override: night mode but overexposed brightness."""
-        from src.auto_timelapse import LightMode
+        from raspilapse.daemon import LightMode
 
         # Low lux (night), but high brightness (overexposed)
         timelapse.exposure._last_brightness = 180.0
@@ -1280,7 +1277,7 @@ class TestHybridModeDetection:
 
     def test_day_mode_underexposed_override(self, timelapse):
         """Test hybrid override: day mode but underexposed brightness."""
-        from src.auto_timelapse import LightMode
+        from raspilapse.daemon import LightMode
 
         # High lux (day), but low brightness (underexposed)
         timelapse.exposure._last_brightness = 70.0
@@ -1298,14 +1295,14 @@ class TestHybridModeDetection:
         unwound the entire test-shot block -- mode, hysteresis, WB seeding and
         camera settings with it -- on the first frame after every restart.
         """
-        from src.auto_timelapse import LightMode
+        from raspilapse.daemon import LightMode
 
         assert timelapse.exposure.determine_mode(3.5, None, True) == LightMode.DAY
         assert timelapse.exposure.determine_mode(3.5, -2.4, True) == LightMode.DAY
 
     def test_no_override_when_brightness_matches_mode(self, timelapse):
         """Test no override when brightness matches the lux-based mode."""
-        from src.auto_timelapse import LightMode
+        from raspilapse.daemon import LightMode
 
         # Night mode with appropriate brightness (dark)
         timelapse.exposure._last_brightness = 100.0
@@ -1346,7 +1343,7 @@ class TestNightModeGainReduction:
 
         (tmp_path / "output").mkdir(exist_ok=True)
 
-        from src.auto_timelapse import AdaptiveTimelapse
+        from raspilapse.daemon import AdaptiveTimelapse
 
         timelapse = AdaptiveTimelapse(str(config_path))
         return timelapse
@@ -1417,7 +1414,7 @@ class TestEnteringNightThrottle:
 
         (tmp_path / "output").mkdir(exist_ok=True)
 
-        from src.auto_timelapse import AdaptiveTimelapse
+        from raspilapse.daemon import AdaptiveTimelapse
 
         timelapse = AdaptiveTimelapse(str(config_path))
         return timelapse

@@ -1,20 +1,15 @@
 """Tests for status display module."""
 
 import shutil
-import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pytest
 import yaml
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-import pytest
-
-from status import Colors, StatusDisplay
+from raspilapse.cli.status import Colors, StatusDisplay
 
 
 @pytest.fixture
@@ -321,7 +316,7 @@ def test_display_full_status(temp_config, capsys):
 
 def test_main_function():
     """Test main function can be imported."""
-    from status import main
+    from raspilapse.cli.status import main
 
     assert callable(main)
 
@@ -329,7 +324,7 @@ def test_main_function():
 def test_main_with_config(temp_config):
     """Test main function with custom config."""
     config_path, _ = temp_config
-    from status import main
+    from raspilapse.cli.status import main
 
     with patch("sys.argv", ["status.py", "-c", config_path]):
         with patch.object(StatusDisplay, "display") as mock_display:
@@ -340,7 +335,7 @@ def test_main_with_config(temp_config):
 def test_main_keyboard_interrupt(temp_config):
     """Test main function handles keyboard interrupt."""
     config_path, _ = temp_config
-    from status import main
+    from raspilapse.cli.status import main
 
     with patch("sys.argv", ["status.py", "-c", config_path]):
         with patch.object(StatusDisplay, "display") as mock_display:
@@ -354,7 +349,7 @@ def test_main_keyboard_interrupt(temp_config):
 def test_main_with_error(temp_config):
     """Test main function handles errors."""
     config_path, _ = temp_config
-    from status import main
+    from raspilapse.cli.status import main
 
     with patch("sys.argv", ["status.py", "-c", config_path]):
         with patch.object(StatusDisplay, "display") as mock_display:

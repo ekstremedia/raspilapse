@@ -25,7 +25,7 @@ from matplotlib.ticker import FuncFormatter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config_utils import get_db_path  # noqa: E402,F401
+from raspilapse.config import get_db_path  # noqa: E402,F401
 
 
 def fetch_daily_lux_data(db_path: str, days: int = 14) -> dict:

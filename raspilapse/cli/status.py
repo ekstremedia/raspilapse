@@ -19,9 +19,9 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
-    from src.colors import Colors
+    from raspilapse.console import Colors
 except ModuleNotFoundError:
-    from colors import Colors
+    from raspilapse.console import Colors
 
 
 class StatusDisplay:

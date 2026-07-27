@@ -3,10 +3,10 @@
 Retry Uploads - Process the upload retry queue.
 
 Usage:
-    python3 src/retry_uploads.py                  # Process queue (respects backoff timing)
-    python3 src/retry_uploads.py --force          # Retry all pending, ignore backoff
-    python3 src/retry_uploads.py --status         # Show queue status only
-    python3 src/retry_uploads.py --purge-missing  # Cancel rows whose video is gone
+    raspilapse-retry-uploads                  # Process queue (respects backoff timing)
+    raspilapse-retry-uploads --force          # Retry all pending, ignore backoff
+    raspilapse-retry-uploads --status         # Show queue status only
+    raspilapse-retry-uploads --purge-missing  # Cancel rows whose video is gone
 """
 
 import argparse
@@ -16,13 +16,8 @@ from pathlib import Path
 
 import yaml
 
-# Add project root to path for imports
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-from src.config_utils import load_config
-from src.upload_service import UploadService
+from raspilapse.config import PROJECT_ROOT, load_config
+from raspilapse.storage.upload import UploadService
 
 
 def main():
@@ -70,8 +65,11 @@ Examples:
 
     args = parser.parse_args()
 
-    # Change to project directory
-    os.chdir(project_root)
+    # Relative paths in the config -- the database, the log directory -- are
+    # resolved against the working directory, so this has to run from the
+    # project root regardless of where the timer invoked it from. It used to
+    # derive the same path from a sys.path bootstrap that no longer exists.
+    os.chdir(PROJECT_ROOT)
 
     # Load configuration
     try:

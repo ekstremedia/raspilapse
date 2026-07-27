@@ -150,8 +150,8 @@ def plot_gradient_line(ax, x_data, y_data, linewidth=2.5):
     ax.autoscale()
 
 
-from src.config_utils import format_duration as _format_duration  # noqa: E402
-from src.config_utils import (
+from raspilapse.config import format_duration as _format_duration  # noqa: E402
+from raspilapse.config import (
     get_db_path,  # noqa: E402
     parse_time_arg_or_exit,  # noqa: E402
 )

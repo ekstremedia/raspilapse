@@ -9,12 +9,8 @@ from typing import Dict, Optional, Tuple
 import yaml
 
 # Handle imports for both module and script execution
-try:
-    from src.logging_config import configure_logging, get_logger
-    from src.overlay import ImageOverlay
-except ImportError:
-    from logging_config import configure_logging, get_logger
-    from overlay import ImageOverlay
+from raspilapse.logging_setup import configure_logging, get_logger
+from raspilapse.overlay.render import ImageOverlay
 
 # Initialize logger
 logger = get_logger("capture_image")

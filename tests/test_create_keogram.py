@@ -12,9 +12,7 @@ Tests the keogram and slitscan generation functionality including:
 """
 
 import logging
-import os
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -22,10 +20,7 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from create_keogram import (
+from raspilapse.video.keogram import (
     Colors,
     create_keogram,
     create_slitscan,

@@ -48,11 +48,12 @@ line length 100 (enforced by black and ruff via `pyproject.toml`).
 
 | Path | Contents |
 |------|----------|
-| `src/` | Application code. Every module is importable both as `src.x` and as bare `x` — the systemd units run scripts directly, so `sys.path[0]` is `src/`. |
+| `raspilapse/` | Application code, grouped by what it talks to: `camera/`, `overlay/`, `video/`, `storage/`, `cli/`. One import path per module — the units run `python3 -m raspilapse.cli.x` from the project directory. |
 | `scripts/` | Installer and operator tools (shell + standalone Python) |
 | `systemd/` | Unit templates (`*.in`, substituted by `scripts/install.sh`) |
 | `config/` | `config.example.yml` is the documented schema; `config.yml` is gitignored |
-| `tests/` | pytest suite, one module per `src/` module (`__version__.py` is covered by `test_version.py`) |
+| `tests/` | pytest suite, one module per application module (`__version__.py` is covered by `test_version.py`) |
+| `tests/replay/` | Golden-master fixtures for the exposure controller. `mutation_check.py` proves they can fail; read its docstring before touching a golden file. |
 | `docs/` | User documentation |
 
 Never commit `config/config.yml` — it holds API keys. `.gitignore` covers it,
@@ -62,7 +63,7 @@ but check `git status` before you push.
 
 Maintainers only.
 
-1. `src/__version__.py` is the single source of truth for the version.
+1. `raspilapse/__version__.py` is the single source of truth for the version.
    `pyproject.toml` reads it dynamically; update `CITATION.cff` by hand.
 2. Add a `CHANGELOG.md` entry under a new `## [x.y.z]` heading.
    `tests/test_version.py` asserts these two agree.

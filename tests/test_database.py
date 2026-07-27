@@ -2,7 +2,6 @@
 
 import os
 import sqlite3
-import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -10,9 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.database import CAPTURES_DDL, CaptureDatabase, DatabaseConfig
+from raspilapse.storage.database import CAPTURES_DDL, CaptureDatabase, DatabaseConfig
 
 
 @pytest.fixture
@@ -903,7 +900,7 @@ class TestSchemaSingleSource:
     def test_upload_service_creates_the_v4_index(self, tmp_path):
         # UploadService used to carry its own DDL that predated migration v4,
         # so a database it created first was permanently missing that index.
-        from src.upload_service import UploadService
+        from raspilapse.storage.upload import UploadService
 
         path = tmp_path / "queue.db"
         UploadService({"database": {"path": str(path)}, "video_upload": {}})

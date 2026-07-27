@@ -2,16 +2,13 @@
 
 import json
 import os
-import sys
 import tempfile
 
 import pytest
 import yaml
 from PIL import Image
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.overlay import ImageOverlay, TideData, apply_overlay_to_image
+from raspilapse.overlay.render import ImageOverlay, TideData, apply_overlay_to_image
 
 
 @pytest.fixture

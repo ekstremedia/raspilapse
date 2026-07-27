@@ -24,13 +24,13 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
-    from src.config_utils import load_config
-    from src.logging_config import configure_logging, get_logger
-    from src.upload_service import UploadService
+    from raspilapse.config import load_config
+    from raspilapse.logging_setup import configure_logging, get_logger
+    from raspilapse.storage.upload import UploadService
 except ModuleNotFoundError:
-    from config_utils import load_config
-    from logging_config import configure_logging, get_logger
-    from upload_service import UploadService
+    from raspilapse.config import load_config
+    from raspilapse.logging_setup import configure_logging, get_logger
+    from raspilapse.storage.upload import UploadService
 
 
 def _find_dated_file(video_dir: Path, patterns: list, date_str: str) -> Path:

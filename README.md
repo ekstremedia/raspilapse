@@ -47,7 +47,7 @@ Check everything is in place before installing any services:
 Take one frame to confirm the camera works:
 
 ```bash
-python3 src/auto_timelapse.py --test
+python3 -m raspilapse.cli.capture --test
 ```
 
 Then install the systemd units:
@@ -141,19 +141,25 @@ See [docs/EXPOSURE.md](docs/EXPOSURE.md) for the details.
 ## Usage
 
 ```bash
-python3 src/auto_timelapse.py --test     # one frame, then exit
-python3 src/status.py                    # service state, config summary, recent captures
-python3 src/capture_image.py             # single capture, no adaptive logic
+python3 -m raspilapse.cli.capture --test           # one frame, then exit
+python3 -m raspilapse.cli.status                   # service state, config, recent captures
+python3 -m raspilapse.cli.snapshot                 # single capture, no adaptive logic
 
-python3 src/make_timelapse.py            # video for the configured window
-python3 src/make_timelapse.py --start 07:00 --end 15:00 --today
-python3 src/daily_timelapse.py --date 2026-07-25   # video + keogram + upload
+python3 -m raspilapse.cli.timelapse                # video for the configured window
+python3 -m raspilapse.cli.timelapse --start 07:00 --end 15:00 --today
+python3 -m raspilapse.cli.daily --date 2026-07-25  # video + keogram + upload
 
-python3 scripts/db_stats.py 24h          # capture statistics
-python3 scripts/db_graphs.py 7d          # graphs into graphs/
-python3 src/database.py --stats          # database size and retention
-python3 src/database.py --prune --dry-run
+python3 scripts/db_stats.py 24h                    # capture statistics
+python3 scripts/db_graphs.py 7d                    # graphs into graphs/
+python3 -m raspilapse.cli.db --stats               # database size and retention
+python3 -m raspilapse.cli.db --prune --dry-run
 ```
+
+The commands run from the project directory. `pip install -e .` additionally
+puts them on `PATH` as `raspilapse-capture`, `raspilapse-status` and so on, but
+it is not required — and on Raspberry Pi OS a virtualenv is usually the wrong
+move, because `picamera2` comes from apt and a venv's own numpy will shadow the
+one it was built against.
 
 Logs are in `logs/<script>.log`. Under systemd the application log goes there
 rather than to the journal, so lines are not stored twice; `journalctl -u
@@ -161,17 +167,32 @@ raspilapse` still shows systemd and libcamera output.
 
 ## Layout
 
+Grouped by what each part talks to. Only `camera/` and `config.py` are needed
+to take a photo; everything else is a feature you can leave uninstalled.
+
 ```
-src/            auto_timelapse.py   capture loop, scheduling, lifecycle
-                exposure.py         all exposure decisions and their state
-                capture_image.py    Picamera2 wrapper
-                overlay.py          burned-in overlay
-                database.py         SQLite storage + maintenance CLI
-                make_timelapse.py   ffmpeg video assembly
-                daily_timelapse.py  daily video + upload
-scripts/        install.sh, cleanup, watchdog, graph and stats tools
-systemd/        unit templates, rendered by install.sh
-config/         config.example.yml is the schema
+raspilapse/
+  config.py           configuration loading
+  logging_setup.py    logging
+  daemon.py           capture loop, scheduling, lifecycle
+  camera/
+    capture.py        Picamera2 wrapper
+    exposure.py       all exposure decisions and their state
+  overlay/
+    render.py         burned-in overlay
+    layout.py         text placement and measurement
+    sources/          weather, ships, tide, aurora
+  video/
+    timelapse.py      ffmpeg video assembly
+    keogram.py        keogram and slitscan
+    daily.py          daily video + upload
+  storage/
+    database.py       SQLite storage + maintenance
+    upload.py         upload service and retry queue
+  cli/                one module per console command
+scripts/              install.sh, cleanup, watchdog, graph and stats tools
+systemd/              unit templates, rendered by install.sh
+config/               config.example.yml is the schema
 ```
 
 ## Documentation
@@ -192,7 +213,7 @@ config/         config.example.yml is the schema
 
 ```bash
 ./scripts/install.sh --check      # dependencies and config
-python3 src/status.py             # is it capturing?
+python3 -m raspilapse.cli.status             # is it capturing?
 tail -f logs/auto_timelapse.log   # what is it doing?
 rpicam-still -o /tmp/test.jpg     # is the camera alive at all?
 ```

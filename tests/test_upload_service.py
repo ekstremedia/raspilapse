@@ -1,7 +1,6 @@
 """Tests for upload_service module."""
 
 import os
-import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,9 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.upload_service import MAX_RETRY_DELAY_MINUTES, UploadService
+from raspilapse.storage.upload import MAX_RETRY_DELAY_MINUTES, UploadService
 
 
 @pytest.fixture
@@ -481,7 +478,7 @@ class TestUploadToServer:
         """Test successful upload."""
         service = UploadService(upload_config)
 
-        with patch("src.upload_service.requests.post") as mock_post:
+        with patch("raspilapse.storage.upload.requests.post") as mock_post:
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.text = '{"id": 123, "status": "uploaded"}'
@@ -502,8 +499,8 @@ class TestUploadToServer:
         """Without requests-toolbelt, fall back to requests' own multipart encoder."""
         service = UploadService(upload_config)
 
-        with patch("src.upload_service.MultipartEncoder", None):
-            with patch("src.upload_service.requests.post") as mock_post:
+        with patch("raspilapse.storage.upload.MultipartEncoder", None):
+            with patch("raspilapse.storage.upload.requests.post") as mock_post:
                 mock_response = Mock()
                 mock_response.status_code = 200
                 mock_response.text = "ok"
@@ -530,7 +527,7 @@ class TestUploadToServer:
         """With requests-toolbelt, the encoder's Content-Type must be passed through."""
         service = UploadService(upload_config)
 
-        with patch("src.upload_service.requests.post") as mock_post:
+        with patch("raspilapse.storage.upload.requests.post") as mock_post:
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.text = "ok"
@@ -551,7 +548,7 @@ class TestUploadToServer:
         """Test upload failure with HTTP error."""
         service = UploadService(upload_config)
 
-        with patch("src.upload_service.requests.post") as mock_post:
+        with patch("raspilapse.storage.upload.requests.post") as mock_post:
             mock_response = Mock()
             mock_response.status_code = 500
             mock_response.text = "Internal Server Error"
@@ -572,7 +569,7 @@ class TestUploadToServer:
         """Test upload failure with network error."""
         service = UploadService(upload_config)
 
-        with patch("src.upload_service.requests.post") as mock_post:
+        with patch("raspilapse.storage.upload.requests.post") as mock_post:
             import requests
 
             mock_post.side_effect = requests.exceptions.ConnectionError("DNS resolution failed")
@@ -649,7 +646,7 @@ class TestRetrySingleUpload:
 
         queue_id = service.queue_upload("/no/such/video.mp4", None, None, "2026-01-21")
 
-        with patch("src.upload_service.requests.post") as mock_post:
+        with patch("raspilapse.storage.upload.requests.post") as mock_post:
             success, message = service.retry_single_upload(queue_id, force=True)
 
         mock_post.assert_not_called()
@@ -693,7 +690,7 @@ class TestRetrySingleUpload:
             )
             conn.commit()
 
-        with patch("src.upload_service.requests.post") as mock_post:
+        with patch("raspilapse.storage.upload.requests.post") as mock_post:
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.text = '{"status": "ok"}'
@@ -751,7 +748,7 @@ class TestProcessRetryQueue:
                 )
                 conn.commit()
 
-        with patch("src.upload_service.requests.post") as mock_post:
+        with patch("raspilapse.storage.upload.requests.post") as mock_post:
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.text = '{"status": "ok"}'
@@ -768,7 +765,7 @@ class TestProcessRetryQueue:
         for i in range(3):
             service.queue_upload(temp_video_file, None, None, f"2026-01-{20+i}")
 
-        with patch("src.upload_service.requests.post") as mock_post:
+        with patch("raspilapse.storage.upload.requests.post") as mock_post:
             # First succeeds, second fails, third succeeds
             mock_post.side_effect = [
                 Mock(status_code=200, text='{"status": "ok"}'),
@@ -879,7 +876,7 @@ class TestResetStaleUploadingRows:
         queue_id = service.queue_upload(temp_video_file, None, None, "2026-05-23")
         self._set_uploading(service, queue_id, "-2 hours")
 
-        with patch("src.upload_service.requests.post") as mock_post:
+        with patch("raspilapse.storage.upload.requests.post") as mock_post:
             mock_post.return_value = Mock(status_code=200, text='{"status": "ok"}')
             results = service.process_retry_queue(force=True)
 
