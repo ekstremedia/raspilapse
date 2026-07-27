@@ -40,12 +40,12 @@ classifiers = [
 # to install them separately.
 dependencies = [
     "PyYAML>=6.0",
-    "Pillow>=10.0.0",
+    "Pillow>=10.0.1",
     "numpy>=1.21.0",
 ]
 
 [project.optional-dependencies]
-# Sun elevation: a recorded diagnostic and the polar-day override. apt ships
+# Sun elevation: recorded per frame, read only by the graphs. apt ships
 # astral 1.6, whose API predates LocationInfo, hence the pip floor.
 sun = ["astral>=3.2"]
 # Uploading the daily video. requests-toolbelt streams the multipart body

@@ -144,8 +144,8 @@ Without it the code falls back to English and logs a warning.
 metadata JSON:
 
 ```bash
-python3 -m raspilapse.cli.overlay /var/www/html/images/2026/07/27/*.jpg --output-dir /tmp/out
-python3 -m raspilapse.cli.overlay frame.jpg --overwrite
+python3 -m raspilapse.cli.apply_overlay /var/www/html/images/2026/07/27/*.jpg --output-dir /tmp/out
+python3 -m raspilapse.cli.apply_overlay frame.jpg --overwrite
 ```
 
 Useful for trying a template change without waiting for the next capture.

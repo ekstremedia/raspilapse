@@ -89,7 +89,10 @@ def scene_luminance(sequence):
         exposure_us = metadata.get("ExposureTime")
         gain = metadata.get("AnalogueGain") or 1.0
 
-        if not brightness or not exposure_us:
+        # `is None`, not falsy. A frame measuring 0.0 is a measurement, and
+        # dropping it would exclude the darkest frames of deep_dark and
+        # crashing_light from exactly the comparison used to judge the ladder.
+        if brightness is None or not exposure_us:
             out.append(None)
             continue
 
@@ -306,6 +309,12 @@ def main() -> int:
     ):
         old_values = [r[old_key] for r in results if not math.isnan(r[old_key])]
         new_values = [r[new_key] for r in results if not math.isnan(r[new_key])]
+        # A sequence no longer than WARMUP_FRAMES scores NaN on everything, and
+        # fmean raises on an empty list -- so a single short sequence would end
+        # in a StatisticsError instead of a summary.
+        if not old_values or not new_values:
+            print(f"  {label:18} no frames past warmup to compare")
+            continue
         wins = sum(
             1
             for r in results

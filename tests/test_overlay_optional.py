@@ -27,12 +27,17 @@ PUBLIC_SOURCES = ("weather", "ships", "tide", "aurora", "system_monitor")
 
 @pytest.fixture
 def disabled_config():
-    return {"overlay": {"enabled": False}}
+    # weather pinned off explicitly rather than relying on WeatherData's own
+    # default, so no overlay test can reach the network.
+    return {"overlay": {"enabled": False}, "weather": {"enabled": False}}
 
 
 @pytest.fixture
 def enabled_config():
-    return {"overlay": {"enabled": True, "font": {"family": "default"}}}
+    return {
+        "overlay": {"enabled": True, "font": {"family": "default"}},
+        "weather": {"enabled": False},
+    }
 
 
 def test_disabled_overlay_still_exposes_its_sources(disabled_config):

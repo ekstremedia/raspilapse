@@ -10,6 +10,7 @@ so the reverse would be a circular import at load time.
 
 import os
 import sys
+from copy import deepcopy
 from datetime import timedelta
 from pathlib import Path
 from typing import Dict, Optional, Union
@@ -86,15 +87,18 @@ def merge_defaults(config: Optional[Dict], defaults: Optional[Dict] = None) -> D
     if defaults is None:
         defaults = DEFAULTS
 
-    merged = {
-        key: dict(value) if isinstance(value, dict) else value for key, value in defaults.items()
-    }
+    # deepcopy, not a one-level copy: `dict(value)` leaves a nested default
+    # like camera.resolution aliasing the entry in DEFAULTS, so a caller
+    # mutating its own config would quietly change the defaults every later
+    # load in the process sees. The docstring promises a new dict; this is what
+    # makes that true all the way down.
+    merged = deepcopy(defaults)
 
     for key, value in (config or {}).items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = merge_defaults(value, merged[key])
         else:
-            merged[key] = value
+            merged[key] = deepcopy(value)
     return merged
 
 

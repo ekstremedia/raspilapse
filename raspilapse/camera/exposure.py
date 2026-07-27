@@ -197,7 +197,7 @@ class ExposureController:
             data["applied_gain"] = round(self._gain, 3)
         return data
 
-    def smooth_lux(self, raw_lux: float) -> float:
+    def smooth_lux(self, raw_lux: Optional[float]) -> Optional[float]:
         """Exponential moving average of the measured lux.
 
         Cosmetic. Nothing decides anything from this any more -- it is written

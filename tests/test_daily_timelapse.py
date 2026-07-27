@@ -317,6 +317,7 @@ class TestMainCLI:
             main()
 
         # Should not have called subprocess since --only-upload was used
+        mock_run.assert_not_called()
 
     def test_main_specific_date(self, sample_config, temp_dir, monkeypatch):
         """Test main with specific date."""

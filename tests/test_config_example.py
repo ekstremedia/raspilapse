@@ -38,12 +38,6 @@ ALLOWED_UNUSED = {
     "output.symlink_latest.path",
 }
 
-# Config the code reads that the reference deliberately leaves out.
-ALLOWED_UNDOCUMENTED = {
-    # Absent means "keep everything"; the reference ships an explicit value.
-    "raspilapse.storage.database.retention_days",
-}
-
 # Roots whose subscripts are config lookups. `adaptive_config` and friends are
 # sub-dicts lifted out of the config, so their paths need re-rooting.
 CONFIG_ROOTS = {

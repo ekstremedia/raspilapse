@@ -50,7 +50,7 @@ as unavailable; nothing else changes.
 
 | Install | Buys |
 |---------|------|
-| `pip3 install --break-system-packages 'astral>=3.2'` | sun elevation recorded with each frame, and the polar-day override |
+| `pip3 install --break-system-packages 'astral>=3.2'` | sun elevation recorded with each frame, for the database and the solar graphs |
 | `sudo apt install -y python3-requests python3-requests-toolbelt` | uploading the daily video |
 | `sudo apt install -y python3-matplotlib` | `scripts/db_graphs.py` and `scripts/graph_solar_patterns.py` |
 
@@ -99,9 +99,11 @@ output:
   project_name: "my_camera"           # appears in every filename
 ```
 
-Location matters more than it looks: sun elevation decides when day begins and
-ends, and a wrong location gives wrong boundaries. It is what makes polar summer
-and winter work.
+Location does not affect exposure. It used to: sun elevation selected the
+capture mode, and a wrong location gave wrong day/night boundaries. Exposure now
+works from the measured brightness of the previous frame, so the camera behaves
+the same wherever it is. The coordinates are recorded with each frame and
+plotted by `scripts/graph_solar_patterns.py`, and that is all they do.
 
 If you are writing under a webserver root, create the directory first:
 

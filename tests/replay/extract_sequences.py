@@ -122,7 +122,7 @@ WINDOWS = [
         "stable_day",
         "2026-04-26T11:00:00",
         "2026-04-26T12:00:00",
-        "converged daylight, as a baseline that should barely move",
+        "an ordinary hour of afternoon daylight -- converged, but real: cloud takes the mean from 121 to 174 and back, which is what a baseline for a camera that lives outdoors should look like",
     ),
     (
         "bright_night",

@@ -85,6 +85,11 @@ class Decision:
     raw_lux: Optional[float]
     ladder_position: Optional[float]
     settings: Dict[str, Any]
+    # Read the instant decide() returns. The handover seeding that runs a few
+    # lines later overwrites the controller's shutter, gain and ladder position
+    # from the reference shot's metadata, so asking for diagnostics after it
+    # describes the seed rather than the frame that was about to be taken.
+    diagnostics: Dict[str, Any]
 
 
 class AdaptiveTimelapse:
@@ -521,6 +526,7 @@ class AdaptiveTimelapse:
         mode: str,
         lux: float = None,
         raw_lux: float = None,
+        controller_diagnostics: Dict = None,
     ) -> bool:
         """
         Enrich saved metadata with diagnostic information.
@@ -534,6 +540,8 @@ class AdaptiveTimelapse:
             mode: Current light mode
             lux: Smoothed lux value
             raw_lux: Raw lux value before smoothing
+            controller_diagnostics: What the controller decided, as captured
+                when it decided it rather than read back afterwards
 
         Returns:
             True if successful, False otherwise
@@ -555,12 +563,11 @@ class AdaptiveTimelapse:
                 ),
             }
 
-            # Everything the controller decided, recorded when it decided it.
-            # This used to re-run the whole exposure calculation from scratch.
-            # ladder_position comes from here rather than being passed in: the
-            # loop got it from the controller to begin with, and two sources
-            # for one key meant they could disagree.
-            diagnostics.update(self.exposure.diagnostics())
+            # Everything the controller decided, as it stood when it decided
+            # it. This used to re-run the whole exposure calculation from
+            # scratch, and then -- worse -- to read the controller's live state
+            # after the handover seeding had already moved it.
+            diagnostics.update(controller_diagnostics or {})
 
             # Analyze image brightness
             brightness_analysis = self._analyze_image_brightness(image_path)
@@ -711,6 +718,12 @@ class AdaptiveTimelapse:
             # Not fatal: without a fresh reading the controller keeps the last
             # one, and the colour drifts slowly rather than stopping.
             logger.warning(f"White-balance reference shot failed: {e}")
+            # Record the attempt anyway. Leaving the position untouched keeps
+            # _wants_reference_shot() true, so a persistent failure -- a busy
+            # camera, a permissions problem -- would tear the live camera down
+            # and fail to open a second one on every frame, forever.
+            self._reference_position = self.exposure.ladder_position
+            self._reference_frame = self.frame_count
             return
 
         self._reference_metadata = metadata
@@ -731,16 +744,21 @@ class AdaptiveTimelapse:
         settings = self.exposure.decide()
         mode = self.exposure.last_mode
 
-        self._seed_across_mode_change(mode)
-        self._previous_mode = mode
-
-        return Decision(
+        # Captured here, before _seed_across_mode_change can overwrite the
+        # state they describe. See the note on Decision.diagnostics.
+        decision = Decision(
             mode=mode,
             lux=self.exposure.smoothed_lux,
             raw_lux=self._last_raw_lux,
             ladder_position=self.exposure.ladder_position,
             settings=settings,
+            diagnostics=self.exposure.diagnostics(),
         )
+
+        self._seed_across_mode_change(mode)
+        self._previous_mode = mode
+
+        return decision
 
     def _seed_across_mode_change(self, mode: str) -> None:
         """Hand exposure state across the day/night boundary.
@@ -784,7 +802,10 @@ class AdaptiveTimelapse:
         """
         exposure_us = settings.get("ExposureTime")
         gain = settings.get("AnalogueGain")
-        if not brightness or not exposure_us or not gain:
+
+        # `is None`, not falsy: a frame measuring 0.0 is a real reading of a
+        # very dark scene and should record a lux near zero, not no lux at all.
+        if brightness is None or exposure_us is None or gain is None:
             return None
 
         seconds = exposure_us / 1_000_000
@@ -848,6 +869,7 @@ class AdaptiveTimelapse:
                 mode=decision.mode,
                 lux=decision.lux,
                 raw_lux=decision.raw_lux,
+                controller_diagnostics=decision.diagnostics,
             )
 
         capture_metadata = self._read_capture_metadata(metadata_path)
@@ -951,10 +973,21 @@ class AdaptiveTimelapse:
                     capture = None
 
                 if capture is None:
-                    logger.debug("Initializing camera for timelapse...")
-                    capture = ImageCapture(self.camera_config, post_process=self._overlay)
-                    capture.initialize_camera(manual_controls=decision.settings)
-                    last_mode = decision.mode
+                    try:
+                        logger.debug("Initializing camera for timelapse...")
+                        capture = ImageCapture(self.camera_config, post_process=self._overlay)
+                        capture.initialize_camera(manual_controls=decision.settings)
+                        last_mode = decision.mode
+                    except Exception as e:
+                        # Tolerated like a failed frame rather than fatal. The
+                        # camera is opened and closed once per frame now, so a
+                        # device that is briefly still busy after the previous
+                        # teardown is an ordinary event -- and outside this try
+                        # it would reach the outer handler and stop the daemon.
+                        logger.error(f"Camera initialisation failed: {e}", exc_info=True)
+                        capture = None
+                        time.sleep(min(interval, 5))
+                        continue
 
                 try:
                     image_path, metadata_path = self.capture_frame(

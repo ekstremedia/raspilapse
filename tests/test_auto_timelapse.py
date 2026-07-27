@@ -544,18 +544,21 @@ class TestDiagnosticEnrichment:
     def test_enrich_metadata_with_ladder_position(self, test_config_file):
         """Where on the exposure ladder the frame sat is recorded with it.
 
-        Sourced from the controller rather than passed in by the loop. The two
-        were briefly both, and disagreed: the loop's argument was overwritten
-        by the controller's own value, silently.
+        Passed in as a snapshot taken the instant decide() returned, rather
+        than read back off the controller later. The handover seeding runs
+        between those two moments and overwrites the shutter, gain and ladder
+        position, so reading late described the seed and not the frame.
         """
         import json
 
         timelapse = AdaptiveTimelapse(test_config_file)
         timelapse._sun_elevation = 5.0
 
-        # Put the controller somewhere identifiable on the ladder.
+        # Put the controller somewhere identifiable on the ladder, and take the
+        # diagnostics snapshot the loop takes -- the instant decide() returns.
         timelapse.exposure.seed_from_capture(exposure_time=10.0, analogue_gain=3.0)
         timelapse.exposure.decide()
+        snapshot = timelapse.exposure.diagnostics()
         expected = timelapse.exposure.ladder_position
         assert 0.0 < expected < 1.0, "the seed should be mid-ladder"
 
@@ -575,6 +578,7 @@ class TestDiagnosticEnrichment:
                 image_path,
                 LightMode.TRANSITION,
                 lux=100.0,
+                controller_diagnostics=snapshot,
             )
 
             assert result is True

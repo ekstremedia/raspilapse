@@ -21,11 +21,9 @@ import copy
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from extract_sequences import OUT_DIR, REPLAY_CONFIG  # noqa: E402
-
+from tests.replay.extract_sequences import OUT_DIR, REPLAY_CONFIG  # noqa: E402
 from tests.replay.harness import dump_frames  # noqa: E402
 
 DAY_GAINS = [2.5, 1.6]
@@ -340,7 +338,10 @@ def build():
             "between two levels while its highlights spread wider and wider -- "
             "walking the clipped-pixel fraction through the 3% and 5% "
             "thresholds at a point on the ladder, and in a state of the loop, "
-            "where the resulting rate change is visible"
+            "where the resulting rate change is visible. The clipped fraction "
+            "the controller sees is computed by the harness from the spread of "
+            "each frame, not read from overexposed_percent here -- which is "
+            "why that field is zero throughout and the spread is what sweeps"
         ),
         "config": REPLAY_CONFIG,
         "seed": {"exposure_time": 20.0, "analogue_gain": 1.0, "brightness": 100.0},

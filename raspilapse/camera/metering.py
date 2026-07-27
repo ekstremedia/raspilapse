@@ -215,7 +215,7 @@ class Meter:
         if std >= self._contrast_high:
             return self._base_target
         if std <= self._contrast_low:
-            return min(self._base_target + self._overcast_boost, self._max_target)
+            return min(int(round(self._base_target + self._overcast_boost)), self._max_target)
 
         into = (std - self._contrast_low) / (self._contrast_high - self._contrast_low)
         boosted = self._base_target + self._overcast_boost * (1.0 - into)

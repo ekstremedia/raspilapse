@@ -62,3 +62,41 @@ def test_sequences_exercise_every_mode():
         for frame in load_golden(name)["frames"]:
             seen.add(frame["mode"])
     assert seen == {"day", "transition", "night"}, f"modes covered: {sorted(seen)}"
+
+
+@pytest.mark.parametrize("name", SEQUENCE_NAMES)
+def test_diagnostics_describe_the_frame_they_were_recorded_with(name):
+    """A frame's diagnostics must match the settings it was taken with.
+
+    They did not, on every handover frame. The harness read diagnostics after
+    the day-to-night seeding had already run, and seed_from_metadata overwrites
+    the shutter, gain and ladder position they report -- so the golden recorded
+    the seed rather than the exposure. A frame carrying settings of gain 1.0
+    alongside a reported applied_gain of 5.9 baked that into the baseline, and
+    any later fix to the ordering would have read as a regression against it.
+    """
+    # Both the committed baseline and a fresh replay. Checking only the files
+    # would catch a bad re-recording but not the harness bug that produced it:
+    # reintroducing the ordering fault leaves the files on disk untouched, so
+    # the golden alone stays green while every new recording is wrong.
+    for source, frames in (
+        ("golden", load_golden(name)["frames"]),
+        ("replay", replay(load_sequence(name))),
+    ):
+        for i, frame in enumerate(frames):
+            settings, diagnostics = frame["settings"], frame["diagnostics"]
+
+            # abs=0.001: the diagnostics round gain to three places for the
+            # metadata JSON, so they differ from the raw float in the last one.
+            # The skew this guards against was gain 1.0 against a reported 5.9.
+            assert diagnostics["applied_gain"] == pytest.approx(
+                settings["AnalogueGain"], rel=1e-4, abs=0.001
+            ), f"{name} {source} frame {i}: diagnostics gain disagrees with the settings"
+
+            # abs=1.5 microseconds: ExposureTime is int(seconds * 1e6), a
+            # truncation, while applied_exposure_s is rounded to six places, so
+            # the two legitimately differ in the last microsecond. The skew this
+            # guards against was four orders of magnitude larger.
+            assert diagnostics["applied_exposure_s"] * 1e6 == pytest.approx(
+                settings["ExposureTime"], rel=1e-4, abs=1.5
+            ), f"{name} {source} frame {i}: diagnostics exposure disagrees with the settings"

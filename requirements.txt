@@ -15,12 +15,13 @@ PyYAML>=6.0
 
 # Overlay rendering and keograms; also the lores brightness metering the
 # exposure loop closes on. Both are pulled in by python3-picamera2.
-Pillow>=10.0.0
+Pillow>=10.0.1
 numpy>=1.21.0
 
 # --- everything below is optional; the feature degrades if it is absent ---
 
-# Sun elevation, recorded as a diagnostic and used for the polar-day override.
+# Sun elevation, recorded alongside each frame for the database and the
+# solar graph script. Nothing decides from it.
 # apt ships astral 1.6, whose API predates LocationInfo, so this one really
 # does need pip: pip3 install --break-system-packages 'astral>=3.2'
 astral>=3.2

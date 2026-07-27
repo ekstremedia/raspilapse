@@ -1,15 +1,13 @@
-# Raspilapse Configuration File (Example/Template)
+# Raspilapse configuration reference.
 #
-# IMPORTANT: This is the default configuration template.
-#            Copy this file to config.yml and customize it:
-#            cp config/config.example.yml config/config.yml
+# Every setting there is, annotated, with its default. This is documentation,
+# not a template: do not copy it wholesale. Start from
+# config/config.example.yml and copy across only the blocks you want to change
+# -- everything omitted falls back to raspilapse/config.py.
 #
-# Your config.yml will NOT be tracked by git, so you can safely
-# customize it with your personal settings (API keys, paths, etc.)
+# A test fails if this file documents a key nothing reads, and another fails if
+# the code starts requiring a key with no default.
 
-# Location Settings (for sun position calculation)
-# Used for Polar Day/Night detection at high latitudes (68°N)
-# This enables "Civil Twilight Override" - forces Day mode when sun > -6°
 location:
   # Latitude in decimal degrees (negative for South)
   latitude: 68.7
@@ -167,7 +165,7 @@ video:
   # End time (comment out or set to null to use current time)
   default_end_time: "05:00"
 
-# Adaptive Timelapse Settings (for auto_timelapse.py)
+# Adaptive Timelapse Settings (for raspilapse.cli.capture)
 adaptive_timelapse:
   # Enable adaptive exposure based on light conditions
   enabled: true
@@ -552,7 +550,7 @@ logging:
   # Number of backup log files to keep
   backup_count: 2
 
-# Video Upload Settings (for daily_timelapse.py)
+# Video Upload Settings (for raspilapse.cli.daily)
 video_upload:
   # Enable/disable automatic upload after timelapse creation
   enabled: false
@@ -608,7 +606,7 @@ database:
   # 1 million rows and about 200 MB.
   #
   # Pruning runs from raspilapse-cleanup.timer. Space is only handed back to
-  # the filesystem by an explicit `python3 src/database.py --vacuum`, which is
+  # the filesystem by an explicit `python3 -m raspilapse.cli.db --vacuum`, which is
   # slow and needs free disk equal to the database size.
   retention_days: 180
 

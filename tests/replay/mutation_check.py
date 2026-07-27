@@ -37,10 +37,8 @@ test_metering.py instead.
 """
 
 import argparse
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -195,8 +193,8 @@ MUTATIONS = [
     (
         METERING,
         "overcast full-boost branch",
-        "return min(self._base_target + self._overcast_boost, self._max_target)",
-        "return min(self._base_target + self._overcast_boost - 1, self._max_target)",
+        "return min(int(round(self._base_target + self._overcast_boost)), self._max_target)",
+        "return min(int(round(self._base_target + self._overcast_boost)) - 1, self._max_target)",
     ),
     (
         METERING,
@@ -258,29 +256,28 @@ def main() -> int:
 
     originals = {relative: path.read_text() for relative, path in targets.items()}
 
-    with tempfile.TemporaryDirectory() as tmp:
+    survivors = []
+    try:
+        for relative, description, needle, replacement in MUTATIONS:
+            source = originals[relative]
+            if needle not in source:
+                survivors.append((description, "needle not found -- mutation is stale"))
+                print(f"  STALE    {description}")
+                continue
+
+            targets[relative].write_text(source.replace(needle, replacement, 1))
+            if golden_tests_fail():
+                print(f"  caught   {description}")
+            else:
+                survivors.append((description, "golden tests still passed"))
+                print(f"  SURVIVED {description}")
+            targets[relative].write_text(source)
+    finally:
+        # Restored from the text read at the start, not from a copy on disk:
+        # a temporary-directory backup was kept here for a while and never
+        # read, which only suggested a recovery path that did not exist.
         for relative, path in targets.items():
-            shutil.copy2(path, Path(tmp) / Path(relative).name)
-
-        survivors = []
-        try:
-            for relative, description, needle, replacement in MUTATIONS:
-                source = originals[relative]
-                if needle not in source:
-                    survivors.append((description, "needle not found -- mutation is stale"))
-                    print(f"  STALE    {description}")
-                    continue
-
-                targets[relative].write_text(source.replace(needle, replacement, 1))
-                if golden_tests_fail():
-                    print(f"  caught   {description}")
-                else:
-                    survivors.append((description, "golden tests still passed"))
-                    print(f"  SURVIVED {description}")
-                targets[relative].write_text(source)
-        finally:
-            for relative, path in targets.items():
-                path.write_text(originals[relative])
+            path.write_text(originals[relative])
 
     print()
     if survivors:

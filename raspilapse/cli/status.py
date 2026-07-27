@@ -12,6 +12,7 @@ from typing import Dict, List, Tuple
 
 import yaml
 
+from raspilapse.config import merge_defaults
 from raspilapse.console import Colors
 
 
@@ -23,10 +24,14 @@ class StatusDisplay:
         self.config_path = config_path
         self.config = self._load_config()
 
-    # Kept as a method rather than delegating to config_utils.load_config so the
-    # coloured, user-facing error handling below stays where the user sees it.
+    # Kept as a method rather than delegating wholesale to config.load_config so
+    # the coloured, user-facing error handling below stays where the user sees
+    # it. The defaults are merged all the same: without them this command read
+    # `adaptive["night_mode"]` straight out of the file and died with
+    # `Error: 'night_mode'` against the very config.example.yml the README tells
+    # people to copy.
     def _load_config(self) -> Dict:
-        """Load configuration from YAML file."""
+        """Load configuration from YAML file, filled in from the defaults."""
         config_file = Path(self.config_path)
         if not config_file.exists():
             print(f"{Colors.RED}Configuration file not found: {self.config_path}{Colors.RESET}")
@@ -34,7 +39,7 @@ class StatusDisplay:
 
         try:
             with open(config_file, "r") as f:
-                return yaml.safe_load(f)
+                return merge_defaults(yaml.safe_load(f) or {})
         except yaml.YAMLError as e:
             print(f"{Colors.RED}Failed to parse configuration: {e}{Colors.RESET}")
             sys.exit(1)

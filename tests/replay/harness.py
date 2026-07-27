@@ -18,8 +18,6 @@ than the camera:
 Play that at the controller, and show it the brightness its own choice would
 have produced. See scene_luminance() and observe().
 
-The controller is imported through `load_controller()` rather than a plain
-import so this module works either side of the package move.
 """
 
 import json
@@ -35,39 +33,24 @@ GOLDEN_DIR = Path(__file__).parent / "golden"
 
 
 def load_controller() -> Callable[..., Any]:
-    """Return the ExposureController class from wherever it currently lives."""
-    try:
-        from raspilapse.camera.exposure import ExposureController  # noqa: F401
+    """Return the ExposureController class.
 
-        return ExposureController
-    except ImportError:
-        pass
-    try:
-        from src.exposure import ExposureController
+    Indirect so that record_golden and compare share one import site. It used
+    to fall back to `src.exposure` and a bare `exposure` for the duration of
+    the package move; those paths no longer exist, and keeping them would only
+    turn a real ImportError from a broken transitive import into a confusing
+    one from a module nobody ships.
+    """
+    from raspilapse.camera.exposure import ExposureController
 
-        return ExposureController
-    except ImportError:
-        from exposure import ExposureController
-
-        return ExposureController
+    return ExposureController
 
 
 def load_modes() -> Any:
-    """Return the LightMode constants from wherever they currently live."""
-    try:
-        from raspilapse.camera.exposure import LightMode  # noqa: F401
+    """Return the LightMode constants."""
+    from raspilapse.camera.exposure import LightMode
 
-        return LightMode
-    except ImportError:
-        pass
-    try:
-        from src.exposure import LightMode
-
-        return LightMode
-    except ImportError:
-        from exposure import LightMode
-
-        return LightMode
+    return LightMode
 
 
 def load_sequence(name: str) -> Dict:
@@ -132,7 +115,10 @@ def scene_luminance(frame: Dict) -> Optional[float]:
     exposure_us = metadata.get("ExposureTime")
     gain = metadata.get("AnalogueGain") or 1.0
 
-    if not brightness or not exposure_us:
+    # `is None`, not falsy: a frame that genuinely measured 0.0 is a
+    # measurement, and the darkest frames are exactly the ones the closed loop
+    # most needs to see. This is the same distinction _required_exposure makes.
+    if brightness is None or not exposure_us:
         return None
 
     product = (exposure_us / 1e6) * gain
@@ -212,6 +198,12 @@ def replay(sequence: Dict, controller_cls: Optional[Any] = None) -> List[Dict]:
         settings = controller.decide()
         mode = controller.last_mode
 
+        # Read now, not after the seeding below. seed_from_metadata overwrites
+        # the shutter, gain and ladder position these describe, so a handover
+        # frame would otherwise record the seed rather than the exposure the
+        # frame was taken with -- and every golden would bake that in.
+        diagnostics = _round_floats(controller.diagnostics())
+
         entering_manual = previous_mode == modes.DAY and mode in (
             modes.TRANSITION,
             modes.NIGHT,
@@ -240,7 +232,7 @@ def replay(sequence: Dict, controller_cls: Optional[Any] = None) -> List[Dict]:
                 "smoothed_lux": _round_floats(lux),
                 "measured_brightness": _round_floats(measured, 3),
                 "settings": _round_floats(settings),
-                "diagnostics": _round_floats(controller.diagnostics()),
+                "diagnostics": diagnostics,
             }
         )
 

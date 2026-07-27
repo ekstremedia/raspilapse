@@ -130,7 +130,7 @@ The settings most worth understanding:
 
 One feedback loop and one ladder:
 
-```
+```text
 required = current * (target / measured) ** damping
 shutter  = min(required, ceiling)          # the shutter fills first
 gain     = required / shutter              # gain covers what is left
@@ -196,7 +196,7 @@ raspilapse` still shows systemd and libcamera output.
 Grouped by what each part talks to. Only `camera/` and `config.py` are needed
 to take a photo; everything else is a feature you can leave uninstalled.
 
-```
+```text
 raspilapse/
   config.py           configuration loading
   logging_setup.py    logging
