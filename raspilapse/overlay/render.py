@@ -168,16 +168,29 @@ class ImageOverlay:
         return formats.localized_datetime(dt, self.overlay_config.get("datetime", {}))
 
     def _prepare_overlay_data(self, metadata: Dict, mode: Optional[str] = None) -> Dict[str, str]:
-        """
-        Prepare data dictionary for overlay formatting.
+        """Build the substitution table the content templates draw from.
+
+        Every key a template can reference is filled here, including the ones
+        whose source is switched off -- a disabled source contributes "-" or ""
+        rather than nothing, so a template naming it renders a gap instead of
+        raising KeyError halfway through a frame.
 
         Args:
-            metadata: Image metadata from capture
-            mode: Light mode (day/night/transition)
+            metadata: Image metadata from capture.
+            mode: Light mode (day/night/transition).
 
         Returns:
-            Dictionary of formatted values
+            Dictionary of formatted values, keyed by template placeholder.
         """
+        data = self._camera_fields(metadata, mode)
+        data.update(self._system_fields())
+        data.update(self._weather_fields())
+        data.update(self._ship_fields())
+        data.update(self._tide_fields())
+        return data
+
+    def _camera_fields(self, metadata: Dict, mode: Optional[str]) -> Dict[str, str]:
+        """Exposure, white balance, focus, resolution and the timestamp."""
         now = datetime.now()
         exposure_us = metadata.get("ExposureTime", 0)
         gain = metadata.get("AnalogueGain", 1.0)
@@ -227,7 +240,7 @@ class ImageOverlay:
             else:
                 focus_distance_str = "∞"  # Infinity
 
-        data = {
+        return {
             "date": now.strftime("%Y-%m-%d"),
             "time": time_str,
             "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -250,6 +263,9 @@ class ImageOverlay:
             "focus_distance": focus_distance_str,
         }
 
+    def _system_fields(self) -> Dict[str, str]:
+        """CPU temperature, disk, memory, load and uptime, or N/A for each."""
+        data: Dict[str, str] = {}
         # Add system monitoring data
         system_metrics = self.system_monitor.get_all_metrics(
             disk_path=self.config.get("output", {}).get("directory", "/")
@@ -305,7 +321,17 @@ class ImageOverlay:
             data["uptime"] = SystemMonitor.format_uptime(system_metrics["uptime"])
         else:
             data["uptime"] = "N/A"
+        return data
 
+    def _weather_fields(self) -> Dict[str, str]:
+        """The current observation, falling back to the last one that arrived.
+
+        Weather comes over the network and the network is not always there. The
+        previous reading is better than a row of dashes for the minutes it takes
+        to come back, and format_fields fills in dashes when there has never
+        been a reading at all.
+        """
+        data: Dict[str, str] = {}
         # Add weather data if available
         weather_data = self.weather.get_weather_data()
 
@@ -320,7 +346,11 @@ class ImageOverlay:
         # format_fields fills every placeholder with "-" when there is no data
         # at all (first run, never succeeded).
         data.update(self.weather.format_fields(weather_data))
+        return data
 
+    def _ship_fields(self) -> Dict[str, str]:
+        """Vessel names and counts, with five line slots always defined."""
+        data: Dict[str, str] = {}
         # Add ships data if available
         if self.ships.enabled:
             ships_lines = self.ships.format_ships_lines(ships_per_line=6)
@@ -339,42 +369,38 @@ class ImageOverlay:
             data["ships_moving"] = "0"
             for i in range(1, 6):
                 data[f"ships_line_{i}"] = ""
-
-        # Add tide data if available
-        if self.tide.enabled:
-            tide_widget = self.tide.get_widget_data()
-            if tide_widget:
-                data["tide"] = self.tide.format_tide_compact()
-                data["tide_level"] = tide_widget["level_str"]
-                data["tide_arrow"] = tide_widget["arrow"]
-                data["tide_trend"] = tide_widget["trend"]
-                data["tide_target"] = tide_widget["target_level_str"]
-                data["tide_high_time"] = tide_widget["high_time_str"]
-                data["tide_high_level"] = tide_widget["high_level_str"]
-                data["tide_low_time"] = tide_widget["low_time_str"]
-                data["tide_low_level"] = tide_widget["low_level_str"]
-            else:
-                data["tide"] = ""
-                data["tide_level"] = "-"
-                data["tide_arrow"] = ""
-                data["tide_trend"] = "-"
-                data["tide_target"] = "-"
-                data["tide_high_time"] = "-"
-                data["tide_high_level"] = "-"
-                data["tide_low_time"] = "-"
-                data["tide_low_level"] = "-"
-        else:
-            data["tide"] = ""
-            data["tide_level"] = "-"
-            data["tide_arrow"] = ""
-            data["tide_trend"] = "-"
-            data["tide_target"] = "-"
-            data["tide_high_time"] = "-"
-            data["tide_high_level"] = "-"
-            data["tide_low_time"] = "-"
-            data["tide_low_level"] = "-"
-
         return data
+
+    def _tide_fields(self) -> Dict[str, str]:
+        """Water level and the next high and low.
+
+        Disabled and enabled-but-no-data produce the same placeholders, so they
+        share one branch here; they were written out twice identically before.
+        """
+        widget = self.tide.get_widget_data() if self.tide.enabled else None
+        if not widget:
+            return {
+                "tide": "",
+                "tide_level": "-",
+                "tide_arrow": "",
+                "tide_trend": "-",
+                "tide_target": "-",
+                "tide_high_time": "-",
+                "tide_high_level": "-",
+                "tide_low_time": "-",
+                "tide_low_level": "-",
+            }
+        return {
+            "tide": self.tide.format_tide_compact(),
+            "tide_level": widget["level_str"],
+            "tide_arrow": widget["arrow"],
+            "tide_trend": widget["trend"],
+            "tide_target": widget["target_level_str"],
+            "tide_high_time": widget["high_time_str"],
+            "tide_high_level": widget["high_level_str"],
+            "tide_low_time": widget["low_time_str"],
+            "tide_low_level": widget["low_level_str"],
+        }
 
     def _get_text_lines(self, data: Dict[str, str]) -> List[str]:
         """
