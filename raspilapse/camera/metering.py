@@ -97,6 +97,13 @@ class Meter:
     """
 
     def __init__(self, config: Dict):
+        """
+        Args:
+            config: Full configuration dictionary. Everything read here lives
+                under adaptive_timelapse -- the brightness target and its
+                overcast boost, the highlight-protection curve, and the rates
+                the over/under flags select between.
+        """
         adaptive = config.get("adaptive_timelapse", {})
         transition = adaptive.get("transition_mode", {})
 
@@ -226,6 +233,14 @@ class Meter:
     _at_dark_end: bool = False
 
     def set_dark_end(self, dark: bool) -> None:
+        """Tell the meter it is near the dark end of the ladder.
+
+        Two things are suppressed there: the overcast boost, which would wash
+        out aurora and stars, and highlight protection, because a streetlamp in
+        an otherwise dark frame is not a blown scene. The controller sets this
+        before each observation rather than the meter working it out, since the
+        ladder position is the controller's to know.
+        """
         self._at_dark_end = bool(dark)
 
     def _highlight_scale(self, dark: bool) -> float:

@@ -290,6 +290,7 @@ def create_video(
 
 
 def main():
+    """Assemble captured frames into a video with ffmpeg."""
     parser = argparse.ArgumentParser(
         description="Generate timelapse video from captured images",
         formatter_class=argparse.RawDescriptionHelpFormatter,

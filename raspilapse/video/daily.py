@@ -86,6 +86,7 @@ def find_slitscan_file(video_dir: Path, project_name: str, date: datetime.date) 
 
 
 def main():
+    """Render yesterday's video, keogram and slitscan, then upload them."""
     parser = argparse.ArgumentParser(
         description="Daily timelapse runner - creates video and uploads to server",
         formatter_class=argparse.RawDescriptionHelpFormatter,

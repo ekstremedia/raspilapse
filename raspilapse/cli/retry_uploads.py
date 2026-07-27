@@ -21,6 +21,7 @@ from raspilapse.storage.upload import UploadService
 
 
 def main():
+    """Process the upload retry queue."""
     parser = argparse.ArgumentParser(
         description="Process the upload retry queue",
         formatter_class=argparse.RawDescriptionHelpFormatter,

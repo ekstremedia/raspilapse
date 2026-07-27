@@ -375,6 +375,7 @@ def create_slitscan(
 
 
 def main():
+    """Build a keogram or slitscan from a directory of frames."""
     parser = argparse.ArgumentParser(
         description="Generate keogram or slitscan image from timelapse images",
         formatter_class=argparse.RawDescriptionHelpFormatter,
