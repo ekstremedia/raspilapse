@@ -623,6 +623,62 @@ class TestPolarAwareness:
 
         assert result is None
 
+    def test_polar_day_check_is_what_populates_sun_elevation(self, test_config_file):
+        """The order of these two matters, and nothing else enforces it.
+
+        `run()` passes `self._sun_elevation` and `self._is_polar_day(lux)` to
+        determine_mode. Python evaluates arguments left to right, so with the
+        call written inline the attribute was read *before* the call that fills
+        it -- and the first frame after every restart sent None into a `:.1f`,
+        losing mode selection, hysteresis and WB seeding to the except below.
+        """
+        with open(test_config_file) as f:
+            config_data = yaml.safe_load(f)
+        config_data["location"] = {
+            "latitude": 68.7,
+            "longitude": 15.4,
+            "timezone": "Europe/Oslo",
+            "civil_twilight_threshold": -6.0,
+        }
+        with open(test_config_file, "w") as f:
+            yaml.dump(config_data, f)
+
+        timelapse = AdaptiveTimelapse(test_config_file)
+        if timelapse._location is None:
+            pytest.skip("astral not available")
+
+        assert timelapse._sun_elevation is None, "unset until something asks for it"
+        timelapse._is_polar_day(lux=100.0)
+        assert timelapse._sun_elevation is not None, "_is_polar_day must populate it"
+
+    def test_run_reads_sun_elevation_after_the_call_that_sets_it(self):
+        """Static check: the inline form is invisible to every runtime test.
+
+        Passing `self._sun_elevation` and `self._is_polar_day(...)` as arguments
+        to the same call is what caused the bug, and it type-checks, imports and
+        passes 896 tests. Only the source shape shows it.
+        """
+        import ast
+
+        src = Path(__file__).resolve().parent.parent / "src" / "auto_timelapse.py"
+        for node in ast.walk(ast.parse(src.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            reads_attr = any(
+                isinstance(a, ast.Attribute) and a.attr == "_sun_elevation" for a in node.args
+            )
+            calls_polar = any(
+                isinstance(a, ast.Call)
+                and isinstance(a.func, ast.Attribute)
+                and a.func.attr == "_is_polar_day"
+                for a in node.args
+            )
+            assert not (reads_attr and calls_polar), (
+                f"auto_timelapse.py:{node.lineno} passes self._sun_elevation and "
+                "_is_polar_day() to the same call. Arguments evaluate left to "
+                "right, so the attribute is read before the call populates it."
+            )
+
 
 class TestDiagnosticEnrichment:
     """Test metadata enrichment with diagnostics."""

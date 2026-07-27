@@ -724,8 +724,14 @@ class AdaptiveTimelapse:
                         lux = self.exposure.smooth_lux(raw_lux)
 
                         # Determine raw mode from smoothed lux
+                        # Call this first, and keep it on its own line: it is
+                        # what populates self._sun_elevation, and Python
+                        # evaluates arguments left to right. Inline, the
+                        # attribute was read before the call that fills it, so
+                        # the first frame after every restart passed None.
+                        is_polar_day = self._is_polar_day(lux)
                         raw_mode = self.exposure.determine_mode(
-                            lux, self._sun_elevation, self._is_polar_day(lux)
+                            lux, self._sun_elevation, is_polar_day
                         )
 
                         # Apply hysteresis to prevent rapid mode flipping
@@ -770,7 +776,11 @@ class AdaptiveTimelapse:
                         settings = self.exposure.get_camera_settings(mode, lux)
 
                     except Exception as e:
-                        logger.error(f"Test shot failed: {e}")
+                        # exc_info: this block spans lux, mode, hysteresis, WB
+                        # seeding and settings. Without a traceback the message
+                        # alone cannot say which of them failed, and the frame
+                        # silently falls back to the last mode.
+                        logger.error(f"Test shot failed: {e}", exc_info=True)
                         # Fall back to last mode or day mode
                         mode = self.exposure.last_mode or LightMode.DAY
                         lux = self.exposure.smoothed_lux

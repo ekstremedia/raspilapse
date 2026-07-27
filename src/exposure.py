@@ -1052,10 +1052,11 @@ class ExposureController:
         # In polar regions, force Day mode during civil twilight to capture
         # beautiful pink/blue twilight colors with AWB instead of locked night WB
         if is_polar_day:
-            sun_elev = sun_elevation
-            logger.info(
-                f"[Polar] Sun: {sun_elev:.1f}° | Lux: {lux:.1f} | Mode: Polar Day (override)"
-            )
+            # The caller decides polar day from its own elevation reading, so
+            # this one can be absent without the override being wrong. Losing
+            # the whole mode decision to a log line would be worse.
+            elev = f"{sun_elevation:.1f}°" if sun_elevation is not None else "unknown"
+            logger.info(f"[Polar] Sun: {elev} | Lux: {lux:.1f} | Mode: Polar Day (override)")
             return LightMode.DAY
 
         # Standard lux-based mode determination

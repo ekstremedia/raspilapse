@@ -1289,6 +1289,20 @@ class TestHybridModeDetection:
         # Should force transition mode due to brightness override
         assert mode == LightMode.TRANSITION
 
+    def test_polar_day_survives_an_unknown_sun_elevation(self, timelapse):
+        """A log line must not be able to cost us the mode decision.
+
+        The caller establishes polar day from its own elevation reading, so
+        this argument can be absent while the override is still correct. It
+        used to go straight into `{sun_elevation:.1f}`, and the TypeError
+        unwound the entire test-shot block -- mode, hysteresis, WB seeding and
+        camera settings with it -- on the first frame after every restart.
+        """
+        from src.auto_timelapse import LightMode
+
+        assert timelapse.exposure.determine_mode(3.5, None, True) == LightMode.DAY
+        assert timelapse.exposure.determine_mode(3.5, -2.4, True) == LightMode.DAY
+
     def test_no_override_when_brightness_matches_mode(self, timelapse):
         """Test no override when brightness matches the lux-based mode."""
         from src.auto_timelapse import LightMode
