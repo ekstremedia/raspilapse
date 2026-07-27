@@ -825,3 +825,123 @@ class TestFeedbackWiring:
         tl.exposure.seed_from_capture(exposure_time=0.02, analogue_gain=1.0)
         tl.exposure.observe_frame({"mean_brightness": 60.0, "percentile_95": 90.0})
         assert tl.exposure.decide()["ExposureTime"] > 0.02 * 1_000_000
+
+
+class TestReferenceShotPolicy:
+    """When to interrupt the loop for a white-balance reading.
+
+    This used to happen on every frame, which cost two camera teardowns per
+    capture. The shot's other job -- producing a lux figure -- moved onto the
+    frame the camera was taking anyway, leaving only the white balance, which
+    genuinely cannot be had any other way: it is the only frame the ISP meters
+    itself.
+    """
+
+    @staticmethod
+    def _timelapse(config_file, position=0.0, frame=0):
+        from raspilapse.daemon import AdaptiveTimelapse
+
+        timelapse = AdaptiveTimelapse(config_file)
+        timelapse._reference_position = position
+        timelapse._reference_frame = frame
+        timelapse.frame_count = frame
+        return timelapse
+
+    def test_the_first_frame_always_needs_one(self, test_config_file):
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None
+        assert timelapse._wants_reference_shot()
+
+    def test_a_settled_scene_does_not(self, test_config_file):
+        timelapse = self._timelapse(test_config_file)
+        timelapse.exposure.seed_from_capture(exposure_time=0.001, analogue_gain=1.0)
+        timelapse.exposure.decide()
+        timelapse._reference_position = timelapse.exposure.ladder_position
+        assert not timelapse._wants_reference_shot()
+
+    def test_moving_light_does(self, test_config_file):
+        from raspilapse.daemon import REFERENCE_LADDER_STEP
+
+        timelapse = self._timelapse(test_config_file)
+        timelapse.exposure.seed_from_capture(exposure_time=0.001, analogue_gain=1.0)
+        timelapse.exposure.decide()
+        timelapse._reference_position = (
+            timelapse.exposure.ladder_position - REFERENCE_LADDER_STEP * 2
+        )
+        assert timelapse._wants_reference_shot()
+
+    def test_a_stale_reading_expires_even_in_still_light(self, test_config_file):
+        from raspilapse.daemon import REFERENCE_MAX_INTERVAL_FRAMES
+
+        timelapse = self._timelapse(test_config_file)
+        timelapse.exposure.seed_from_capture(exposure_time=0.001, analogue_gain=1.0)
+        timelapse.exposure.decide()
+        timelapse._reference_position = timelapse.exposure.ladder_position
+        timelapse._reference_frame = 0
+        timelapse.frame_count = REFERENCE_MAX_INTERVAL_FRAMES
+        assert timelapse._wants_reference_shot()
+
+    def test_it_can_be_switched_off_entirely(self, test_config_file):
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None
+        timelapse.config["adaptive_timelapse"]["test_shot"]["enabled"] = False
+        assert not timelapse._wants_reference_shot()
+
+
+class TestLuxFromTheCapturedFrame:
+    """Lux no longer needs a shot of its own."""
+
+    @staticmethod
+    def _measure(config_file, brightness, exposure_us, gain):
+        from raspilapse.daemon import AdaptiveTimelapse
+
+        timelapse = AdaptiveTimelapse(config_file)
+        return timelapse._measure_lux(
+            brightness, {"ExposureTime": exposure_us, "AnalogueGain": gain}
+        )
+
+    def test_it_follows_the_documented_formula(self, test_config_file):
+        """(brightness / 128) * (1 / seconds) * (1 / gain) * calibration."""
+        from raspilapse.daemon import LUX_CALIBRATION
+
+        got = self._measure(test_config_file, 128.0, 10_000, 1.0)
+        assert got == pytest.approx((128 / 128) * (1 / 0.01) * (1 / 1.0) * LUX_CALIBRATION)
+
+    def test_daylight_lands_in_a_physically_plausible_range(self, test_config_file):
+        """A light meter reads roughly 20,000 lux under bright overcast.
+
+        The old figure was measured from a shot pinned at 0.2 s, which
+        saturates in daylight -- 368k rows of the database carry the identical
+        value 887.19. The scale changed here deliberately.
+        """
+        daylight = self._measure(test_config_file, 126.0, 210, 1.12)
+        assert 5_000 < daylight < 100_000, daylight
+
+    def test_a_dark_night_reads_near_zero(self, test_config_file):
+        night = self._measure(test_config_file, 90.0, 20_000_000, 6.0)
+        assert 0.0 < night < 1.0, night
+
+    def test_more_light_for_the_same_exposure_reads_higher(self, test_config_file):
+        dim = self._measure(test_config_file, 60.0, 10_000, 1.0)
+        bright = self._measure(test_config_file, 200.0, 10_000, 1.0)
+        assert bright > dim
+
+    def test_the_same_brightness_from_a_longer_exposure_reads_lower(self, test_config_file):
+        """A frame that needed more exposure to look the same saw less light."""
+        short = self._measure(test_config_file, 120.0, 1_000, 1.0)
+        long = self._measure(test_config_file, 120.0, 1_000_000, 1.0)
+        assert long < short
+
+    def test_gain_counts_against_it_the_same_way(self, test_config_file):
+        low = self._measure(test_config_file, 120.0, 10_000, 1.0)
+        high = self._measure(test_config_file, 120.0, 10_000, 6.0)
+        assert high == pytest.approx(low / 6.0)
+
+    @pytest.mark.parametrize(
+        "brightness,exposure_us,gain",
+        [(None, 10_000, 1.0), (120.0, None, 1.0), (120.0, 10_000, None), (120.0, 0, 1.0)],
+    )
+    def test_missing_or_impossible_inputs_give_nothing(
+        self, test_config_file, brightness, exposure_us, gain
+    ):
+        assert self._measure(test_config_file, brightness, exposure_us, gain) is None

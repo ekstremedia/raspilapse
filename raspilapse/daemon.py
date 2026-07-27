@@ -46,6 +46,30 @@ from raspilapse.system import SystemMonitor
 # Initialize logger
 logger = get_logger("auto_timelapse")
 
+# How far along the exposure ladder the light must move before the white
+# balance is worth reading again. 0.05 of the ladder is roughly a third of a
+# stop; a dusk transition crosses most of the range and so fires this a couple
+# of dozen times, against the 1800-odd frames it spans.
+REFERENCE_LADDER_STEP = 0.05
+
+# ...and a floor on how stale the reading may get when the light is not moving,
+# for slow changes the ladder does not register: seasons, a dirty lens, a
+# streetlight coming on.
+REFERENCE_MAX_INTERVAL_FRAMES = 120
+
+# Turns brightness and exposure into the lux figure the overlay shows and the
+# graphs plot. Approximate: it puts full daylight in the right order of
+# magnitude, around twenty thousand, which is roughly what a light meter reads
+# under bright overcast.
+#
+# This is not the value the old code used, and the scale of the recorded column
+# changes here. That is unavoidable and no loss. The figure used to be measured
+# from a dedicated shot pinned at 0.2 s, which saturates in daylight, so 368
+# thousand rows of this database carry the identical value 887.190349001447 --
+# continuity with a constant is not worth preserving. It is now measured from
+# the frame the camera actually took, and varies with the light.
+LUX_CALIBRATION = 5.0
+
 
 @dataclass
 class Decision:
@@ -84,6 +108,13 @@ class AdaptiveTimelapse:
 
         self._previous_mode: str = None  # Track mode changes for seeding detection
         self._last_day_capture_metadata: Dict = None  # Metadata from last day mode capture
+
+        # The most recent white-balance reading, and where on the ladder it was
+        # taken. See _wants_reference_shot.
+        self._reference_metadata: Optional[Dict] = None
+        self._reference_position: Optional[float] = None
+        self._reference_frame: int = 0
+        self._last_raw_lux: Optional[float] = None
 
         # Polar awareness - sun position for high latitude locations (68°N)
         self._location = None
@@ -638,104 +669,129 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.error(f"Error during close: {e}")
 
-    def _wants_test_shot(self) -> bool:
-        """Whether this frame should be preceded by a metering shot."""
-        test_shot = self.config["adaptive_timelapse"]["test_shot"]
-        frequency = test_shot.get("frequency", 1)
-        return bool(test_shot["enabled"]) and self.frame_count % frequency == 0
+    def _wants_reference_shot(self) -> bool:
+        """Whether to interrupt the loop for a white-balance reference frame.
 
-    def _meter(self) -> Decision:
-        """Measure the light and decide what the camera should do.
+        This used to fire on every frame, and it is expensive: the running
+        camera has to be torn down and a second one opened, because libcamera
+        will not have two. Two extra open/close cycles, thirty times a minute,
+        for the whole life of the installation.
 
-        The metering shot's job is now narrower than it was. It no longer picks
-        a mode -- the controller does that from measured brightness alone -- so
-        what it contributes is a lux figure for the record and, at the day/night
-        boundary, the only AWB reading in the system.
+        It fired that often because the shot did two jobs. One of them -- a lux
+        figure -- is now taken from the frame the camera just captured, which
+        already carries everything the calculation needs. What is left is the
+        white balance: this is the only frame taken with AWB enabled, so its
+        ColourGains are the only reading of what the scene's white actually is,
+        and there is no way to get one without asking the ISP.
+
+        Colour changes when the light changes, so that is what triggers it:
+        movement along the exposure ladder since the last reading. Over a dusk
+        transition the ladder travels most of its range and this fires perhaps
+        twenty times; through a stable afternoon, not at all until the refresh
+        interval comes round.
         """
-        test_image_path, test_metadata = self.take_test_shot()
-        raw_lux = self.calculate_lux(test_image_path, test_metadata)
+        reference = self.config["adaptive_timelapse"]["test_shot"]
+        if not reference.get("enabled", True):
+            return False
 
-        # On the first frame after a restart the ISP may not have applied the
-        # test shot's settings yet, and the result comes back saturated. A
-        # seeded lux from the database is a better estimate than one measured
-        # from a blown frame.
-        if self.frame_count == 0:
-            raw_lux = self._prefer_seeded_lux_if_saturated(test_image_path, raw_lux)
+        if self._reference_position is None:
+            return True
 
-        lux = self.exposure.smooth_lux(raw_lux)
+        moved = abs(self.exposure.ladder_position - self._reference_position)
+        if moved >= REFERENCE_LADDER_STEP:
+            return True
 
-        # Recorded, not consulted. Sun elevation is an interesting thing to
-        # have alongside a frame at 68°N, and it is what graph_solar_patterns.py
+        return self.frame_count - self._reference_frame >= REFERENCE_MAX_INTERVAL_FRAMES
+
+    def _take_reference_shot(self) -> None:
+        """Read the scene's white balance, the one thing only the ISP knows."""
+        try:
+            _, metadata = self.take_test_shot()
+        except Exception as e:
+            # Not fatal: without a fresh reading the controller keeps the last
+            # one, and the colour drifts slowly rather than stopping.
+            logger.warning(f"White-balance reference shot failed: {e}")
+            return
+
+        self._reference_metadata = metadata
+        self._reference_position = self.exposure.ladder_position
+        self._reference_frame = self.frame_count
+        logger.debug(
+            f"[WB] Reference at ladder {self._reference_position:.3f}: "
+            f"{metadata.get('ColourGains')}"
+        )
+
+    def _decide(self) -> Decision:
+        """Choose settings for the next frame."""
+        # Recorded, not consulted. Sun elevation is an interesting thing to have
+        # alongside a frame at 68°N, and it is what graph_solar_patterns.py
         # plots against, but nothing decides anything from it any more.
         self._get_sun_elevation()
 
         settings = self.exposure.decide()
         mode = self.exposure.last_mode
 
-        self._seed_across_mode_change(mode, test_metadata)
+        self._seed_across_mode_change(mode)
         self._previous_mode = mode
 
         return Decision(
             mode=mode,
-            lux=lux,
-            raw_lux=raw_lux,
+            lux=self.exposure.smoothed_lux,
+            raw_lux=self._last_raw_lux,
             ladder_position=self.exposure.ladder_position,
             settings=settings,
         )
 
-    def _prefer_seeded_lux_if_saturated(self, test_image_path: str, raw_lux: float) -> float:
-        """Fall back to the seeded lux when the first test shot comes back blown."""
-        test_brightness = self._analyze_image_brightness(test_image_path)
-        if not test_brightness:
-            return raw_lux
-
-        test_mean = test_brightness.get("mean_brightness", 128)
-        if (
-            test_mean > 250
-            and self.exposure.seed_exposure is not None
-            and self.exposure.smoothed_lux is not None
-        ):
-            logger.warning(
-                f"[Startup] First test shot saturated ({test_mean:.1f}/255) - "
-                f"using seeded lux={self.exposure.smoothed_lux:.1f} "
-                f"instead of calculated={raw_lux:.1f}"
-            )
-            return self.exposure.smoothed_lux
-        return raw_lux
-
-    def _seed_across_mode_change(self, mode: str, test_metadata: Dict) -> None:
+    def _seed_across_mode_change(self, mode: str) -> None:
         """Hand exposure state across the day/night boundary.
 
-        Leaving day means leaving the only frames taken with AWB on, so the
-        controller is primed from the test shot's metadata to make the first
-        manual frame match the last automatic one.
+        Leaving the bright end means leaving the only frames the ISP metered
+        itself, so the controller is primed from the most recent reference shot
+        to make the first fully manual frame match the last automatic one.
         """
         entering_manual = self._previous_mode == LightMode.DAY and mode in (
             LightMode.TRANSITION,
             LightMode.NIGHT,
         )
         if entering_manual and not self.exposure.transition_seeded:
-            self.exposure.seed_from_metadata(test_metadata, self._last_day_capture_metadata)
+            self.exposure.seed_from_metadata(
+                self._reference_metadata or {}, self._last_day_capture_metadata
+            )
 
         if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
             self.exposure.reset_seed_state()
-            logger.info("[Holy Grail] Returned to Day mode - seed state reset")
+            logger.info("[Handover] Back at the bright end - seed state reset")
 
-    def _decide_without_metering(self) -> Decision:
-        """What to shoot when no metering shot was taken this frame.
+    def _measure_lux(self, brightness: Optional[float], settings: Dict) -> Optional[float]:
+        """Estimate ambient light from the frame that was just taken.
 
-        The controller does not need one. It closes on the brightness of the
-        frame it just took, so it can decide with no fresh lux at all -- the
-        only thing missing is an updated figure for the record.
+        Same arithmetic the metering shot used, on a frame the camera was
+        taking anyway:
+
+            lux = (brightness / 128) * (1 / seconds) * (1 / gain) * calibration
+
+        Nothing decides from this. It is written to the database, shown in the
+        overlay and plotted by the graph scripts, which is why it survives at
+        all -- and why taking it from a dedicated shot, at the cost of two
+        camera restarts a frame, stopped being worth it.
+
+        A caveat this inherits honestly: the figure is now read off a frame the
+        controller exposed to hit a brightness target, so once converged it
+        varies with the settings rather than independently of them. The old
+        dedicated shot was no better. Pinned at 0.2 s it saturated in daylight,
+        which is why 368k rows of this database carry the identical value
+        887.190349001447.
         """
-        settings = self.exposure.decide()
-        return Decision(
-            mode=self.exposure.last_mode,
-            lux=self.exposure.smoothed_lux,
-            raw_lux=None,
-            ladder_position=self.exposure.ladder_position,
-            settings=settings,
-        )
+        exposure_us = settings.get("ExposureTime")
+        gain = settings.get("AnalogueGain")
+        if not brightness or not exposure_us or not gain:
+            return None
+
+        seconds = exposure_us / 1_000_000
+        if seconds <= 0 or gain <= 0:
+            return None
+
+        return (brightness / 128.0) * (1.0 / seconds) * (1.0 / gain) * LUX_CALIBRATION
 
     def _observe(self, capture: ImageCapture, image_path: str) -> Optional[Dict]:
         """Feed the frame the camera just produced back to the controller.
@@ -856,33 +912,43 @@ class AdaptiveTimelapse:
                     logger.info(f"Reached frame limit: {num_frames}")
                     break
 
-                metering = self._wants_test_shot()
+                # The reference shot opens its own context-managed camera, and
+                # libcamera will not have two, so the running one has to go
+                # first. This is why it is worth firing rarely.
+                if self._wants_reference_shot():
+                    if capture is not None:
+                        self._close_camera_fast(capture, last_mode)
+                        capture = None
+                        last_mode = None
+                    self._take_reference_shot()
 
-                # The test shot opens its own context-managed camera, and
-                # libcamera refuses a second one while this is running.
-                if capture is not None and metering:
-                    logger.debug("Closing camera before test shot...")
+                try:
+                    decision = self._decide()
+                except Exception as e:
+                    # exc_info: _decide spans the feedback loop, the ladder, the
+                    # handover seeding and white balance. Without a traceback
+                    # the message alone cannot say which of them failed.
+                    logger.error(f"Exposure decision failed: {e}", exc_info=True)
+                    break
+
+                # New settings mean a new camera. They can only be applied as
+                # it starts: pushing them to a running one with set_controls
+                # looks like it should work and does not. Measured on this
+                # hardware, a commanded exposure took eight frames to appear in
+                # the returned metadata, and four consecutive captures after a
+                # change all came back carrying the value from two commands
+                # earlier. At a 20-second night exposure, waiting that out
+                # would be 160 seconds against a teardown costing about two.
+                #
+                # Skipping the teardown when the settings barely move was tried
+                # and removed. The sensor quantises exposure to whole lines --
+                # it delivers 210us for a commanded 217us -- so the command and
+                # the delivery differ by more than any useful tolerance, on
+                # every frame, and the branch never fired. The saving here is
+                # the metering shot, which was the other camera cycle.
+                if capture is not None:
                     self._close_camera_fast(capture, last_mode)
                     capture = None
-                    last_mode = None
-
-                if metering:
-                    try:
-                        decision = self._meter()
-                    except Exception as e:
-                        # exc_info: _meter spans lux, mode, hysteresis, WB
-                        # seeding and settings. Without a traceback the message
-                        # alone cannot say which of them failed, and the frame
-                        # silently falls back to the last mode.
-                        logger.error(f"Test shot failed: {e}", exc_info=True)
-                        decision = self._decide_without_metering()
-                else:
-                    decision = self._decide_without_metering()
-                    lux_str = f"{decision.lux:.2f}" if decision.lux is not None else "N/A"
-                    logger.debug(
-                        f"Skipping test shot (frame {self.frame_count}), "
-                        f"reusing mode={decision.mode}, lux={lux_str}"
-                    )
 
                 if capture is None:
                     logger.debug("Initializing camera for timelapse...")
@@ -897,6 +963,20 @@ class AdaptiveTimelapse:
                     logger.info(f"Frame captured: {image_path}")
 
                     brightness_metrics = self._observe(capture, image_path)
+
+                    # Lux comes off the frame that was just taken, not off a
+                    # shot of its own. From the settings the sensor actually
+                    # used, not the ones it was asked for: it quantises
+                    # exposure to whole lines, and pairing a measured
+                    # brightness with an exposure that was never applied put
+                    # the figure out by an order of magnitude.
+                    applied = self._read_capture_metadata(metadata_path) or decision.settings
+                    measured = (brightness_metrics or {}).get("mean_brightness")
+                    self._last_raw_lux = self._measure_lux(measured, applied)
+                    if self._last_raw_lux is not None:
+                        decision.lux = self.exposure.smooth_lux(self._last_raw_lux)
+                        decision.raw_lux = self._last_raw_lux
+
                     self._record(decision, image_path, metadata_path, brightness_metrics)
                 except Exception as e:
                     logger.error(f"Frame capture failed: {e}", exc_info=True)

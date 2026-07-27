@@ -11,8 +11,9 @@ flicker, burns an information overlay into each frame, and assembles a video
 once a day.
 
 Built for a camera at 68°N, where "day" and "night" stop meaning what they
-usually do, so the exposure logic works from measured brightness and sun
-elevation rather than the clock.
+usually do, so the exposure works from the measured brightness of the previous
+frame rather than from the clock, the calendar or the sun. There is nothing in
+it to configure for your latitude.
 
 ## Requirements
 
@@ -118,38 +119,48 @@ The settings most worth understanding:
 
 | Setting | Why it matters |
 |---------|----------------|
-| `location.latitude` / `longitude` | Sun elevation drives mode selection. Wrong location means wrong day/night boundaries. |
+| `location.latitude` / `longitude` | Recorded with each frame and plotted by the graph scripts. Nothing decides from it. |
 | `output.directory` | Where frames land. Needs to exist and be writable. |
 | `adaptive_timelapse.interval` | Seconds between frames. 30 is a good default. |
-| `adaptive_timelapse.reference_lux` | Overall brightness. Raise for brighter images. |
-| `adaptive_timelapse.transition_mode.target_brightness` | What the exposure loop aims for, 0-255. |
+| `adaptive_timelapse.transition_mode.target_brightness` | What the exposure loop aims for, 0-255. Raise for brighter frames. |
+| `adaptive_timelapse.night_mode.max_exposure_time` | The dark end of the ladder. 20s suits aurora; lower it if you want shorter nights. |
 | `logging.level` | `INFO` while setting up, `WARNING` for 24/7. |
 
 ## How exposure works
 
-Each cycle takes a fixed-settings test shot, measures its brightness, picks a
-mode, and sets the camera:
+One feedback loop and one ladder:
 
 ```
-mode      = f(smoothed lux, sun elevation)      night | transition | day
-exposure  = current * (target / measured) ** damping
+required = current * (target / measured) ** damping
+shutter  = min(required, ceiling)          # the shutter fills first
+gain     = required / shutter              # gain covers what is left
 ```
 
-Direct proportional feedback rather than a lookup table, so it converges in
-three to five frames and needs no per-camera calibration beyond
-`reference_lux`. Shutter does the work first; gain only rises once the shutter
-is within 20% of its ceiling.
+A longer shutter costs time; more gain costs noise, so the order is forced.
+That single rule replaced three modes selected by comparing an uncalibrated lux
+figure against absolute thresholds, which had to be retuned per camera and per
+site and were overridden at high latitude by sun elevation. There is nothing
+in the loop that knows where it is: it works from measured brightness, so it
+behaves the same at 68°N in January as on the equator.
 
-| Mode | Exposure | Gain |
-|------|----------|------|
-| Day | brightness feedback | pinned at floor |
-| Transition | brightness feedback | ramps once the shutter nears max |
-| Night | up to 20 s, reduced if the scene is bright | up to configured max |
+| Where on the ladder | Shutter | Gain |
+|---------------------|---------|------|
+| Bright | short, responds immediately | at its floor |
+| Middle | lengthening | at its floor |
+| Dark | at its ceiling | rising, and moving a fraction at a time |
 
-White balance is manual in every mode — AWB drifting between frames is the main
-cause of colour flicker in a timelapse. Optional highlight protection lowers the
-brightness target when the top of the histogram nears clipping, so bright skies
-keep detail.
+`mode` survives as a label derived from the settings, for the overlay, the
+database column and the graphs. Nothing decides from it.
+
+White balance is manual in every condition — AWB drifting between frames is the
+main cause of colour flicker in a timelapse — and cross-fades along the ladder
+between a daylight reference the camera learns and the configured night gains.
+Optional highlight protection lowers the brightness target when the top of the
+histogram nears clipping, so bright skies keep detail.
+
+Sun elevation is recorded with every frame if `astral` is installed, and is
+plotted by `scripts/graph_solar_patterns.py`. Nothing decides from it either;
+without astral the column is empty and the camera behaves identically.
 
 See [docs/EXPOSURE.md](docs/EXPOSURE.md) for the details.
 
