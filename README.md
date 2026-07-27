@@ -235,6 +235,7 @@ config/               config.example.yml, a short starter file
 | [config/README.md](config/README.md) | Working with config files |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup |
+| [tests/replay/README.md](tests/replay/README.md) | How exposure changes are proved safe |
 
 ## Troubleshooting
 

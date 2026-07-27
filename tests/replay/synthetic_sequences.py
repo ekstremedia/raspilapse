@@ -2,9 +2,14 @@
 
 Six months of captures from one camera do not exercise everything the
 controller can do. Mutating constants one at a time showed which: the feedback
-ratio clamps, the underexposure thresholds, the night gain floor's else branch
-and the low-side hybrid override all survived being changed, because no real
-frame ever drove them.
+ratio clamps, the underexposure thresholds and the clipped-pixel thresholds all
+survived being changed, because no real frame ever drove them.
+
+Three sequences that used to live here are gone with the code they were built
+for -- two pinned determine_mode's < against <=, and one drove the hybrid
+brightness override. The ladder has no thresholds to sit on the edge of and no
+override to trigger. They went on catching mutations by coincidence after that,
+which is not a reason to keep a fixture.
 
 Some of those are config-dependent rather than rare -- with `min_scale: 0.7`
 the ratio can never fall below 84/255, so the 0.25 lower clamp is unreachable
@@ -149,25 +154,6 @@ def build():
         "seed": {"analogue_gain": 1.0, "exposure_time": 0.5},
         "frames": [frame(1, 60, exposure_us=500000, gain=1.0) for _ in range(80)],
     }
-
-    # --- mode threshold comparisons --------------------------------------
-    # determine_mode compares lux against the thresholds with < and >, so the
-    # only input that tells < from <= is one sitting exactly on the boundary.
-    #
-    # There is exactly one frame per sequence where that can happen. smooth_lux
-    # is an EMA, and an EMA only ever approaches a constant input
-    # asymptotically -- it lands on it just once, on the first frame, where
-    # _smoothed_lux is still None and the raw value is adopted whole. Hence one
-    # sequence per boundary, each opening on the value it needs to test.
-    for edge_name, edge_lux in (("night", 3), ("day", 80)):
-        sequences[f"synthetic_threshold_edge_{edge_name}"] = {
-            "description": (
-                f"smoothed lux opening exactly on the {edge_name} threshold, "
-                f"where the difference between < and <= decides the mode"
-            ),
-            "config": REPLAY_CONFIG,
-            "frames": [frame(edge_lux, 100) for _ in range(20)],
-        }
 
     # --- night gain floor, else branch -----------------------------------
     # max(2.0, min(night_gain, target_gain)) only binds when the configured
@@ -350,23 +336,6 @@ def build():
             for spread in spreads + spreads[::-1]
             for mean in (100.0, 55.0)
         ],
-    }
-
-    # --- hybrid brightness overrides -------------------------------------
-    # Day-level lux with a dark frame forces TRANSITION, and night-level lux
-    # with a bright frame does the same from the other side.
-    sequences["synthetic_hybrid_override"] = {
-        "description": (
-            "lux and measured brightness disagreeing in both directions, "
-            "which is what the hybrid override in determine_mode exists for"
-        ),
-        "config": REPLAY_CONFIG,
-        "frames": (
-            [frame(200, b) for b in sweep(120, 60)]
-            + [frame(200, b) for b in sweep(60, 120)]
-            + [frame(1, b, exposure_us=20_000_000, gain=6.0) for b in sweep(120, 200)]
-            + [frame(1, b, exposure_us=20_000_000, gain=6.0) for b in sweep(200, 120)]
-        ),
     }
 
     return sequences

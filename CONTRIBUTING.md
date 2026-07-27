@@ -53,7 +53,7 @@ line length 100 (enforced by black and ruff via `pyproject.toml`).
 | `systemd/` | Unit templates (`*.in`, substituted by `scripts/install.sh`) |
 | `config/` | `config.example.yml` is a short starter file; `docs/CONFIG-REFERENCE.yml` is the full schema; `config.yml` is gitignored |
 | `tests/` | pytest suite, one module per application module (`__version__.py` is covered by `test_version.py`) |
-| `tests/replay/` | Golden-master fixtures for the exposure controller. `mutation_check.py` proves they can fail; read its docstring before touching a golden file. |
+| `tests/replay/` | Recorded sunsets, and what the exposure code decided about them — 3.8 MB of JSON that [its README](tests/replay/README.md) explains. Read that before touching a golden file. |
 | `docs/` | User documentation |
 
 Never commit `config/config.yml` — it holds API keys. `.gitignore` covers it,
