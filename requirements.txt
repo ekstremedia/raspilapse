@@ -15,15 +15,16 @@ PyYAML>=6.0
 
 # Overlay rendering and keograms; also the lores brightness metering the
 # exposure loop closes on. Both are pulled in by python3-picamera2.
-# Pillow's own advisories run past this, and the fix for the most recent of
-# them is 12.2.0 -- which requires Python 3.10. This project supports 3.9,
-# because Raspberry Pi OS Bullseye ships it and CI builds against it, so 11.x
-# is the ceiling until 3.9 is dropped.
+# 11.3.0 is the highest floor this project can set: it is the last 11.x
+# release, and it carries every security fix available to Python 3.9. The
+# remaining advisories are fixed only in 12.x, which requires Python 3.10 --
+# and 3.9 is supported here because Raspberry Pi OS Bullseye ships it and CI
+# builds against it. Raise this to 12.x the day 3.9 is dropped.
 #
 # In practice a Pi never installs this: apt's python3-pil is 9.4.0 and comes in
 # with picamera2. This floor is for pip installs -- CI and development
 # checkouts -- where nothing is pinned to the system libraries.
-Pillow>=11.0.0
+Pillow>=11.3.0
 numpy>=1.21.0
 
 # --- everything below is optional; the feature degrades if it is absent ---

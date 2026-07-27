@@ -138,7 +138,9 @@ If you add a constant to the controller, add a mutation for it in
 `mutation_check.py`, watch it survive, then add the input that kills it. That
 order matters — it is what stops a fixture being added on a hunch.
 
-The files are one JSON object per line on purpose: fully indented they run to
-5 MB and trip the repository's large-file hook, fully compact they become an
-unreviewable single-line diff. A line per frame gives a diff that points at the
-frame where behaviour changed.
+Each file is a single JSON document, but written with one frame object per line
+inside its `frames` array — read it with `json.load`, not line by line. The
+formatting is deliberate: fully indented these run to 5 MB and trip the
+repository's large-file hook, fully compact they become an unreviewable
+single-line diff. A line per frame gives a diff that points at the frame where
+behaviour changed.
