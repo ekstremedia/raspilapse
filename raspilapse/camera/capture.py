@@ -8,6 +8,7 @@ from typing import Callable, Dict, Optional, Tuple
 
 import yaml
 
+from raspilapse.config import merge_defaults
 from raspilapse.logging_setup import configure_logging, get_logger
 from raspilapse.overlay import build_overlay
 
@@ -39,9 +40,11 @@ class CameraConfig:
 
         try:
             with open(config_file, "r") as f:
-                config = yaml.safe_load(f)
+                config = yaml.safe_load(f) or {}
                 logger.debug("Successfully parsed YAML configuration")
-                return config
+                # The accessors below index without a fallback, which is what
+                # forced every config file to spell out the whole schema.
+                return merge_defaults(config)
         except yaml.YAMLError as e:
             logger.error(f"Failed to parse configuration file: {e}")
             raise

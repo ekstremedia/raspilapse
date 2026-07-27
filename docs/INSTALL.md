@@ -81,8 +81,10 @@ cp config/config.example.yml config/config.yml
 nano config/config.yml
 ```
 
-`config/config.yml` is gitignored — it holds your API keys. The example file is
-the documented schema; every setting is explained inline.
+`config/config.yml` is gitignored — it holds your API keys. The example is
+short on purpose: anything it does not mention has a default, so your config
+only needs the settings you actually want to change.
+[CONFIG-REFERENCE.yml](CONFIG-REFERENCE.yml) is the full annotated schema.
 
 At minimum, set:
 
@@ -206,7 +208,7 @@ sudo systemctl restart raspilapse
 ```
 
 Database migrations run automatically on start. `config/config.yml` is never
-touched by a pull; check `config/config.example.yml` for new settings.
+touched by a pull; check `docs/CONFIG-REFERENCE.yml` for new settings.
 
 ## When it does not work
 

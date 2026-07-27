@@ -51,7 +51,7 @@ line length 100 (enforced by black and ruff via `pyproject.toml`).
 | `raspilapse/` | Application code, grouped by what it talks to: `camera/`, `overlay/`, `video/`, `storage/`, `cli/`. One import path per module — the units run `python3 -m raspilapse.cli.x` from the project directory. |
 | `scripts/` | Installer and operator tools (shell + standalone Python) |
 | `systemd/` | Unit templates (`*.in`, substituted by `scripts/install.sh`) |
-| `config/` | `config.example.yml` is the documented schema; `config.yml` is gitignored |
+| `config/` | `config.example.yml` is a short starter file; `docs/CONFIG-REFERENCE.yml` is the full schema; `config.yml` is gitignored |
 | `tests/` | pytest suite, one module per application module (`__version__.py` is covered by `test_version.py`) |
 | `tests/replay/` | Golden-master fixtures for the exposure controller. `mutation_check.py` proves they can fail; read its docstring before touching a golden file. |
 | `docs/` | User documentation |

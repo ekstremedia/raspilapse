@@ -34,6 +34,7 @@ from raspilapse.camera.exposure import (  # noqa: F401
     LightMode,
     highlight_factor,
 )
+from raspilapse.config import merge_defaults
 from raspilapse.logging_setup import configure_logging, get_logger
 from raspilapse.overlay import build_overlay
 from raspilapse.overlay.sources.weather import WeatherData
@@ -282,9 +283,9 @@ class AdaptiveTimelapse:
 
         try:
             with open(config_file, "r") as f:
-                config = yaml.safe_load(f)
+                config = yaml.safe_load(f) or {}
                 logger.debug("Configuration loaded successfully")
-                return config
+                return merge_defaults(config)
         except yaml.YAMLError as e:
             logger.error(f"Failed to parse configuration file: {e}")
             raise

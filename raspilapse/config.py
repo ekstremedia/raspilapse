@@ -19,6 +19,85 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "config.yml"
 
+# Everything the code indexes into without a fallback, and therefore everything
+# that must be present for it to run at all.
+#
+# This table is why config/config.example.yml can be fifty lines instead of six
+# hundred and eighty. A newcomer sets a location and an output directory; the
+# rest of the schema is documented in docs/CONFIG-REFERENCE.md and only has to
+# be written down when overriding it.
+#
+# The values are exactly what the old example shipped, so merging them changes
+# nothing for an existing config. Keys read with an explicit `.get(key,
+# fallback)` are deliberately absent -- that fallback is already the default,
+# and duplicating it here would give the same setting two sources of truth.
+DEFAULTS: Dict = {
+    "camera": {
+        "resolution": {"width": 1920, "height": 1080},
+        "transforms": {"horizontal_flip": False, "vertical_flip": False},
+        "controls": {},
+    },
+    "output": {
+        "directory": "images",
+        "filename_pattern": "{name}_%Y_%m_%d_%H_%M_%S.jpg",
+        "project_name": "timelapse",
+        "quality": 85,
+        "organize_by_date": True,
+        "date_format": "%Y/%m/%d",
+    },
+    "system": {
+        "create_directories": True,
+        "save_metadata": True,
+        "metadata_filename": "{name}_%Y_%m_%d_%H_%M_%S_metadata.json",
+        "metadata_folder": "metadata",
+    },
+    "adaptive_timelapse": {
+        "enabled": True,
+        "interval": 30,
+        "num_frames": 0,
+        "light_thresholds": {"night": 3, "day": 80},
+        "night_mode": {"max_exposure_time": 20.0, "analogue_gain": 6},
+        "day_mode": {"exposure_time": 0.01, "analogue_gain": 1.0},
+        "test_shot": {"enabled": True, "exposure_time": 0.1, "analogue_gain": 1.0, "frequency": 1},
+    },
+    "video": {
+        "directory": "videos",
+        "fps": 25,
+        "codec": {"name": "libx264", "pixel_format": "yuv420p"},
+    },
+    "logging": {},
+}
+
+
+def merge_defaults(config: Optional[Dict], defaults: Optional[Dict] = None) -> Dict:
+    """Fill in anything the config does not set, without overwriting what it does.
+
+    Recursive on dicts and only on dicts: a list in the config replaces the
+    default outright rather than merging element-wise, because every list here
+    is a fixed-length tuple of values -- colour_gains being [red, blue] -- where
+    a half-merged result would be worse than either input.
+
+    Args:
+        config: The user's parsed config, or None
+        defaults: What to fall back to; DEFAULTS when omitted
+
+    Returns:
+        A new dict. Neither argument is modified.
+    """
+    if defaults is None:
+        defaults = DEFAULTS
+
+    merged = {
+        key: dict(value) if isinstance(value, dict) else value for key, value in defaults.items()
+    }
+
+    for key, value in (config or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_defaults(value, merged[key])
+        else:
+            merged[key] = value
+    return merged
+
 
 def resolve_config_path(config_path: Optional[Union[str, Path]] = None) -> Path:
     """
@@ -39,15 +118,18 @@ def resolve_config_path(config_path: Optional[Union[str, Path]] = None) -> Path:
     return (PROJECT_ROOT / path).resolve()
 
 
-def load_config(config_path: Optional[Union[str, Path]] = None) -> Dict:
+def load_config(config_path: Optional[Union[str, Path]] = None, defaults: bool = True) -> Dict:
     """
-    Load and parse a YAML config file.
+    Load and parse a YAML config file, filled in from DEFAULTS.
 
     Args:
         config_path: Path to the config; defaults to config/config.yml
+        defaults: Merge DEFAULTS underneath. Pass False to see exactly what the
+            file says -- the schema-drift tests need that, ordinary callers
+            do not.
 
     Returns:
-        The parsed config, or {} for an empty file
+        The parsed config, with defaults applied
 
     Raises:
         FileNotFoundError: The file does not exist
@@ -55,7 +137,8 @@ def load_config(config_path: Optional[Union[str, Path]] = None) -> Dict:
     """
     path = resolve_config_path(config_path)
     with open(path, "r") as f:
-        return yaml.safe_load(f) or {}
+        parsed = yaml.safe_load(f) or {}
+    return merge_defaults(parsed) if defaults else parsed
 
 
 def get_db_path(

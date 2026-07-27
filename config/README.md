@@ -1,89 +1,64 @@
-# Configuration Directory
+# Configuration
 
-This directory contains the configuration files for Raspilapse.
+Three files, each with a different job.
 
-## Files
+| File | What it is |
+|------|-----------|
+| `config/config.example.yml` | A short starter file, tracked in git. Copy it, don't edit it. |
+| `config/config.yml` | Yours. Gitignored, because it holds API keys. |
+| [`docs/CONFIG-REFERENCE.yml`](../docs/CONFIG-REFERENCE.yml) | Every setting there is, annotated. Reference, not a template. |
 
-### `config.example.yml`
-**Template/Example configuration file**
-- This is the default configuration template tracked in git
-- Contains all available settings with documentation and examples
-- Safe to reference for documentation purposes
-- **Do not modify this file directly** - copy it to `config.yml` first
+Anything your `config.yml` does not mention has a default in
+`raspilapse/config.py`, so it only needs to contain what you want to change.
+The example used to be 681 lines and was the schema as well as the starting
+point; that is what made a first look at this project harder than it needed to
+be.
 
-### `config.yml`
-**Your personal configuration file**
-- **Not tracked by git** - safe to customize with your personal settings
-- You create it by copying `config.example.yml`; nothing does it for you.
-  `./scripts/install.sh --check` will say so if you have not
-- This is the file that Raspilapse actually uses
-- Customize this with your own:
-  - Camera settings (resolution, exposure, etc.)
-  - Output paths
-  - Weather API endpoints
-  - Overlay content
-  - Project name and camera name
-
-## Quick Start
-
-### First-Time Setup
-
-When you first clone/install Raspilapse:
+## First-time setup
 
 ```bash
-# ./scripts/install.sh --check will tell you if you have not done this:
 cp config/config.example.yml config/config.yml
-
-# Or do it manually:
-cd config/
-cp config.example.yml config.yml
-```
-
-### Customize Your Config
-
-Edit `config.yml` with your settings:
-
-```bash
 nano config/config.yml
 ```
 
-Key settings to customize:
-1. **Output directory** (`output.directory`) - Where images are saved
-2. **Project name** (`output.project_name`) - Used in filenames
-3. **Camera name** (`overlay.camera_name`) - Shown in overlays
-4. **Resolution** (`camera.resolution`) - Image size
-5. **Weather endpoint** (`weather.endpoint`) - If using weather integration
+`./scripts/install.sh --check` will tell you if you have not done this.
 
-### After Editing Config
+Worth setting straight away:
 
-If the service is running, restart it to apply changes:
+1. `output.directory` — where images land; must exist and be writable
+2. `output.project_name` — appears in every filename
+3. `location` — recorded with each frame
+4. `camera.resolution` — defaults to 1920x1080
+
+Restart the service to apply changes:
 
 ```bash
 sudo systemctl restart raspilapse
 ```
 
-## Configuration Management
+## Adding a setting
 
-### Updating Raspilapse
+Find it in `docs/CONFIG-REFERENCE.yml`, copy that block into your `config.yml`,
+and edit it. There is no need to copy the surrounding sections — the merge is
+per-key, so setting `output.quality` alone leaves every other `output` setting
+at its default.
 
-When you pull updates from git:
+## Updating
 
 ```bash
-git pull origin main
+git pull
 ```
 
-Your personal `config.yml` will **not be overwritten** because it's in `.gitignore`.
+Your `config.yml` is never touched. New settings appear in
+`docs/CONFIG-REFERENCE.yml` with their defaults already applied, so a pull
+cannot change your camera's behaviour by adding one.
 
-If there are new configuration options in `config.example.yml`:
-1. Check the diff to see what's new:
-   ```bash
-   diff config/config.yml config/config.example.yml
-   ```
-2. Manually add new sections from `config.example.yml` to your `config.yml`
+Two tests keep the three files honest, in `tests/test_config_example.py`:
 
-### Sharing Configs
+- every setting the reference documents is one the code actually reads
+- every setting the code *requires* has a default, so a short config still works
 
-If you want to share your configuration (without personal details):
+## Sharing a config
 
 ```bash
 # Somewhere outside config/, which is not gitignored for arbitrary names
@@ -95,77 +70,32 @@ nano ~/my-setup.yml
 ```
 
 Copying it to `config/my-setup.yml` instead would stage a file this section is
-telling you to sanitise — only `config.yml` and `config/*.backup*` are
-ignored.
+telling you to sanitise — only `config.yml` and `config/*.backup*` are ignored.
+Any other `.yml` you leave in `config/` **will** be committed.
 
-### Reset to Defaults
-
-To reset your configuration to defaults:
+## Reset to defaults
 
 ```bash
-# Backup your current config
 cp config/config.yml config/config.yml.backup
-
-# Copy example config
 cp config/config.example.yml config/config.yml
-
-# Restart service
 sudo systemctl restart raspilapse
 ```
 
-## Configuration Reference
-
-`config.example.yml` is the reference: every setting is explained inline, and
-`tests/test_config_example.py` fails if it drifts from what the code reads.
-
-For the areas with more to say than fits in a comment:
-- **docs/OVERLAY.md** - Overlay system configuration
-- **docs/WEATHER.md** - Weather integration setup
-- **docs/EXPOSURE.md** - Exposure control settings
-
 ## Troubleshooting
 
-### "Config file not found" Error
+**`FileNotFoundError: config/config.yml not found`** — you have not copied the
+example yet. See "First-time setup" above.
 
-If you see this error:
-```
-FileNotFoundError: config/config.yml not found
-```
+**Invalid YAML** — check the indentation is spaces rather than tabs, and paste
+the file into <https://www.yamllint.com/>.
 
-Solution:
-```bash
-cp config/config.example.yml config/config.yml
-```
+**Permission denied writing images**
 
-### "Invalid YAML syntax" Error
-
-If you see YAML parsing errors:
-1. Check for proper indentation (use spaces, not tabs)
-2. Validate your YAML syntax: https://www.yamllint.com/
-3. Compare with `config.example.yml` for proper structure
-
-### "Permission denied" Error
-
-If you can't write to output directory:
 ```bash
 sudo chown -R $USER:www-data /var/www/html/images
 sudo chmod -R 775 /var/www/html/images
 ```
 
-## Version Control Best Practices
-
-### What's Tracked in Git
-✅ `config.example.yml` - Template configuration
-✅ `config/README.md` - This documentation
-
-### What's NOT Tracked
-❌ `config.yml` - Your personal configuration
-❌ `config/*.backup*` - Backup files
-
-Note that the ignore rules cover exactly those two patterns. Any other `.yml`
-you leave in `config/` **will** be committed.
-
-This ensures:
-- You can safely customize `config.yml` without git conflicts
-- You can pull updates without losing your settings
-- Example config stays up-to-date in the repository
+For the areas with more to say than fits in a comment:
+[OVERLAY.md](../docs/OVERLAY.md), [WEATHER.md](../docs/WEATHER.md),
+[EXPOSURE.md](../docs/EXPOSURE.md).

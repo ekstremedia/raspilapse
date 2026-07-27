@@ -11,11 +11,12 @@ from datetime import timedelta
 import pytest
 import yaml
 
-from raspilapse.config import (  # noqa: E402
+from raspilapse.config import (
     PROJECT_ROOT,
     format_duration,
     get_db_path,
     load_config,
+    merge_defaults,
     parse_time_arg,
     resolve_config_path,
 )
@@ -98,12 +99,28 @@ class TestLoadConfig:
     def test_reads_yaml(self, tmp_path):
         p = tmp_path / "c.yml"
         p.write_text(yaml.dump({"a": {"b": 1}}))
-        assert load_config(str(p)) == {"a": {"b": 1}}
+        assert load_config(str(p), defaults=False) == {"a": {"b": 1}}
 
     def test_empty_file_is_an_empty_dict_not_none(self, tmp_path):
         p = tmp_path / "c.yml"
         p.write_text("")
-        assert load_config(str(p)) == {}
+        assert load_config(str(p), defaults=False) == {}
+
+    def test_defaults_are_applied_by_default(self, tmp_path):
+        """The whole point: a config file only says what it wants to change."""
+        p = tmp_path / "c.yml"
+        p.write_text(yaml.dump({"output": {"project_name": "mycam"}}))
+
+        config = load_config(str(p))
+
+        assert config["output"]["project_name"] == "mycam", "what the file says wins"
+        assert config["output"]["quality"] == 85, "and the rest is filled in"
+        assert config["adaptive_timelapse"]["interval"] == 30
+
+    def test_an_empty_file_still_yields_a_usable_config(self, tmp_path):
+        p = tmp_path / "c.yml"
+        p.write_text("")
+        assert load_config(str(p))["adaptive_timelapse"]["interval"] == 30
 
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -114,6 +131,38 @@ class TestLoadConfig:
         p.write_text("{ not: valid: [[[")
         with pytest.raises(yaml.YAMLError):
             load_config(str(p))
+
+
+class TestMergeDefaults:
+    def test_config_wins_over_defaults(self):
+        merged = merge_defaults({"a": 1}, {"a": 2, "b": 3})
+        assert merged == {"a": 1, "b": 3}
+
+    def test_merges_nested_dicts_rather_than_replacing_them(self):
+        merged = merge_defaults({"a": {"x": 1}}, {"a": {"x": 0, "y": 2}})
+        assert merged == {"a": {"x": 1, "y": 2}}
+
+    def test_lists_replace_rather_than_merge(self):
+        """colour_gains is [red, blue]; a half-merged pair is worse than either."""
+        merged = merge_defaults({"gains": [1.0]}, {"gains": [1.8, 2.0]})
+        assert merged == {"gains": [1.0]}
+
+    def test_neither_argument_is_modified(self):
+        config = {"a": {"x": 1}}
+        defaults = {"a": {"y": 2}}
+
+        merge_defaults(config, defaults)
+
+        assert config == {"a": {"x": 1}}
+        assert defaults == {"a": {"y": 2}}
+
+    def test_none_config_yields_the_defaults(self):
+        assert merge_defaults(None, {"a": 1}) == {"a": 1}
+
+    def test_an_explicit_false_is_not_treated_as_absent(self):
+        """`.get(key) or default` would turn a deliberate false back on."""
+        merged = merge_defaults({"enabled": False}, {"enabled": True})
+        assert merged["enabled"] is False
 
 
 class TestGetDbPath:

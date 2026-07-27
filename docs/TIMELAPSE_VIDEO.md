@@ -614,4 +614,4 @@ The upload sends:
 
 - [../README.md](../README.md) - Project overview
 - [EXPOSURE.md](EXPOSURE.md) - Exposure control and transitions
-- [config/config.example.yml](../config/config.example.yml) - Full configuration reference
+- [docs/CONFIG-REFERENCE.yml](CONFIG-REFERENCE.yml) - Full configuration reference

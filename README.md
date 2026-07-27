@@ -105,9 +105,14 @@ Other installer options:
 
 ## Configuration
 
-`config/config.example.yml` is the documented schema — every setting is
-explained there, and a test fails if it drifts from what the code reads. Copy
-it to `config/config.yml`, which is gitignored because it holds your API keys.
+Copy `config/config.example.yml` to `config/config.yml`, which is gitignored
+because it holds your API keys. The example is deliberately short — about sixty
+lines — because everything it leaves out has a default in
+`raspilapse/config.py`. Your config only has to say what you want to change.
+
+`docs/CONFIG-REFERENCE.yml` is the full schema, every setting annotated. A test
+fails if it drifts from what the code actually reads, and another fails if the
+code starts requiring something with no default.
 
 The settings most worth understanding:
 
@@ -202,7 +207,7 @@ raspilapse/
   cli/                one module per console command
 scripts/              install.sh, cleanup, watchdog, graph and stats tools
 systemd/              unit templates, rendered by install.sh
-config/               config.example.yml is the schema
+config/               config.example.yml, a short starter file
 ```
 
 ## Documentation
@@ -210,6 +215,7 @@ config/               config.example.yml is the schema
 | Document | Contents |
 |----------|----------|
 | [docs/INSTALL.md](docs/INSTALL.md) | Full installation walkthrough |
+| [docs/CONFIG-REFERENCE.yml](docs/CONFIG-REFERENCE.yml) | Every setting, annotated |
 | [docs/EXPOSURE.md](docs/EXPOSURE.md) | Exposure control and transitions |
 | [docs/OVERLAY.md](docs/OVERLAY.md) | Overlay configuration |
 | [docs/WEATHER.md](docs/WEATHER.md) | Weather data integration |
