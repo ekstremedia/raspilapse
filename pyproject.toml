@@ -40,7 +40,9 @@ classifiers = [
 # to install them separately.
 dependencies = [
     "PyYAML>=6.0",
-    "Pillow>=10.0.1",
+    # 11.x, not 12.x: Pillow 12 requires Python 3.10 and this package
+    # supports 3.9. A Pi installs neither -- apt ships 9.4.0 with picamera2.
+    "Pillow>=11.0.0",
     "numpy>=1.21.0",
 ]
 

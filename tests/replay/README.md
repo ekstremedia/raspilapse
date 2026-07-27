@@ -107,7 +107,7 @@ same recorded light, with the loop closed, and reports which exposes it more
 accurately and with less flicker. That is what showed the ladder was an
 improvement rather than merely a change:
 
-```
+```text
 brightness error   35.0 -> 25.6
 flicker, stops      0.077 -> 0.031
 settled              38% -> 61%

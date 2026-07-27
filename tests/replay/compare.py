@@ -92,7 +92,12 @@ def scene_luminance(sequence):
         # `is None`, not falsy. A frame measuring 0.0 is a measurement, and
         # dropping it would exclude the darkest frames of deep_dark and
         # crashing_light from exactly the comparison used to judge the ladder.
-        if brightness is None or not exposure_us:
+        # A clipped frame is not a measurement of the light, only a floor
+        # under it: at brightness 255 the scene was *at least* this bright and
+        # the true luminance is unknowable. Dividing anyway would understate it
+        # and bias the very comparison this exists to make. The docstring here
+        # claimed this for a while before the code did it.
+        if brightness is None or brightness >= SATURATED or not exposure_us:
             out.append(None)
             continue
 

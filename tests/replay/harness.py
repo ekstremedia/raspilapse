@@ -118,7 +118,12 @@ def scene_luminance(frame: Dict) -> Optional[float]:
     # `is None`, not falsy: a frame that genuinely measured 0.0 is a
     # measurement, and the darkest frames are exactly the ones the closed loop
     # most needs to see. This is the same distinction _required_exposure makes.
-    if brightness is None or not exposure_us:
+    #
+    # A saturated frame is the opposite case and is rejected: at the sensor
+    # ceiling the reading bounds the light from below rather than measuring it,
+    # so dividing would understate the scene. Same rule as compare.py, so the
+    # goldens and the comparison share one scene model.
+    if brightness is None or brightness >= SATURATED or not exposure_us:
         return None
 
     product = (exposure_us / 1e6) * gain
