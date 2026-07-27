@@ -31,6 +31,23 @@ doing at that moment:
 That is a real frame from a real dusk: 23:20 on 26 April, a 2.5-second exposure,
 the frame landing at brightness 125 out of 255.
 
+**Do not read a sequence's `brightness` block as what the controller sees.** The
+replay is closed-loop: it divides the recorded brightness by the recorded
+exposure to recover the scene's luminance, and from then on shows the controller
+the brightness *its own* choices would have produced. `harness.observe` builds
+that from the simulated mean, so `overexposed_percent` and
+`underexposed_percent` are derived per frame and the recorded values are never
+passed to the code under test. Only `mean_brightness` seeds the luminance;
+`std_brightness` and `percentile_95` are carried across and rescaled.
+
+The gap this leaves is worth knowing about, because it has now caught two
+readers. `synthetic_clipping_sweep` stores `overexposed_percent: 0.0` on all 172
+frames, which reads as a fixture that cannot possibly exercise the clipping
+path. Replayed, the controller sees clipping ranging up to 26.8%, with 129
+frames past the 5% warning threshold — and the sequence is the only detector of
+the clipped-pixel mutation. The stored zeroes are an artefact of the uniform
+frame schema, not a description of the test.
+
 **`golden/` — what the code decided about it.** Feed a sequence through the
 exposure controller and write down every decision:
 
