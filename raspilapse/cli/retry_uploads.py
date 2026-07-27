@@ -27,16 +27,16 @@ def main():
         epilog="""
 Examples:
   # Process queue (respects backoff timing)
-  python3 src/retry_uploads.py
+  python3 -m raspilapse.cli.retry_uploads
 
   # Retry all pending uploads immediately
-  python3 src/retry_uploads.py --force
+  python3 -m raspilapse.cli.retry_uploads --force
 
   # Show queue status without processing
-  python3 src/retry_uploads.py --status
+  python3 -m raspilapse.cli.retry_uploads --status
 
   # Cancel queued uploads whose source video has been deleted
-  python3 src/retry_uploads.py --purge-missing
+  python3 -m raspilapse.cli.retry_uploads --purge-missing
         """,
     )
 

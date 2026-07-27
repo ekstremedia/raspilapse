@@ -34,18 +34,23 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
-# picamera2 is deliberately absent: it must come from apt, not pip.
+# picamera2 is deliberately absent: it must come from apt, not pip. It brings
+# numpy and Pillow with it, so on a Pi these are already satisfied -- they are
+# declared because this package imports them directly, not because anyone has
+# to install them separately.
 dependencies = [
     "PyYAML>=6.0",
     "Pillow>=10.0.0",
     "numpy>=1.21.0",
-    "astral>=3.2",
-    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]
-# Streams the daily video upload instead of buffering ~300 MB in memory.
-upload = ["requests-toolbelt>=1.0.0"]
+# Sun elevation: a recorded diagnostic and the polar-day override. apt ships
+# astral 1.6, whose API predates LocationInfo, hence the pip floor.
+sun = ["astral>=3.2"]
+# Uploading the daily video. requests-toolbelt streams the multipart body
+# instead of buffering ~300 MB in memory.
+upload = ["requests>=2.28.0", "requests-toolbelt>=1.0.0"]
 # Only scripts/db_graphs.py and scripts/graph_solar_patterns.py need these.
 graphs = ["matplotlib>=3.5.0"]
 dev = [

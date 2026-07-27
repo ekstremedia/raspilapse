@@ -8,13 +8,12 @@ them together horizontally. The result shows clouds, day/night transitions,
 and aurora movement in a single static image.
 
 Usage:
-    python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/
-    python3 src/create_keogram.py --dir /path/to/images --output keogram.jpg
+    python3 -m raspilapse.video.keogram --dir /var/www/html/images/2025/12/24/
+    python3 -m raspilapse.video.keogram --dir /path/to/images --output keogram.jpg
 """
 
 import argparse
 import logging
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -22,17 +21,8 @@ from typing import List, Optional
 
 from PIL import Image
 
-# Add project root to path for imports
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-try:
-    from raspilapse.console import Colors, print_info, print_section
-    from raspilapse.logging_setup import configure_logging, get_logger
-except ModuleNotFoundError:
-    from raspilapse.console import Colors, print_info, print_section
-    from raspilapse.logging_setup import configure_logging, get_logger
+from raspilapse.console import Colors, print_info, print_section
+from raspilapse.logging_setup import configure_logging, get_logger
 
 
 def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:
@@ -391,16 +381,16 @@ def main():
         epilog="""
 Examples:
   # Create keogram from a day folder
-  python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/
+  python3 -m raspilapse.video.keogram --dir /var/www/html/images/2025/12/24/
 
   # Create slitscan instead of keogram
-  python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/ --slitscan
+  python3 -m raspilapse.video.keogram --dir /var/www/html/images/2025/12/24/ --slitscan
 
   # Specify output filename
-  python3 src/create_keogram.py --dir /path/to/images --output keogram_custom.jpg
+  python3 -m raspilapse.video.keogram --dir /path/to/images --output keogram_custom.jpg
 
   # Specify output directory (file will be named keogram_YYYY-MM-DD.jpg)
-  python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/ --output-dir /var/www/html/keograms/
+  python3 -m raspilapse.video.keogram --dir /var/www/html/images/2025/12/24/ --output-dir /var/www/html/keograms/
 
 What is a Keogram?
   A keogram shows the passage of time by taking the center vertical slice

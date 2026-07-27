@@ -1,23 +1,34 @@
-# Production dependencies for Raspilapse
-# Note: picamera2 must be installed via apt, not pip
-# sudo apt install -y python3-picamera2
+# Runtime dependencies for Raspilapse.
+#
+# On a Raspberry Pi you do not need this file. Everything here arrives with
+#
+#     sudo apt install -y python3-picamera2 python3-yaml ffmpeg
+#
+# because python3-picamera2 depends on python3-numpy and python3-pil. Prefer
+# the apt packages: picamera2 cannot be installed from pip at all, and pip
+# upgrading numpy underneath it breaks it with a binary-incompatibility error.
+#
+# This file is for CI and for non-Pi development checkouts.
 
-# YAML configuration parsing
+# Configuration. The one dependency with no other way in.
 PyYAML>=6.0
 
-# Image processing for overlay system
+# Overlay rendering and keograms; also the lores brightness metering the
+# exposure loop closes on. Both are pulled in by python3-picamera2.
 Pillow>=10.0.0
-
-# Image analysis (capture pipeline) and graph generation (scripts/db_graphs.py)
 numpy>=1.21.0
-matplotlib>=3.5.0
 
-# Sun position calculation for polar regions (68°N)
+# --- everything below is optional; the feature degrades if it is absent ---
+
+# Sun elevation, recorded as a diagnostic and used for the polar-day override.
+# apt ships astral 1.6, whose API predates LocationInfo, so this one really
+# does need pip: pip3 install --break-system-packages 'astral>=3.2'
 astral>=3.2
 
-# HTTP requests for weather API
+# Uploading the daily video. requests-toolbelt streams the multipart body
+# instead of holding ~300 MB in memory.
 requests>=2.28.0
-
-# Streaming multipart uploads for the daily video POST (keeps ~300 MB
-# bodies off the heap; plain requests.post(files=…) buffers everything)
 requests-toolbelt>=1.0.0
+
+# scripts/db_graphs.py and scripts/graph_solar_patterns.py only.
+matplotlib>=3.5.0

@@ -495,6 +495,49 @@ class TestUploadToServer:
             assert error is None
             assert response == '{"id": 123, "status": "uploaded"}'
 
+    def test_upload_without_requests_reports_why(self, upload_config, temp_video_file):
+        """requests is optional, so its absence must be a clear message, not a crash.
+
+        Only the upload itself needs it. Queueing, the retry schedule and the
+        statistics are plain SQLite, so a camera that never uploads -- the
+        default -- should still render its daily video without an HTTP client
+        installed.
+        """
+        service = UploadService(upload_config)
+
+        with patch("raspilapse.storage.upload.requests", None):
+            success, error, response = service.upload_to_server(
+                video_path=Path(temp_video_file),
+                keogram_path=None,
+                slitscan_path=None,
+                date="2026-01-21",
+            )
+
+        assert success is False
+        assert response is None
+        assert "requests is not installed" in error
+        assert "python3-requests" in error, "the error should say how to fix it"
+
+    def test_queue_works_without_requests(self, upload_config, temp_video_file):
+        """Everything except the POST is SQLite, so the queue works with requests gone.
+
+        Complements test_optional_dependencies.py, which checks the import
+        itself survives; this checks the code path does.
+        """
+        service = UploadService(upload_config)
+
+        with patch("raspilapse.storage.upload.requests", None):
+            upload_id = service.queue_upload(
+                video_path=str(temp_video_file),
+                keogram_path=None,
+                slitscan_path=None,
+                video_date="2026-01-21",
+            )
+            stats = service.get_queue_stats()
+
+        assert upload_id is not None
+        assert stats["pending"] == 1
+
     def test_upload_without_toolbelt_uses_files_fallback(self, upload_config, temp_video_file):
         """Without requests-toolbelt, fall back to requests' own multipart encoder."""
         service = UploadService(upload_config)

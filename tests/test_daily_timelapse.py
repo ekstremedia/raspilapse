@@ -10,6 +10,7 @@ Tests the daily timelapse runner including:
 - Main CLI function
 """
 
+import importlib.util
 import shutil
 import tempfile
 from datetime import datetime
@@ -685,11 +686,20 @@ class TestCompleteWorkflow:
 
         # Verify correct arguments were passed
         call_args = mock_run.call_args[0][0]
-        assert "make_timelapse.py" in " ".join(call_args)
         assert "--start" in call_args
         assert "05:00" in call_args
         assert "--start-date" in call_args
         assert "2025-12-24" in call_args
+
+        # The renderer runs in a separate process, so nothing here fails if the
+        # target does not exist -- the failure lands in a systemd unit at 05:00
+        # instead. This used to assert only that "make_timelapse.py" appeared in
+        # the command, which stayed true when the path underneath it stopped
+        # existing. Resolve the target for real.
+        assert call_args[1:3] == ["-m", "raspilapse.cli.timelapse"], call_args
+        assert (
+            importlib.util.find_spec(call_args[2]) is not None
+        ), f"{call_args[2]} is not importable, so the daily video job would fail"
 
 
 if __name__ == "__main__":

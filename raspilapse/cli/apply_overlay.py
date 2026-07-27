@@ -24,19 +24,19 @@ def main():
         epilog="""
 Examples:
   # Apply overlay to a single image
-  python3 src/apply_overlay.py test_photos/kringelen_2025_11_05_10_30_45.jpg
+  python3 -m raspilapse.cli.overlay test_photos/kringelen_2025_11_05_10_30_45.jpg
 
   # Apply overlay to multiple images
-  python3 src/apply_overlay.py test_photos/*.jpg
+  python3 -m raspilapse.cli.overlay test_photos/*.jpg
 
   # Specify custom metadata and output
-  python3 src/apply_overlay.py image.jpg -m metadata.json -o output.jpg
+  python3 -m raspilapse.cli.overlay image.jpg -m metadata.json -o output.jpg
 
   # Override mode for overlay
-  python3 src/apply_overlay.py image.jpg --mode night
+  python3 -m raspilapse.cli.overlay image.jpg --mode night
 
   # Batch process with different output directory
-  python3 src/apply_overlay.py test_photos/*.jpg --output-dir overlayed/
+  python3 -m raspilapse.cli.overlay test_photos/*.jpg --output-dir overlayed/
         """,
     )
 

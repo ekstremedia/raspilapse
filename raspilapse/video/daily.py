@@ -18,19 +18,9 @@ from pathlib import Path
 
 import yaml
 
-# Add project root to path for imports
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-try:
-    from raspilapse.config import load_config
-    from raspilapse.logging_setup import configure_logging, get_logger
-    from raspilapse.storage.upload import UploadService
-except ModuleNotFoundError:
-    from raspilapse.config import load_config
-    from raspilapse.logging_setup import configure_logging, get_logger
-    from raspilapse.storage.upload import UploadService
+from raspilapse.config import PROJECT_ROOT, load_config
+from raspilapse.logging_setup import configure_logging, get_logger
+from raspilapse.storage.upload import UploadService
 
 
 def _find_dated_file(video_dir: Path, patterns: list, date_str: str) -> Path:
@@ -102,16 +92,16 @@ def main():
         epilog="""
 Examples:
   # Run for yesterday (default, designed for 5 AM cron job)
-  python3 src/daily_timelapse.py
+  python3 -m raspilapse.cli.daily
 
   # Run for a specific date
-  python3 src/daily_timelapse.py --date 2025-12-24
+  python3 -m raspilapse.cli.daily --date 2025-12-24
 
   # Skip upload (just create video)
-  python3 src/daily_timelapse.py --no-upload
+  python3 -m raspilapse.cli.daily --no-upload
 
   # Only upload (video already exists)
-  python3 src/daily_timelapse.py --only-upload --date 2025-12-24
+  python3 -m raspilapse.cli.daily --only-upload --date 2025-12-24
         """,
     )
 
@@ -144,8 +134,10 @@ Examples:
     args = parser.parse_args()
     configure_logging(args.config)
 
-    # Change to project directory
-    os.chdir(project_root)
+    # Relative paths in the config -- the video directory, the database, the
+    # log directory -- resolve against the working directory, so this has to
+    # run from the project root wherever the timer invoked it from.
+    os.chdir(PROJECT_ROOT)
 
     # Load configuration
     try:
@@ -186,12 +178,17 @@ Examples:
         print("\n=== Creating Timelapse Video ===")
         logger.info("Starting timelapse creation")
 
-        # Build command for make_timelapse.py
-        # Use 05:00 to 05:00 window (same as old script)
-        # Include --slitscan to generate slitscan image
+        # Build the command for the timelapse renderer, run as a separate
+        # process so a crash or an OOM while encoding a day of 4K frames cannot
+        # take this runner down with it.
+        #
+        # Invoked with -m rather than by path: this used to point at
+        # src/make_timelapse.py, which stopped existing when the package moved,
+        # and would have failed at 05:00 with a file-not-found.
         make_timelapse_cmd = [
             sys.executable,
-            os.path.join(project_root, "src", "make_timelapse.py"),
+            "-m",
+            "raspilapse.cli.timelapse",
             "--config",
             args.config,
             "--start",
@@ -209,7 +206,7 @@ Examples:
             print(f"Would run: {' '.join(make_timelapse_cmd)}")
         else:
             logger.info(f"Running: {' '.join(make_timelapse_cmd)}")
-            result = subprocess.run(make_timelapse_cmd, cwd=project_root)
+            result = subprocess.run(make_timelapse_cmd, cwd=PROJECT_ROOT)
 
             # Exit 2 from make_timelapse.py means "no images for this date".
             # That is a normal outcome (camera was off, fresh install), not a

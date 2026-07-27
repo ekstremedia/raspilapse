@@ -29,41 +29,48 @@ below Raspilapse — reseat the cable and re-check raspi-config.
 
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-picamera2 python3-yaml python3-pil python3-numpy \
-                    python3-requests python3-requests-toolbelt python3-matplotlib \
-                    python3-pip ffmpeg
+sudo apt install -y python3-picamera2 python3-yaml ffmpeg
 ```
 
 | Package | Needed for |
 |---------|-----------|
 | `python3-picamera2` | the camera itself — **apt only**, pip builds fail |
 | `python3-yaml` | configuration |
-| `python3-pil` | the overlay |
-| `python3-numpy` | brightness analysis in the capture loop |
-| `python3-requests`, `python3-requests-toolbelt` | uploading the daily video |
-| `python3-matplotlib` | the graph scripts |
 | `ffmpeg` | video assembly |
+
+That is everything required. `python3-picamera2` depends on `python3-numpy` and
+`python3-pil`, so the brightness metering and the overlay are already covered —
+this command used to name them separately, which made the install look bigger
+than it is.
+
+## 2. Optional extras
+
+Each buys exactly one feature. Skip any of them and that feature reports itself
+as unavailable; nothing else changes.
+
+| Install | Buys |
+|---------|------|
+| `pip3 install --break-system-packages 'astral>=3.2'` | sun elevation recorded with each frame, and the polar-day override |
+| `sudo apt install -y python3-requests python3-requests-toolbelt` | uploading the daily video |
+| `sudo apt install -y python3-matplotlib` | `scripts/db_graphs.py` and `scripts/graph_solar_patterns.py` |
+
+`./scripts/install.sh --check` lists which of these you have and what each
+missing one would give you.
+
+astral is the only one that needs pip: apt ships 1.6, whose API predates the
+`LocationInfo` this code uses. `--break-system-packages` is Bookworm's way of
+allowing pip alongside apt, and is safe here because nothing is being
+overwritten.
 
 `requests-toolbelt` streams the upload rather than holding a ~300 MB video in
 memory. Without it uploads still work, more expensively, and you get one warning
 saying so.
 
-## 2. astral
-
-Sun elevation drives mode selection at high latitudes. The packaged version is
-1.6, whose API this code does not use:
-
-```bash
-pip3 install --break-system-packages 'astral>=3.2'
-```
-
-`--break-system-packages` is Bookworm's way of allowing pip alongside apt. It is
-safe here: astral has no apt package at a usable version, so nothing is being
-overwritten.
-
-> **On virtualenvs:** the systemd units run `/usr/bin/python3` directly, and
-> picamera2 cannot be pip-installed, so a plain venv will not work. If you want
-> one, create it with `--system-site-packages`.
+> **On virtualenvs:** don't, unless you have a reason. The systemd units run
+> `/usr/bin/python3` directly, picamera2 cannot be pip-installed, and a venv
+> with its own numpy will shadow the one picamera2 was compiled against — which
+> fails at import with `numpy.dtype size changed`. If you want one anyway,
+> create it with `--system-site-packages` and do not install numpy into it.
 
 ## 3. Clone and configure
 

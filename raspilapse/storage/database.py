@@ -16,8 +16,8 @@ Usage:
     db.store_capture(image_path, metadata, mode, lux, brightness_metrics, weather_data)
     captures = db.get_captures_in_range(start_time, end_time)
 
-    python3 src/database.py --stats
-    python3 src/database.py --prune
+    python3 -m raspilapse.cli.db --stats
+    python3 -m raspilapse.cli.db --prune
 """
 
 import os
@@ -901,10 +901,10 @@ def main() -> int:
         description="Raspilapse database maintenance",
         epilog=(
             "Examples:\n"
-            "  python3 src/database.py --stats\n"
-            "  python3 src/database.py --prune --dry-run\n"
-            "  python3 src/database.py --prune\n"
-            "  python3 src/database.py --prune --vacuum   # reclaims disk, slow\n"
+            "  python3 -m raspilapse.cli.db --stats\n"
+            "  python3 -m raspilapse.cli.db --prune --dry-run\n"
+            "  python3 -m raspilapse.cli.db --prune\n"
+            "  python3 -m raspilapse.cli.db --prune --vacuum   # reclaims disk, slow\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

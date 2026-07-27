@@ -4,7 +4,6 @@
 Shows service status, configuration, and recent captures with beautiful colored output.
 """
 
-import os
 import subprocess
 import sys
 from datetime import datetime
@@ -13,15 +12,7 @@ from typing import Dict, List, Tuple
 
 import yaml
 
-# Add project root to path for imports
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-try:
-    from raspilapse.console import Colors
-except ModuleNotFoundError:
-    from raspilapse.console import Colors
+from raspilapse.console import Colors
 
 
 class StatusDisplay:

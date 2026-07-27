@@ -18,21 +18,10 @@ from typing import List, Tuple
 
 import yaml
 
-# Add project root to path for imports
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-try:
-    from raspilapse.config import load_config as _load_config
-    from raspilapse.console import Colors, print_info, print_section, print_subsection
-    from raspilapse.logging_setup import configure_logging, get_logger
-    from raspilapse.video.keogram import create_keogram, create_slitscan
-except ModuleNotFoundError:
-    from raspilapse.config import load_config as _load_config
-    from raspilapse.console import Colors, print_info, print_section, print_subsection
-    from raspilapse.logging_setup import configure_logging, get_logger
-    from raspilapse.video.keogram import create_keogram, create_slitscan
+from raspilapse.config import load_config as _load_config
+from raspilapse.console import Colors, print_info, print_section, print_subsection
+from raspilapse.logging_setup import configure_logging, get_logger
+from raspilapse.video.keogram import create_keogram, create_slitscan
 
 
 def load_config(config_path: str = "config/config.yml") -> dict:
@@ -307,28 +296,28 @@ def main():
         epilog="""
 Examples:
   # Create video using default times from config (e.g., 04:00 yesterday to 04:00 today)
-  python3 src/make_timelapse.py
+  python3 -m raspilapse.cli.timelapse
 
   # Create video from 07:00 to 15:00 today
-  python3 src/make_timelapse.py --start 07:00 --end 15:00 --today
+  python3 -m raspilapse.cli.timelapse --start 07:00 --end 15:00 --today
 
   # Create video from specific dates and times
-  python3 src/make_timelapse.py --start 07:00 --end 15:00 --start-date 2025-12-24 --end-date 2025-12-25
+  python3 -m raspilapse.cli.timelapse --start 07:00 --end 15:00 --start-date 2025-12-24 --end-date 2025-12-25
 
   # Create video from 20:00 yesterday to 08:00 today
-  python3 src/make_timelapse.py --start 20:00 --end 08:00
+  python3 -m raspilapse.cli.timelapse --start 20:00 --end 08:00
 
   # Use first 100 images only (for testing)
-  python3 src/make_timelapse.py --limit 100
+  python3 -m raspilapse.cli.timelapse --limit 100
 
   # Custom config file
-  python3 src/make_timelapse.py -c config/custom.yml
+  python3 -m raspilapse.cli.timelapse -c config/custom.yml
 
   # Save to specific output directory (for automated daily videos)
-  python3 src/make_timelapse.py --output-dir /var/www/html/videos
+  python3 -m raspilapse.cli.timelapse --output-dir /var/www/html/videos
 
   # Create 1080p video using hardware encoder (faster on Raspberry Pi)
-  python3 src/make_timelapse.py -hd -hw
+  python3 -m raspilapse.cli.timelapse -hd -hw
         """,
     )
 

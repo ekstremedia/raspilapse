@@ -25,17 +25,27 @@ elevation rather than the clock.
 
 ```bash
 sudo apt update
-sudo apt install -y python3-picamera2 python3-yaml python3-pil python3-numpy \
-                    python3-requests python3-requests-toolbelt python3-matplotlib \
-                    python3-pip ffmpeg
-
-# astral 3.x is needed for sun elevation; the packaged version is too old
-pip3 install --break-system-packages 'astral>=3.2'
+sudo apt install -y python3-picamera2 python3-yaml ffmpeg
 
 git clone https://github.com/ekstremedia/raspilapse.git
 cd raspilapse
 cp config/config.example.yml config/config.yml
 nano config/config.yml     # at minimum: location, output.project_name, output.directory
+```
+
+That is the whole install. `python3-picamera2` brings numpy and Pillow with
+it, so listing those separately only made the command look longer.
+
+Optional, each for one feature, and each skippable — the feature degrades and
+nothing else notices:
+
+```bash
+# Sun elevation, recorded alongside each frame. apt ships astral 1.6, whose
+# API predates LocationInfo, so this is the one thing that needs pip.
+pip3 install --break-system-packages 'astral>=3.2'
+
+sudo apt install -y python3-requests python3-requests-toolbelt  # video upload
+sudo apt install -y python3-matplotlib                          # scripts/db_graphs.py
 ```
 
 Check everything is in place before installing any services:

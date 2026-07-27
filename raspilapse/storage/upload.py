@@ -20,7 +20,20 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
+try:
+    # Optional: only the upload itself needs it. Queueing, the retry schedule
+    # and the queue statistics are all plain SQLite, so a camera that never
+    # uploads -- which is the default, video_upload.enabled is false -- should
+    # not have to install an HTTP client to render its daily video.
+    import requests
+
+    RequestError = requests.exceptions.RequestException
+except ImportError:  # pragma: no cover - the module is present in CI
+    requests = None
+
+    class RequestError(Exception):
+        """Stands in for requests' exception so the handler below still parses."""
+
 
 try:
     # Optional: streams the multipart body instead of buffering it in memory.
@@ -150,6 +163,14 @@ class UploadService:
         Returns:
             Tuple of (success, error_message, server_response)
         """
+        if requests is None:
+            message = (
+                "requests is not installed, so the upload cannot be attempted. "
+                "Install it with: sudo apt install python3-requests"
+            )
+            self.logger.error(f"[Upload] {message}")
+            return False, message, None
+
         url = self.upload_config.get("url")
         api_key = self.upload_config.get("api_key")
 
@@ -224,7 +245,7 @@ class UploadService:
                 self.logger.error(f"[Upload] Upload failed: {error_msg}")
                 return False, error_msg, None
 
-        except requests.exceptions.RequestException as e:
+        except RequestError as e:
             error_msg = str(e)
             self.logger.error(f"[Upload] Request failed: {error_msg}")
             return False, error_msg, None

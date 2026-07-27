@@ -51,19 +51,27 @@ declare -A ENABLE_UNITS=(
     [watchdog]="raspilapse-watchdog.timer"
 )
 
-APT_PACKAGES=(
-    python3-picamera2 python3-yaml python3-pil python3-numpy
-    python3-requests python3-requests-toolbelt python3-matplotlib ffmpeg
-)
-# Python module -> how to get it. picamera2 is deliberately absent: it is
-# checked separately because it is the one that needs real hardware.
+# python3-picamera2 depends on python3-numpy and python3-pil, so naming those
+# separately only made the command longer. picamera2 itself is checked apart
+# from the rest, because it is the one that needs real hardware to be useful.
+APT_PACKAGES=(python3-picamera2 python3-yaml ffmpeg)
+
+# Required: without these nothing captures.
 declare -A PY_MODULES=(
     [yaml]="sudo apt install -y python3-yaml"
-    [PIL]="sudo apt install -y python3-pil"
-    [numpy]="sudo apt install -y python3-numpy"
-    [requests]="sudo apt install -y python3-requests"
-    [requests_toolbelt]="sudo apt install -y python3-requests-toolbelt"
-    [astral]="pip3 install --break-system-packages 'astral>=3.2'"
+    [PIL]="sudo apt install -y python3-pil          # normally arrives with picamera2"
+    [numpy]="sudo apt install -y python3-numpy      # normally arrives with picamera2"
+)
+
+# Optional: each buys one feature, and its absence is reported as such rather
+# than failing the check. The code degrades on its own -- uploads report a
+# clear error, sun elevation is recorded as NULL, the graph scripts are the
+# only thing that wants matplotlib.
+declare -A PY_OPTIONAL=(
+    [astral]="sun elevation          pip3 install --break-system-packages 'astral>=3.2'"
+    [requests]="video upload           sudo apt install -y python3-requests"
+    [requests_toolbelt]="streamed upload        sudo apt install -y python3-requests-toolbelt"
+    [matplotlib]="scripts/db_graphs.py   sudo apt install -y python3-matplotlib"
 )
 
 components=()
@@ -142,6 +150,14 @@ check_dependencies() {
         fi
     done
 
+    for mod in "${!PY_OPTIONAL[@]}"; do
+        if "$PYTHON" -c "import $mod" 2>/dev/null; then
+            ok "$mod"
+        else
+            warn "$mod is not installed - ${PY_OPTIONAL[$mod]}"
+        fi
+    done
+
     if "$PYTHON" -c "import picamera2" 2>/dev/null; then
         ok "picamera2"
     else
@@ -156,9 +172,8 @@ check_dependencies() {
 
     if [ "$missing" -ne 0 ]; then
         echo
-        err "Install everything at once with:"
+        err "Install what is required with:"
         err "  sudo apt install -y ${APT_PACKAGES[*]}"
-        err "  pip3 install --break-system-packages 'astral>=3.2'"
         return 1
     fi
 }
