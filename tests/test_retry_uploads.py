@@ -43,8 +43,14 @@ def config_file(tmp_path):
 
 
 def _run(cfg, *args):
-    with patch("sys.argv", ["retry_uploads.py", "-c", str(cfg), *args]):
-        return main()
+    # main() chdirs to the project root; leaking that into whatever runs next
+    # makes tests order-dependent.
+    cwd = os.getcwd()
+    try:
+        with patch("sys.argv", ["retry_uploads.py", "-c", str(cfg), *args]):
+            return main()
+    finally:
+        os.chdir(cwd)
 
 
 class TestUnconfigured:

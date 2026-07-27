@@ -10,11 +10,14 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import src.overlay_sources as overlay_sources  # noqa: E402
 from src.overlay_sources import (  # noqa: E402
     AuroraData,
     CachedJsonSource,
@@ -92,19 +95,34 @@ class TestFailureHandling:
         """The overlay is rebuilt twice per capture cycle. Warning every time an
         absent file's cache expires is how weather.py once produced 72,000
         identical lines."""
-        import logging
-
         src = _Source(_cfg(tmp_path / "never.json"))
-        logger = logging.getLogger("overlay")
-        logger.addHandler(caplog.handler)
+        # The module's own logger, not getLogger("overlay") by name -- a rename
+        # there would silently give this test zero records and a confusing pass.
+        overlay_sources.logger.addHandler(caplog.handler)
         try:
             for _ in range(5):
                 src._cache_time = None
                 src.load()
         finally:
-            logger.removeHandler(caplog.handler)
+            overlay_sources.logger.removeHandler(caplog.handler)
 
-        assert len([r for r in caplog.records if "not found" in r.message]) == 1
+        assert len([r for r in caplog.records if "not found" in r.getMessage()]) == 1
+
+    def test_a_missing_file_is_not_stat_ed_on_every_render(self, tmp_path):
+        """The backoff has to apply when nothing has *ever* loaded.
+
+        Gating the TTL on `_cache is not None` made the stamp dead in exactly
+        the case that needs it: a file that has never existed. Every render then
+        paid a filesystem check -- twice per capture cycle, forever.
+        """
+        src = _Source(_cfg(tmp_path / "never.json"))
+        assert src.load() is None
+        stamped = src._cache_time
+        assert stamped is not None, "the failed attempt must be recorded"
+
+        with patch.object(Path, "exists", side_effect=AssertionError("hit the disk")):
+            assert src.load() is None
+        assert src._cache_time == stamped, "a cached miss must not re-stamp"
 
     def test_the_warning_re_arms_once_the_file_returns(self, tmp_path):
         src = _Source(_cfg(tmp_path / "later.json"))
@@ -155,3 +173,51 @@ class TestSubclasses:
             {"barentswatch": {"enabled": True, "ships_file": str(ships)}}
         ).get_ships_data()
         assert got == {"items": [{"name": "boat"}]}
+
+
+class TestNullMeasurements:
+    """A forecast point with an explicit null level must not take the overlay down.
+
+    `.get("level_cm", 0)` only defaults a *missing* key; a present null comes
+    back as None and reaches the interpolation arithmetic as a TypeError.
+    """
+
+    @staticmethod
+    def _tide(tmp_path, points):
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        p = tmp_path / "tide.json"
+        p.write_text(json.dumps({"tide_data": {"points": points}}))
+        return TideData({"tide": {"enabled": True, "tide_file": str(p)}})
+
+    def test_a_null_level_does_not_raise(self, tmp_path):
+        now = datetime.now()
+        src = self._tide(
+            tmp_path,
+            [
+                {"time": (now - timedelta(hours=1)).isoformat(), "level_cm": None},
+                {"time": (now + timedelta(hours=1)).isoformat(), "level_cm": 120},
+            ],
+        )
+        assert src.get_current_level() is not None
+
+    def test_all_nulls_still_yields_a_number(self, tmp_path):
+        now = datetime.now()
+        src = self._tide(
+            tmp_path,
+            [
+                {"time": (now - timedelta(hours=1)).isoformat(), "level_cm": None},
+                {"time": (now + timedelta(hours=1)).isoformat(), "level_cm": None},
+            ],
+        )
+        assert src.get_current_level() == 0.0
+
+    def test_a_missing_key_behaves_the_same_as_a_null(self, tmp_path):
+        now = datetime.now()
+        earlier = (now - timedelta(hours=1)).isoformat()
+        later = (now + timedelta(hours=1)).isoformat()
+        absent = self._tide(tmp_path / "a", [{"time": earlier}, {"time": later}])
+        explicit = self._tide(
+            tmp_path / "b",
+            [{"time": earlier, "level_cm": None}, {"time": later, "level_cm": None}],
+        )
+        assert absent.get_current_level() == explicit.get_current_level()

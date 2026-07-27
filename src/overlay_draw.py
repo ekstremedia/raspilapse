@@ -93,4 +93,7 @@ def draw_gradient_bar(draw, img_width: int, bar_height: int, base_color) -> None
     r, g, b, max_alpha = base_color
     for y in range(bar_height):
         alpha = int(max_alpha * (1.0 - (y / bar_height) * 0.3))
-        draw.rectangle([0, y, img_width, y + 1], fill=(r, g, b, alpha))
+        # Both ends inclusive in PIL, so this is one scanline at full width.
+        # [0, y, img_width, y + 1] would paint a second row, leaving the bar
+        # one pixel taller than bar_height.
+        draw.rectangle([0, y, img_width - 1, y], fill=(r, g, b, alpha))

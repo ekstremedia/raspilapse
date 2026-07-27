@@ -75,7 +75,10 @@ def _attributes_never_loaded():
     it, and a check for "does the name appear in the source" saw the string in
     the `.get()` call and passed.
     """
-    dead = {}
+    # A list, not a dict keyed by name: `enabled` is read into a dozen
+    # different attributes, and a dict would keep only the last one seen --
+    # quietly discarding a real offender behind an innocent namesake.
+    dead = []
     for directory in CODE_DIRS:
         for path in sorted(directory.rglob("*.py")):
             if "__pycache__" in path.parts:
@@ -105,7 +108,7 @@ def _attributes_never_loaded():
                         and target.value.id == "self"
                         and target.attr not in loaded
                     ):
-                        dead[key.value] = f"{path}:{node.lineno} self.{target.attr}"
+                        dead.append((key.value, f"{path}:{node.lineno} self.{target.attr}"))
     return dead
 
 
@@ -138,7 +141,7 @@ def test_no_documented_key_feeds_a_dead_attribute(example_config):
     dead = _attributes_never_loaded()
     documented = {p.split(".")[-1] for p in _leaf_paths(example_config)}
 
-    offenders = sorted(f"{key}  ->  {where}" for key, where in dead.items() if key in documented)
+    offenders = sorted(f"{key}  ->  {where}" for key, where in dead if key in documented)
     assert not offenders, (
         "config.example.yml documents keys whose value is read into an attribute "
         "that is never used:\n  " + "\n  ".join(offenders)

@@ -419,9 +419,9 @@ With these settings, 4K encoding uses ~1-1.5GB RAM (safe for 4GB Pi).
 **Problem:** Video quality too low or file too large
 
 **Solutions:**
-- Increase quality: Lower CRF (20 → 18)
-- Reduce file size: Higher CRF (20 → 23)
-- Adjust in config or use custom config file
+- Increase quality: lower `crf` (25 → 20)
+- Reduce file size: raise it (25 → 28)
+- Adjust in config or use a custom config file
 
 ## Advanced Usage
 
@@ -479,12 +479,14 @@ The timelapse generator integrates with the main Raspilapse system:
 
 ### Video Specifications
 
-Default output video:
+Output video, as the shipped example configures it:
 - **Codec:** H.264 (libx264)
 - **Pixel Format:** yuv420p (maximum compatibility)
-- **CRF:** 20 (excellent quality)
+- **CRF:** 25 (`video.codec.crf`; the code's own fallback, if the key is
+  absent entirely, is 23)
 - **Frame Rate:** 25 fps
-- **Resolution:** Matches source images (1920x1080)
+- **Resolution:** matches the source images — 3840x2160 with the example
+  `camera.resolution`
 
 ### ffmpeg Command
 
@@ -492,7 +494,7 @@ The script generates an ffmpeg command like:
 
 ```bash
 ffmpeg -f concat -safe 0 -i /tmp/images.txt \
-    -r 25 -vcodec libx264 -pix_fmt yuv420p -crf 20 \
+    -r 25 -vcodec libx264 -pix_fmt yuv420p -crf 25 \
     -y output.mp4
 ```
 

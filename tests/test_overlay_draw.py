@@ -5,11 +5,12 @@ misaligned beats an overlay that is not drawn, so every helper degrades rather
 than raising.
 """
 
+import glob
 import os
 import sys
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -26,6 +27,18 @@ from src.overlay_draw import (  # noqa: E402
 @pytest.fixture
 def draw():
     return ImageDraw.Draw(Image.new("RGBA", (400, 100), (0, 0, 0, 0)))
+
+
+def _real_font(size: int = 24):
+    """A TrueType font, or skip.
+
+    PIL's built-in fallback is a fixed-height bitmap font: every reference
+    string measures identically, which makes any claim about glyph metrics
+    pass for the wrong reason.
+    """
+    for path in glob.glob("/usr/share/fonts/**/DejaVuSans*.ttf", recursive=True):
+        return ImageFont.truetype(path, size)
+    pytest.skip("no DejaVu TrueType font available")
 
 
 class TestTextWidth:
@@ -55,9 +68,30 @@ class TestTextHeight:
     def test_measures_a_real_font(self, draw):
         assert text_height(draw, None) > 0
 
-    def test_is_reference_based_not_content_based(self, draw):
-        """Every line must come out the same height regardless of its glyphs."""
-        assert text_height(draw, None) == text_height(draw, None)
+    def test_the_default_reference_spans_cap_to_descender(self, draw):
+        """ "Ayg" is not arbitrary -- cap, x-height and descender in three glyphs.
+
+        text_height takes no text argument at all, so a line's height cannot
+        track its own glyphs. What this pins is that the default reference
+        measures the full line box rather than whatever happens to be short.
+        With DejaVu at 24px: Ayg 23, ABC 18 (no descender), xxx 13 (neither).
+        """
+        font = _real_font()
+        full = text_height(draw, font)
+        assert full > text_height(draw, font, reference="ABC")  # cap, no descender
+        assert full > text_height(draw, font, reference="xxx")  # neither
+
+    def test_a_ring_diacritic_overshoots_the_default_reference(self, draw):
+        """Documented limitation, not a contract: "Å" rises above a plain "A".
+
+        At 24px DejaVu, "Åjgq|" measures 28 against "Ayg"'s 23. A camera_name
+        like "Ålesund" therefore draws ~5px taller than the line height reserved
+        for it. Harmless against the bar's padding at the shipped size_ratio,
+        and widening the reference would shift the bar on every frame -- so this
+        records the behaviour rather than changing it.
+        """
+        font = _real_font()
+        assert text_height(draw, font, reference="Åjgq|") > text_height(draw, font)
 
     def test_falls_back_on_failure(self):
         class Unmeasurable:
@@ -109,3 +143,15 @@ class TestDrawing:
         draw_gradient_bar(ImageDraw.Draw(img), 30, 10, (0, 0, 0, 255))
         assert img.getpixel((0, 0))[3] > 0
         assert img.getpixel((29, 0))[3] > 0
+
+    def test_the_bar_is_exactly_bar_height_tall(self):
+        """PIL rectangles include both ends, so [.., y, .., y + 1] is two rows.
+
+        The bar used to run one scanline past bar_height, putting a band of
+        leftover alpha below where the layout thinks the bar stops.
+        """
+        img = Image.new("RGBA", (20, 12), (0, 0, 0, 0))
+        draw_gradient_bar(ImageDraw.Draw(img, "RGBA"), 20, 5, (0, 0, 30, 200))
+
+        painted = [y for y in range(12) if img.getpixel((10, y))[3] > 0]
+        assert painted == [0, 1, 2, 3, 4]

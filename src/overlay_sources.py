@@ -63,7 +63,11 @@ class CachedJsonSource:
             return None
 
         now = datetime.now()
-        if self._cache is not None and self._cache_time is not None:
+        # Not gated on _cache: a source that has never loaded successfully is
+        # exactly the one that needs the interval most. Gating on the cache
+        # made the stamp below dead for that case, so a missing file still cost
+        # a stat() on every render -- twice per capture cycle, forever.
+        if self._cache_time is not None:
             if (now - self._cache_time).total_seconds() < self.cache_duration:
                 return self._cache
 
@@ -227,6 +231,21 @@ class ShipsData(CachedJsonSource):
         return len([s for s in items if s.get("speed", 0) > 0.5])
 
 
+def _level_cm(point: Optional[Dict], default: float = 0.0) -> float:
+    """
+    Read a tide point's level as a number.
+
+    A plain `.get("level_cm", 0)` looks safe but returns None when the JSON
+    holds an explicit null -- the default only covers a *missing* key.
+    That None then reaches the interpolation arithmetic as a TypeError, taking
+    the whole overlay down over one bad forecast point.
+    """
+    if not point:
+        return default
+    value = point.get("level_cm")
+    return default if value is None else value
+
+
 class TideData(CachedJsonSource):
     """Handles loading and formatting tide data from pi-overlay-data."""
 
@@ -284,8 +303,8 @@ class TideData(CachedJsonSource):
         if prev_point and next_point:
             prev_time = self._parse_time(prev_point["time"])
             next_time = self._parse_time(next_point["time"])
-            prev_level = prev_point.get("level_cm", 0)
-            next_level = next_point.get("level_cm", 0)
+            prev_level = _level_cm(prev_point)
+            next_level = _level_cm(next_point)
 
             # Calculate interpolation factor (0.0 to 1.0)
             total_diff = (next_time - prev_time).total_seconds()
@@ -298,11 +317,11 @@ class TideData(CachedJsonSource):
 
         # If we only have previous point, use it
         if prev_point:
-            return prev_point.get("level_cm", 0) / 100.0
+            return _level_cm(prev_point) / 100.0
 
         # If we only have next point, use it
         if next_point:
-            return next_point.get("level_cm", 0) / 100.0
+            return _level_cm(next_point) / 100.0
 
         # Fallback to static current level
         current = data.get("current", {})
@@ -346,8 +365,8 @@ class TideData(CachedJsonSource):
 
         # Determine trend from the two surrounding points
         if prev_point and next_point:
-            prev_level = prev_point.get("level_cm", 0)
-            next_level = next_point.get("level_cm", 0)
+            prev_level = _level_cm(prev_point)
+            next_level = _level_cm(next_point)
 
             diff = next_level - prev_level
             if diff > 2:  # Rising threshold
@@ -408,7 +427,7 @@ class TideData(CachedJsonSource):
 
         def emit(kind: str, idx: int) -> None:
             nonlocal last_extreme_level, last_extreme_kind
-            level = points[idx].get("level_cm", 0)
+            level = _level_cm(points[idx])
             if last_extreme_level is not None and last_extreme_kind != kind:
                 if abs(level - last_extreme_level) < min_amplitude_cm:
                     return
@@ -421,8 +440,8 @@ class TideData(CachedJsonSource):
             last_extreme_kind = kind
 
         for i in range(1, len(points)):
-            prev_level = points[i - 1].get("level_cm", 0)
-            curr_level = points[i].get("level_cm", 0)
+            prev_level = _level_cm(points[i - 1])
+            curr_level = _level_cm(points[i])
 
             if curr_level > prev_level:
                 cur_dir = 1
@@ -451,10 +470,8 @@ class TideData(CachedJsonSource):
             # plateau; cur_dir is the direction leaving it.
             plateau_end = i - 1  # last index at the plateau level
             plateau_start = plateau_end
-            plateau_level = points[plateau_end].get("level_cm", 0)
-            while (
-                plateau_start > 0 and points[plateau_start - 1].get("level_cm", 0) == plateau_level
-            ):
+            plateau_level = _level_cm(points[plateau_end])
+            while plateau_start > 0 and _level_cm(points[plateau_start - 1]) == plateau_level:
                 plateau_start -= 1
             mid_idx = (plateau_start + plateau_end) // 2
 
@@ -535,16 +552,16 @@ class TideData(CachedJsonSource):
 
         if high_time and low_time:
             if high_time < low_time:
-                level = next_high.get("level_cm", 0) / 100.0
+                level = _level_cm(next_high) / 100.0
                 return ("high", high_time, level)
             else:
-                level = next_low.get("level_cm", 0) / 100.0
+                level = _level_cm(next_low) / 100.0
                 return ("low", low_time, level)
         elif high_time:
-            level = next_high.get("level_cm", 0) / 100.0
+            level = _level_cm(next_high) / 100.0
             return ("high", high_time, level)
         elif low_time:
-            level = next_low.get("level_cm", 0) / 100.0
+            level = _level_cm(next_low) / 100.0
             return ("low", low_time, level)
 
         return ("unknown", None, None)
@@ -594,8 +611,8 @@ class TideData(CachedJsonSource):
 
         high_time = self._parse_time(next_high.get("time")) if next_high else None
         low_time = self._parse_time(next_low.get("time")) if next_low else None
-        high_level = next_high.get("level_cm", 0) / 100.0 if next_high else None
-        low_level = next_low.get("level_cm", 0) / 100.0 if next_low else None
+        high_level = _level_cm(next_high) / 100.0 if next_high else None
+        low_level = _level_cm(next_low) / 100.0 if next_low else None
 
         return {
             "level": level,

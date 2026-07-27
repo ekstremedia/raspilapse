@@ -75,6 +75,19 @@ highlight protection, which is new and can be turned off in config.
   database pinned at v3 with the v4 index missing.
 - **18 tests had never run**, in four classes shadowed by a later class of the
   same name.
+- **The overlay bar was darker than its config said.** Each gradient row was
+  drawn as a two-pixel rectangle, so every row got painted twice and its alpha
+  compounded: `background.color` alpha 70 rendered at roughly 124. The bar also
+  ran one scanline past `bar_height`. Both fixed, which means **the bar now
+  renders lighter than before at the same setting** -- if you want the old look,
+  multiply your alpha by about 1.8. `config.example.yml` keeps 70, which for the
+  first time is what it actually produces.
+- **Tide points with an explicit `"level_cm": null`** reached the interpolation
+  arithmetic as `None` and raised, taking the whole overlay down over one bad
+  forecast entry. `.get("level_cm", 0)` only defaults a *missing* key.
+- **A never-present ships/tide/aurora file was stat()ed on every render.** The
+  retry interval was gated on there being a cached value, so it did nothing in
+  the one case it existed for.
 
 ### Changed
 - SQLite runs in WAL mode. Three unused indexes dropped (26 MB on a 515k-row

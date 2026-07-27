@@ -87,10 +87,15 @@ class TestResolveConfigPath:
         p = tmp_path / "x.yml"
         assert resolve_config_path(str(p)) == p
 
-    def test_relative_falls_back_to_the_project_root(self):
-        """Not the working directory -- that is how stray files got scattered."""
-        assert resolve_config_path("config/config.yml").is_absolute()
-        assert str(resolve_config_path("config/config.yml")).startswith(str(PROJECT_ROOT))
+    def test_relative_falls_back_to_the_project_root(self, tmp_path, monkeypatch):
+        """Not the working directory -- that is how stray files got scattered.
+
+        Run from somewhere else entirely: with the repo as cwd both the correct
+        and the incorrect resolution land under PROJECT_ROOT, so the assertion
+        holds either way and proves nothing.
+        """
+        monkeypatch.chdir(tmp_path)
+        assert resolve_config_path("config/config.yml") == PROJECT_ROOT / "config" / "config.yml"
 
 
 class TestLoadConfig:
