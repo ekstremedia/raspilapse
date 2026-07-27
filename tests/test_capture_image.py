@@ -820,15 +820,52 @@ class TestOverlayIntegration:
 
         try:
             config = CameraConfig(config_path)
-            capture = ImageCapture(config)
+
+            # The overlay is passed in rather than constructed here. ImageCapture
+            # no longer knows what an overlay is -- it applies whatever callable
+            # it was handed, which is what keeps Pillow out of the capture path.
+            mock_overlay = MagicMock(return_value=os.path.join(test_output_dir, "test.jpg"))
+            capture = ImageCapture(config, post_process=mock_overlay)
             capture.initialize_camera()
 
-            with patch.object(capture.overlay, "apply_overlay") as mock_overlay:
-                mock_overlay.return_value = os.path.join(test_output_dir, "test.jpg")
-                image_path, _ = capture.capture()
+            image_path, _ = capture.capture()
 
-                # Verify overlay was called
-                mock_overlay.assert_called_once()
+            mock_overlay.assert_called_once()
+            called_path, called_metadata, called_mode = mock_overlay.call_args[0]
+            assert called_path == image_path
+            assert isinstance(called_metadata, dict)
+        finally:
+            os.unlink(config_path)
+
+    def test_capture_without_post_process_leaves_the_frame_alone(
+        self, mock_picamera2, test_output_dir
+    ):
+        """No post-processor is the whole of "no overlay"."""
+        config_data = {
+            "camera": {
+                "resolution": {"width": 640, "height": 480},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+            },
+            "output": {
+                "directory": test_output_dir,
+                "filename_pattern": "test_%Y%m%d.jpg",
+                "project_name": "test",
+                "quality": 85,
+            },
+            "system": {"create_directories": True, "save_metadata": False},
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            capture = ImageCapture(CameraConfig(config_path))
+            capture.initialize_camera()
+
+            assert capture.post_process is None
+            image_path, _ = capture.capture()
+            assert image_path
         finally:
             os.unlink(config_path)
 

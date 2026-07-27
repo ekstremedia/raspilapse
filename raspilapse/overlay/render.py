@@ -17,6 +17,7 @@ except ImportError as e:
         "Pillow is required for overlay functionality. Install with: pip3 install Pillow"
     ) from e
 
+from raspilapse.config import PROJECT_ROOT
 from raspilapse.logging_setup import get_logger
 from raspilapse.overlay.layout import (
     draw_divider,
@@ -54,41 +55,46 @@ class ImageOverlay:
         self.config = config
         self.overlay_config = config.get("overlay", {})
         self.enabled = self.overlay_config.get("enabled", False)
-
-        # Initialize defaults (needed even when disabled for attribute safety)
         self._last_weather_data: Optional[Dict] = None
 
-        if not self.enabled:
-            logger.debug("Overlay disabled in configuration")
-            return
-
-        # Load font
-        self.font = self._load_font()
-
-        # Initialize weather data fetcher
+        # The data sources are built whether or not the overlay draws. They are
+        # pure attribute assignment -- every one of them fetches lazily, gated
+        # by its own `enabled` flag -- so there is nothing to save by skipping
+        # them, and the capture loop reads weather off this object to fill the
+        # database columns.
+        #
+        # This used to return early when disabled, leaving self.weather unset.
+        # The loop's read of capture.overlay.weather then raised AttributeError
+        # into an `except Exception` that logged at DEBUG, so `overlay.enabled:
+        # false` silently disabled all database logging as well.
         self.weather = WeatherData(config)
-
-        # Initialize system monitor
         self.system_monitor = SystemMonitor()
-
-        # Initialize ships data fetcher
         self.ships = ShipsData(config)
-
-        # Initialize tide data fetcher
         self.tide = TideData(config)
-
-        # Initialize aurora data fetcher
         self.aurora = AuroraData(config)
 
-        # Load pre-sized ship icon for header box
+        if not self.enabled:
+            logger.debug("Overlay disabled in configuration - data sources still available")
+            self.font = None
+            self._ship_icon = None
+            return
+
+        self.font = self._load_font()
+
+        # Pre-sized ship icon for the header box. PROJECT_ROOT rather than
+        # walking up from __file__: this module has already moved once, and the
+        # walk silently resolved to a directory that does not exist, which the
+        # exists() check below turned into a missing icon rather than an error.
         self._ship_icon = None
-        icon_path = Path(__file__).parent.parent / "icons" / "ship2_small.png"
+        icon_path = PROJECT_ROOT / "icons" / "ship2_small.png"
         if icon_path.exists():
             try:
                 self._ship_icon = Image.open(icon_path).convert("RGBA")
                 logger.debug(f"Loaded ship icon from {icon_path} ({self._ship_icon.size})")
             except Exception as e:
                 logger.warning(f"Could not load ship icon: {e}")
+        else:
+            logger.warning(f"Ship icon not found at {icon_path}")
 
         logger.debug("Overlay initialized")
 
@@ -409,7 +415,7 @@ class ImageOverlay:
         data.update(self.weather.format_fields(weather_data))
 
         # Add ships data if available
-        if hasattr(self, "ships") and self.ships.enabled:
+        if self.ships.enabled:
             ships_lines = self.ships.format_ships_lines(ships_per_line=6)
             data["ships"] = ships_lines[0] if ships_lines else ""
             data["ships_count"] = str(self.ships.get_ships_count())
@@ -428,7 +434,7 @@ class ImageOverlay:
                 data[f"ships_line_{i}"] = ""
 
         # Add tide data if available
-        if hasattr(self, "tide") and self.tide.enabled:
+        if self.tide.enabled:
             tide_widget = self.tide.get_widget_data()
             if tide_widget:
                 data["tide"] = self.tide.format_tide_compact()
@@ -578,7 +584,7 @@ class ImageOverlay:
             margin: Margin from edges
             padding: Padding inside boxes
         """
-        if not hasattr(self, "ships") or not self.ships.enabled:
+        if not self.ships.enabled:
             return
 
         ship_texts = self.ships.get_ship_boxes_data()
@@ -802,7 +808,7 @@ class ImageOverlay:
                 tide_section_width = 0
 
                 # Aurora section (far right) - only if enabled
-                if hasattr(self, "aurora") and self.aurora.enabled:
+                if self.aurora.enabled:
                     try:
                         aurora_widget = self.aurora.get_widget_data()
                         if aurora_widget:
@@ -853,7 +859,7 @@ class ImageOverlay:
                         logger.error(f"Failed to draw aurora widget: {aurora_err}", exc_info=True)
 
                 # Tide section (to left of aurora) - only if enabled
-                if hasattr(self, "tide") and self.tide.enabled:
+                if self.tide.enabled:
                     try:
                         tide_widget = self.tide.get_widget_data()
                         if tide_widget:

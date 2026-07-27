@@ -23,7 +23,7 @@ try:
 except ImportError:
     ASTRAL_AVAILABLE = False
 
-# Handle imports for both module and script execution
+
 from raspilapse.camera.capture import CameraConfig, ImageCapture
 
 # BrightnessZones and highlight_factor are re-exported for callers and
@@ -35,6 +35,8 @@ from raspilapse.camera.exposure import (  # noqa: F401
     highlight_factor,
 )
 from raspilapse.logging_setup import configure_logging, get_logger
+from raspilapse.overlay import build_overlay
+from raspilapse.overlay.sources.weather import WeatherData
 from raspilapse.storage.database import CaptureDatabase
 from raspilapse.system import SystemMonitor
 
@@ -81,6 +83,20 @@ class AdaptiveTimelapse:
                 self._system_monitor = SystemMonitor()
             except Exception as e:
                 logger.debug(f"[System] Failed to initialize monitor: {e}")
+
+        # Weather is a data source, not an overlay feature: the database has
+        # columns for it whether or not anything is drawn. This used to be read
+        # through capture.overlay.weather, which tied the weather columns to a
+        # setting that has nothing to do with them.
+        #
+        # The cache in the weather module is process-wide and keyed by
+        # endpoint, so this instance and the overlay's share it -- two
+        # instances, one HTTP request.
+        self._weather = WeatherData(self.config)
+
+        # None unless the overlay is switched on, and Pillow is only imported
+        # in the case where it is.
+        self._overlay = build_overlay(self.config)
 
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -785,7 +801,7 @@ class AdaptiveTimelapse:
                 # Initialize camera on first frame or if it was closed
                 if capture is None:
                     logger.debug("Initializing camera for timelapse...")
-                    capture = ImageCapture(self.camera_config)
+                    capture = ImageCapture(self.camera_config, post_process=self._overlay)
                     capture.initialize_camera(manual_controls=settings)
                     last_mode = mode
 
@@ -865,10 +881,7 @@ class AdaptiveTimelapse:
                         try:
                             db_metadata = capture_metadata if capture_metadata is not None else {}
 
-                            # Get weather data from overlay (if available)
-                            weather_data = None
-                            if capture and capture.overlay and capture.overlay.weather:
-                                weather_data = capture.overlay.weather.get_weather_data()
+                            weather_data = self._weather.get_weather_data()
 
                             # Get system metrics (CPU temp, load)
                             system_metrics = None

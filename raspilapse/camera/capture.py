@@ -4,13 +4,12 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 import yaml
 
-# Handle imports for both module and script execution
 from raspilapse.logging_setup import configure_logging, get_logger
-from raspilapse.overlay.render import ImageOverlay
+from raspilapse.overlay import build_overlay
 
 # Initialize logger
 logger = get_logger("capture_image")
@@ -101,19 +100,22 @@ class CameraConfig:
 class ImageCapture:
     """Handles image capture using Picamera2."""
 
-    def __init__(self, config: CameraConfig):
+    def __init__(self, config: CameraConfig, post_process: Optional[Callable] = None):
         """
         Initialize image capture.
 
         Args:
             config: Camera configuration object
+            post_process: Optional callable(image_path, metadata, mode) applied
+                to each frame after it is written. This is how the overlay is
+                attached. Leaving it None is the whole of "no overlay" -- this
+                module used to import the renderer itself, which made Pillow a
+                hard requirement of taking a photo even with the overlay off.
         """
         self.config = config
         self.picam2 = None
         self._counter = 0
-
-        # Initialize overlay handler
-        self.overlay = ImageOverlay(config.config)
+        self.post_process = post_process
 
         # Store last brightness metrics from lores stream (avoids disk I/O)
         self.last_brightness_metrics: Optional[Dict] = None
@@ -480,19 +482,16 @@ class ImageCapture:
                 # Always release the request
                 request.release()
 
-            # Apply overlay if enabled (do this after release to avoid holding camera)
-            if self.overlay.enabled and metadata_dict is not None:
-                logger.debug(f"Applying overlay to {output_path} (mode: {mode})...")
-                result = self.overlay.apply_overlay(str(output_path), metadata_dict, mode)
-                if result:
-                    logger.debug("Overlay applied successfully")
+            # Post-process after releasing the request, so the camera is not
+            # held while the frame is re-encoded.
+            if self.post_process is not None and metadata_dict is not None:
+                logger.debug(f"Post-processing {output_path} (mode: {mode})...")
+                if self.post_process(str(output_path), metadata_dict, mode):
+                    logger.debug("Post-processing applied")
                 else:
-                    logger.warning("Overlay application returned None/False")
-            else:
-                if not self.overlay.enabled:
-                    logger.debug("Overlay is disabled")
-                if metadata_dict is None:
-                    logger.warning("No metadata available for overlay")
+                    logger.warning("Post-processing returned nothing")
+            elif self.post_process is not None:
+                logger.warning("No metadata available, skipping post-processing")
 
             self._counter += 1
 
@@ -569,7 +568,9 @@ def capture_single_image(
     """
     config = CameraConfig(config_path)
 
-    with ImageCapture(config) as capture:
+    # build_overlay returns None unless the overlay is switched on, and only
+    # imports Pillow in the case where it is.
+    with ImageCapture(config, post_process=build_overlay(config.config)) as capture:
         return capture.capture(output_path)
 
 
