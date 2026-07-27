@@ -5,12 +5,14 @@ Perfect for 24/7 timelapses that capture both daylight and nighttime scenes,
 including stars and aurora activity.
 """
 
+import json
 import signal
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import yaml
 
@@ -43,6 +45,22 @@ from raspilapse.system import SystemMonitor
 
 # Initialize logger
 logger = get_logger("auto_timelapse")
+
+
+@dataclass
+class Decision:
+    """What the controller decided for one frame, and what it decided it from.
+
+    The loop used to carry these as six separate locals threaded through 290
+    lines, initialised to None at the top so the later diagnostics call would
+    not NameError when a branch skipped them.
+    """
+
+    mode: str
+    lux: Optional[float]
+    raw_lux: Optional[float]
+    transition_position: Optional[float]
+    settings: Dict[str, Any]
 
 
 class AdaptiveTimelapse:
@@ -643,6 +661,194 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.error(f"Error during close: {e}")
 
+    def _wants_test_shot(self) -> bool:
+        """Whether this frame should be preceded by a metering shot."""
+        test_shot = self.config["adaptive_timelapse"]["test_shot"]
+        frequency = test_shot.get("frequency", 1)
+        return bool(test_shot["enabled"]) and self.frame_count % frequency == 0
+
+    def _meter(self) -> Decision:
+        """Measure the light and decide what the camera should do.
+
+        Takes the fixed-settings test shot, turns it into a lux figure, picks a
+        mode and asks the controller for settings. Everything here is decision;
+        nothing touches the frame that gets kept.
+        """
+        test_image_path, test_metadata = self.take_test_shot()
+        raw_lux = self.calculate_lux(test_image_path, test_metadata)
+
+        # On the first frame after a restart the ISP may not have applied the
+        # test shot's settings yet, and the result comes back saturated. A
+        # seeded lux from the database is a better estimate than one measured
+        # from a blown frame.
+        if self.frame_count == 0:
+            raw_lux = self._prefer_seeded_lux_if_saturated(test_image_path, raw_lux)
+
+        lux = self.exposure.smooth_lux(raw_lux)
+
+        # Keep this on its own line. It is what populates self._sun_elevation,
+        # and Python evaluates arguments left to right: inlined into the call
+        # below, the attribute was read before the call that fills it, and the
+        # first frame after every restart passed None.
+        is_polar_day = self._is_polar_day(lux)
+        raw_mode = self.exposure.determine_mode(lux, self._sun_elevation, is_polar_day)
+        mode = self.exposure.apply_hysteresis(raw_mode)
+
+        position = self.exposure.transition_position(lux) if mode == LightMode.TRANSITION else None
+
+        self._seed_across_mode_change(mode, test_metadata)
+        if mode == LightMode.TRANSITION and position is not None:
+            self.exposure.log_transition_progress(lux, position)
+        self._previous_mode = mode
+
+        return Decision(
+            mode=mode,
+            lux=lux,
+            raw_lux=raw_lux,
+            transition_position=position,
+            settings=self.exposure.get_camera_settings(mode, lux),
+        )
+
+    def _prefer_seeded_lux_if_saturated(self, test_image_path: str, raw_lux: float) -> float:
+        """Fall back to the seeded lux when the first test shot comes back blown."""
+        test_brightness = self._analyze_image_brightness(test_image_path)
+        if not test_brightness:
+            return raw_lux
+
+        test_mean = test_brightness.get("mean_brightness", 128)
+        if (
+            test_mean > 250
+            and self.exposure.seed_exposure is not None
+            and self.exposure.smoothed_lux is not None
+        ):
+            logger.warning(
+                f"[Startup] First test shot saturated ({test_mean:.1f}/255) - "
+                f"using seeded lux={self.exposure.smoothed_lux:.1f} "
+                f"instead of calculated={raw_lux:.1f}"
+            )
+            return self.exposure.smoothed_lux
+        return raw_lux
+
+    def _seed_across_mode_change(self, mode: str, test_metadata: Dict) -> None:
+        """Hand exposure state across the day/night boundary.
+
+        Leaving day means leaving the only frames taken with AWB on, so the
+        controller is primed from the test shot's metadata to make the first
+        manual frame match the last automatic one.
+        """
+        entering_manual = self._previous_mode == LightMode.DAY and mode in (
+            LightMode.TRANSITION,
+            LightMode.NIGHT,
+        )
+        if entering_manual and not self.exposure.transition_seeded:
+            self.exposure.seed_from_metadata(test_metadata, self._last_day_capture_metadata)
+
+        if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
+            self.exposure.reset_seed_state()
+            logger.info("[Holy Grail] Returned to Day mode - seed state reset")
+
+    def _reuse_last_decision(self) -> Decision:
+        """What to shoot when no test shot was taken this frame."""
+        mode = self.exposure.last_mode or LightMode.DAY
+        lux = self.exposure.smoothed_lux
+        return Decision(
+            mode=mode,
+            lux=lux,
+            raw_lux=None,
+            transition_position=None,
+            settings=self.exposure.get_camera_settings(mode, lux),
+        )
+
+    def _observe(self, capture: ImageCapture, image_path: str) -> Optional[Dict]:
+        """Feed the frame the camera just produced back to the controller.
+
+        This is the whole input to the next frame's exposure: measured
+        brightness, highlight level, the dynamic target and the over/under
+        flags. Lores first -- it costs no disk read and carries no overlay.
+        """
+        feedback = (
+            self.config.get("adaptive_timelapse", {})
+            .get("transition_mode", {})
+            .get("brightness_feedback_enabled", True)
+        )
+        if not feedback:
+            return None
+
+        try:
+            metrics = capture.last_brightness_metrics or self._analyze_image_brightness(image_path)
+            if metrics:
+                self.exposure.observe_frame(metrics)
+            return metrics
+        except Exception as e:
+            # Losing this means the controller reacts to a stale measurement
+            # forever, so it is not a debug-level event.
+            logger.warning(f"Could not apply brightness feedback: {e}")
+            return None
+
+    def _read_capture_metadata(self, metadata_path: Optional[str]) -> Optional[Dict]:
+        """Read the frame's metadata JSON once; two callers below want it."""
+        if not metadata_path:
+            return None
+        try:
+            with open(metadata_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.debug(f"Could not read capture metadata: {e}")
+            return None
+
+    def _record(
+        self,
+        decision: Decision,
+        image_path: str,
+        metadata_path: Optional[str],
+        brightness_metrics: Optional[Dict],
+    ) -> None:
+        """Everything that happens to a frame after it has been taken."""
+        diagnostics = (
+            self.config.get("adaptive_timelapse", {}).get("diagnostics", {}).get("enabled", False)
+        )
+        if metadata_path and diagnostics:
+            self._enrich_metadata_with_diagnostics(
+                metadata_path=metadata_path,
+                image_path=image_path,
+                mode=decision.mode,
+                lux=decision.lux,
+                raw_lux=decision.raw_lux,
+                transition_position=decision.transition_position,
+            )
+
+        capture_metadata = self._read_capture_metadata(metadata_path)
+
+        # Daylight is where the camera learns what neutral looks like, and that
+        # reference is what the night handover interpolates away from.
+        if capture_metadata is not None and decision.mode == LightMode.DAY:
+            try:
+                self.exposure.update_day_wb_reference(capture_metadata)
+                self._last_day_capture_metadata = capture_metadata
+            except Exception as e:
+                logger.debug(f"Could not apply WB reference: {e}")
+
+        if self._database is None:
+            return
+
+        try:
+            self._database.store_capture(
+                image_path=image_path,
+                metadata=capture_metadata if capture_metadata is not None else {},
+                mode=decision.mode,
+                lux=decision.lux,
+                brightness_metrics=brightness_metrics,
+                weather_data=self._weather.get_weather_data(),
+                sun_elevation=self._sun_elevation,
+                system_metrics=(
+                    self._system_monitor.get_all_metrics() if self._system_monitor else None
+                ),
+            )
+        except Exception as e:
+            # Not debug: this silently lost every row for anyone who turned the
+            # overlay off, because the failure was an AttributeError nobody saw.
+            logger.warning(f"[DB] Failed to store capture: {e}")
+
     def run(self, test_mode: bool = False):
         """Run the adaptive timelapse capture loop.
 
@@ -662,7 +868,6 @@ class AdaptiveTimelapse:
         logger.info(f"Interval: {interval} seconds")
         logger.info(f"Frames: {'unlimited' if num_frames == 0 else num_frames}")
 
-        # Initialize camera once at the start
         capture = None
         last_mode = None
 
@@ -670,245 +875,57 @@ class AdaptiveTimelapse:
             while self.running:
                 loop_start = time.time()
 
-                # Check if we've reached the frame limit
                 if num_frames > 0 and self.frame_count >= num_frames:
                     logger.info(f"Reached frame limit: {num_frames}")
                     break
 
-                # Determine if we should take a test shot based on frequency
-                test_shot_frequency = adaptive_config["test_shot"].get("frequency", 1)
-                should_take_test_shot = adaptive_config["test_shot"]["enabled"] and (
-                    self.frame_count % test_shot_frequency == 0
-                )
+                metering = self._wants_test_shot()
 
-                # CRITICAL: Close camera before taking test shot to avoid "Camera in Running state" error
-                # Test shot uses its own context-managed camera instance
-                if capture is not None and should_take_test_shot:
+                # The test shot opens its own context-managed camera, and
+                # libcamera refuses a second one while this is running.
+                if capture is not None and metering:
                     logger.debug("Closing camera before test shot...")
                     self._close_camera_fast(capture, last_mode)
                     capture = None
                     last_mode = None
 
-                # Initialize diagnostic tracking variables
-                raw_lux = None
-                lux = None
-                transition_position = None
-
-                # Take test shot if enabled and frequency allows
-                if should_take_test_shot:
+                if metering:
                     try:
-                        test_image_path, test_metadata = self.take_test_shot()
-
-                        # Calculate lux from test shot image brightness
-                        # This is more reliable than camera's metadata lux estimate
-                        raw_lux = self.calculate_lux(test_image_path, test_metadata)
-
-                        # === STARTUP SATURATED TEST SHOT DETECTION ===
-                        # On first frame after reboot/restart, the camera ISP may not apply
-                        # settings correctly, resulting in a saturated test shot.
-                        # If we have seeded values from the database, use those instead.
-                        if self.frame_count == 0:
-                            test_brightness = self._analyze_image_brightness(test_image_path)
-                            if test_brightness:
-                                test_mean = test_brightness.get("mean_brightness", 128)
-                                if test_mean > 250 and self.exposure.seed_exposure is not None:
-                                    # Test shot is saturated AND we have seeded values
-                                    # Use seeded lux instead of calculated lux
-                                    if self.exposure.smoothed_lux is not None:
-                                        logger.warning(
-                                            f"[Startup] First test shot saturated ({test_mean:.1f}/255) - "
-                                            f"using seeded lux={self.exposure.smoothed_lux:.1f} "
-                                            f"instead of calculated={raw_lux:.1f}"
-                                        )
-                                        raw_lux = self.exposure.smoothed_lux
-
-                        # Apply exponential moving average smoothing
-                        lux = self.exposure.smooth_lux(raw_lux)
-
-                        # Determine raw mode from smoothed lux
-                        # Call this first, and keep it on its own line: it is
-                        # what populates self._sun_elevation, and Python
-                        # evaluates arguments left to right. Inline, the
-                        # attribute was read before the call that fills it, so
-                        # the first frame after every restart passed None.
-                        is_polar_day = self._is_polar_day(lux)
-                        raw_mode = self.exposure.determine_mode(
-                            lux, self._sun_elevation, is_polar_day
-                        )
-
-                        # Apply hysteresis to prevent rapid mode flipping
-                        mode = self.exposure.apply_hysteresis(raw_mode)
-
-                        # Calculate transition position for diagnostics
-                        if mode == LightMode.TRANSITION:
-                            night_threshold = adaptive_config["light_thresholds"]["night"]
-                            day_threshold = adaptive_config["light_thresholds"]["day"]
-                            transition_position = (lux - night_threshold) / (
-                                day_threshold - night_threshold
-                            )
-                            transition_position = max(0.0, min(1.0, transition_position))
-
-                        # === HOLY GRAIL: Seed from metadata when entering transition ===
-                        # Detect mode change: Day → Transition or Day → Night
-                        entering_manual_mode = self._previous_mode == LightMode.DAY and mode in (
-                            LightMode.TRANSITION,
-                            LightMode.NIGHT,
-                        )
-
-                        if entering_manual_mode and not self.exposure.transition_seeded:
-                            # Seed interpolation state from actual camera metadata
-                            # This makes first manual frame identical to last auto frame
-                            self.exposure.seed_from_metadata(
-                                test_metadata, self._last_day_capture_metadata
-                            )
-
-                        # Reset seed state when returning to day mode
-                        if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
-                            self.exposure.reset_seed_state()
-                            logger.info("[Holy Grail] Returned to Day mode - seed state reset")
-
-                        # Log transition progress
-                        if mode == LightMode.TRANSITION and transition_position is not None:
-                            self.exposure.log_transition_progress(lux, transition_position)
-
-                        # Track mode for next iteration
-                        self._previous_mode = mode
-
-                        # Get settings for this mode (with smooth WB interpolation)
-                        settings = self.exposure.get_camera_settings(mode, lux)
-
+                        decision = self._meter()
                     except Exception as e:
-                        # exc_info: this block spans lux, mode, hysteresis, WB
+                        # exc_info: _meter spans lux, mode, hysteresis, WB
                         # seeding and settings. Without a traceback the message
                         # alone cannot say which of them failed, and the frame
                         # silently falls back to the last mode.
                         logger.error(f"Test shot failed: {e}", exc_info=True)
-                        # Fall back to last mode or day mode
-                        mode = self.exposure.last_mode or LightMode.DAY
-                        lux = self.exposure.smoothed_lux
-                        settings = self.exposure.get_camera_settings(mode, lux)
+                        decision = self._reuse_last_decision()
                 else:
-                    # Test shot skipped (frequency > 1) - reuse last known values
-                    # This keeps camera running and applies interpolation
-                    mode = self.exposure.last_mode or LightMode.DAY
-                    lux = self.exposure.smoothed_lux  # Use last smoothed lux
-                    settings = self.exposure.get_camera_settings(mode, lux)
-                    lux_str = f"{lux:.2f}" if lux is not None else "N/A"
+                    decision = self._reuse_last_decision()
+                    lux_str = f"{decision.lux:.2f}" if decision.lux is not None else "N/A"
                     logger.debug(
                         f"Skipping test shot (frame {self.frame_count}), "
-                        f"reusing mode={mode}, lux={lux_str}"
+                        f"reusing mode={decision.mode}, lux={lux_str}"
                     )
 
-                # Initialize camera on first frame or if it was closed
                 if capture is None:
                     logger.debug("Initializing camera for timelapse...")
                     capture = ImageCapture(self.camera_config, post_process=self._overlay)
-                    capture.initialize_camera(manual_controls=settings)
-                    last_mode = mode
+                    capture.initialize_camera(manual_controls=decision.settings)
+                    last_mode = decision.mode
 
-                # Capture actual frame
                 try:
-                    image_path, metadata_path = self.capture_frame(capture, mode, lux)
+                    image_path, metadata_path = self.capture_frame(
+                        capture, decision.mode, decision.lux
+                    )
                     logger.info(f"Frame captured: {image_path}")
 
-                    # Enrich metadata with diagnostic information (if enabled)
-                    diagnostics_enabled = (
-                        self.config.get("adaptive_timelapse", {})
-                        .get("diagnostics", {})
-                        .get("enabled", False)
-                    )
-                    if metadata_path and diagnostics_enabled:
-                        self._enrich_metadata_with_diagnostics(
-                            metadata_path=metadata_path,
-                            image_path=image_path,
-                            mode=mode,
-                            lux=lux,
-                            raw_lux=raw_lux,
-                            transition_position=transition_position,
-                        )
-
-                    # Apply brightness feedback for butter-smooth transitions
-                    # Uses lores stream brightness (from capture.last_brightness_metrics)
-                    # which avoids disk I/O and overlay contamination
-                    # Initialize so it's defined when feedback is disabled — otherwise
-                    # the later store_capture() call would NameError and be swallowed.
-                    brightness_metrics = None
-                    brightness_feedback_enabled = (
-                        self.config.get("adaptive_timelapse", {})
-                        .get("transition_mode", {})
-                        .get("brightness_feedback_enabled", True)
-                    )
-                    if brightness_feedback_enabled:
-                        try:
-                            # Prefer lores brightness (fast, no overlay contamination)
-                            # Fall back to disk analysis if lores not available
-                            brightness_metrics = capture.last_brightness_metrics
-                            if not brightness_metrics:
-                                brightness_metrics = self._analyze_image_brightness(image_path)
-                            if brightness_metrics:
-                                # The whole input to the exposure controller for the
-                                # next frame: measured brightness, highlight level,
-                                # the dynamic target and the over/under flags.
-                                self.exposure.observe_frame(brightness_metrics)
-                        except Exception as e:
-                            # Losing this means the controller reacts to a stale
-                            # measurement forever, so it is not a debug-level event.
-                            logger.warning(f"Could not apply brightness feedback: {e}")
-
-                    # Update day WB reference from actual capture metadata
-                    # This allows us to learn good daylight WB values for smooth transitions
-                    # Read the per-frame metadata JSON once and reuse for both the
-                    # WB-reference update and the DB store below.
-                    capture_metadata = None
-                    if metadata_path:
-                        try:
-                            import json
-
-                            with open(metadata_path, "r") as f:
-                                capture_metadata = json.load(f)
-                        except Exception as e:
-                            logger.debug(f"Could not read capture metadata: {e}")
-
-                    # Also store for Holy Grail seeding when entering transition
-                    if capture_metadata is not None and mode == LightMode.DAY:
-                        try:
-                            self.exposure.update_day_wb_reference(capture_metadata)
-                            self._last_day_capture_metadata = capture_metadata
-                        except Exception as e:
-                            logger.debug(f"Could not apply WB reference: {e}")
-
-                    # Store capture in database for historical analysis
-                    if self._database is not None:
-                        try:
-                            db_metadata = capture_metadata if capture_metadata is not None else {}
-
-                            weather_data = self._weather.get_weather_data()
-
-                            # Get system metrics (CPU temp, load)
-                            system_metrics = None
-                            if self._system_monitor:
-                                system_metrics = self._system_monitor.get_all_metrics()
-
-                            self._database.store_capture(
-                                image_path=image_path,
-                                metadata=db_metadata,
-                                mode=mode,
-                                lux=lux,
-                                brightness_metrics=brightness_metrics,
-                                weather_data=weather_data,
-                                sun_elevation=self._sun_elevation,
-                                system_metrics=system_metrics,
-                            )
-                        except Exception as e:
-                            logger.debug(f"[DB] Failed to store capture: {e}")
-
+                    brightness_metrics = self._observe(capture, image_path)
+                    self._record(decision, image_path, metadata_path, brightness_metrics)
                 except Exception as e:
                     logger.error(f"Frame capture failed: {e}", exc_info=True)
 
-                # Calculate time to sleep
                 elapsed = time.time() - loop_start
                 sleep_time = max(0, interval - elapsed)
-
                 if sleep_time > 0:
                     logger.debug(f"Sleeping for {sleep_time:.1f} seconds...")
                     time.sleep(sleep_time)
@@ -922,7 +939,6 @@ class AdaptiveTimelapse:
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
         finally:
-            # Close camera if it was initialized
             if capture is not None:
                 logger.info("Closing camera...")
                 self._close_camera_fast(capture, last_mode)

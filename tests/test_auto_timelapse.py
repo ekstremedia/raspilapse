@@ -671,7 +671,7 @@ class TestPolarAwareness:
                 for a in node.args
             )
             assert not (reads_attr and calls_polar), (
-                f"auto_timelapse.py:{node.lineno} passes self._sun_elevation and "
+                f"daemon.py:{node.lineno} passes self._sun_elevation and "
                 "_is_polar_day() to the same call. Arguments evaluate left to "
                 "right, so the attribute is read before the call populates it."
             )
