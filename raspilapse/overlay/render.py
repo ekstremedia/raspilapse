@@ -583,6 +583,250 @@ class ImageOverlay:
             # Move to next box position
             x += box_width + box_gap
 
+    def _load_sized_fonts(self, font_size: int):
+        """Load the bold and regular faces at a size derived from the image.
+
+        Returns:
+            (bold, regular). Regular falls back to bold when only a bold face is
+            installed, and both fall back to PIL's built-in font when the
+            configured family will not load at all -- an overlay in the wrong
+            font is worth more than no overlay.
+        """
+        if not self.font:
+            return ImageFont.load_default(), ImageFont.load_default()
+
+        try:
+            bold = ImageFont.truetype(self.font, font_size)
+        except Exception as e:
+            logger.warning(f"Could not load font with size {font_size}: {e}")
+            return ImageFont.load_default(), ImageFont.load_default()
+
+        regular_path = self.font.replace("-Bold", "").replace("-bold", "")
+        try:
+            regular = ImageFont.truetype(regular_path, font_size)
+        except Exception:
+            regular = bold
+        return bold, regular
+
+    def _draw_top_bar(self, img, draw, data: Dict, font_bold, font_regular, font_size: int) -> None:
+        """Draw the two-line bar across the top of the frame.
+
+        Left side is camera identity and time; right side is the widget
+        sections, laid out from the right edge inwards so each one keeps a
+        fixed position from frame to frame. Ship boxes float below the bar.
+        """
+        img_width = img.size[0]
+        font_config = self.overlay_config.get("font", {})
+
+        # Two-line layout with left/right alignment
+        margin = self.overlay_config.get("margin", 10)
+        padding = int(font_size * 0.6)
+
+        # Get content config
+        content_config = self.overlay_config.get("content", {})
+
+        # Calculate line height
+        try:
+            line_height = int(font_bold.size * 1.2)
+        except AttributeError:
+            line_height = int(font_size * 1.2)
+
+        # Get bottom padding multiplier for extra spacing
+        layout_config = self.overlay_config.get("layout", {})
+        bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
+
+        # Fixed 2 lines for top bar (ships are rendered as separate floating boxes)
+        num_lines = 2
+
+        # Total bar height with extra bottom spacing
+        bar_height = (line_height * num_lines) + (padding * 2) + int(padding * bottom_padding_mult)
+
+        # Get background config and color (used for bar and ship boxes)
+        bg_config = self.overlay_config.get("background", {})
+        bg_color = bg_config.get("color", [0, 0, 0, 140])
+
+        # Draw gradient background bar
+        if bg_config.get("enabled", True):
+            self._draw_gradient_bar(draw, img_width, bar_height, bg_color)
+
+        # Font color
+        font_color = tuple(font_config.get("color", [255, 255, 255, 255]))
+
+        # Line positions
+        y1 = margin + padding
+        y2 = y1 + line_height
+
+        # LEFT SIDE
+        left_x = margin + padding
+
+        # Line 1 Left
+        line_1_left_template = content_config.get("line_1_left", "{camera_name}")
+        line_1_left = format_slot(line_1_left_template, data, "line_1_left")
+        draw.text((left_x, y1), line_1_left, fill=font_color, font=font_bold)
+
+        # Line 2 Left (use localized datetime if it contains date/time variables)
+        line_2_left_template = content_config.get("line_2_left", "{date} {time}")
+
+        # Check if it's the default date/time template
+        if line_2_left_template == "{date} {time}":
+            line_2_left = data.get("datetime_localized", f"{data['date']} {data['time']}")
+        else:
+            line_2_left = format_slot(line_2_left_template, data, "line_2_left")
+        draw.text((left_x, y2), line_2_left, fill=font_color, font=font_regular)
+
+        # RIGHT SIDE. Each section draws itself against the right
+        # edge, inset by what the sections to its right already took,
+        # and reports the width it used. See widgets.py.
+        geometry = BarGeometry(
+            img_width=img_width,
+            y1=y1,
+            y2=y2,
+            line_height=line_height,
+            margin=margin,
+            padding=padding,
+            section_gap=int(padding * 2),
+            font_size=font_size,
+        )
+
+        aurora_section_width = 0
+        if self.aurora.enabled:
+            aurora_section_width = draw_aurora_section(
+                draw, self.aurora, geometry, font_regular, font_color
+            )
+
+        tide_section_width = 0
+        if self.tide.enabled:
+            tide_section_width = draw_tide_section(
+                draw,
+                self.tide,
+                geometry,
+                font_regular,
+                font_color,
+                occupied=aurora_section_width,
+            )
+
+        # Line 1 Right (positioned to left of tide section)
+        line_1_right_template = content_config.get("line_1_right", "")
+        if line_1_right_template:
+            line_1_right = format_slot(line_1_right_template, data, "line_1_right")
+
+            # Calculate width to position from right (accounting for tide section)
+            line_1_width = text_width(draw, line_1_right, font_regular, font_size)
+
+            right_x = (
+                img_width
+                - line_1_width
+                - margin
+                - padding
+                - tide_section_width
+                - aurora_section_width
+            )
+            draw.text(
+                (right_x, y1),
+                line_1_right,
+                fill=font_color,
+                font=font_regular,
+            )
+
+        # Line 2 Right (positioned to left of tide section)
+        line_2_right_template = content_config.get("line_2_right", "")
+        if line_2_right_template:
+            line_2_right = format_slot(line_2_right_template, data, "line_2_right")
+
+            line_2_width = text_width(draw, line_2_right, font_regular, font_size)
+
+            right_x = (
+                img_width
+                - line_2_width
+                - margin
+                - padding
+                - tide_section_width
+                - aurora_section_width
+            )
+            draw.text(
+                (right_x, y2),
+                line_2_right,
+                fill=font_color,
+                font=font_regular,
+            )
+
+        # Draw ship boxes below the bar (floating boxes with rounded corners)
+        try:
+            self._draw_ship_boxes(
+                img=img,
+                bar_height=bar_height,
+                font=font_regular,
+                font_color=font_color,
+                bg_color=bg_color,
+                margin=margin,
+                padding=padding,
+            )
+        except Exception as ships_err:
+            logger.error(f"Failed to draw ship boxes: {ships_err}", exc_info=True)
+
+    def _draw_corner_box(self, img, draw, data: Dict, font_bold, font_size: int) -> bool:
+        """Draw the boxed layout used by every position preset except top-bar.
+
+        Returns:
+            False if no content is configured, so the caller can leave the image
+            untouched rather than writing an identical copy of it.
+        """
+        img_width, img_height = img.size
+        font_config = self.overlay_config.get("font", {})
+
+        # Original box layout for non-bar modes
+        lines = self._get_text_lines(data)
+
+        if not lines:
+            logger.debug("No overlay content configured")
+            return False
+
+        # Calculate text dimensions
+        layout_config = self.overlay_config.get("layout", {})
+        line_spacing = layout_config.get("line_spacing", 1.3)
+
+        # Get line height from font
+        try:
+            line_height = int(font_bold.size * line_spacing)
+        except AttributeError:
+            line_height = int(font_size * line_spacing)
+
+        # Calculate max text width and total height
+        max_width = 0
+        for line in lines:
+            max_width = max(max_width, text_width(draw, line, font_bold, font_size))
+
+        total_height = len(lines) * line_height
+
+        # Get position
+        text_bbox = (0, 0, max_width, total_height)
+        x, y = self._get_position(img_width, img_height, text_bbox)
+
+        # Draw background
+        bg_config = self.overlay_config.get("background", {})
+        if bg_config.get("enabled", True):
+            bg_color = tuple(bg_config.get("color", [0, 0, 0, 180]))
+            padding_ratio = bg_config.get("padding", 0.3)
+            padding = int(font_size * padding_ratio)
+
+            bg_box = [
+                x - padding,
+                y - padding,
+                x + max_width + padding,
+                y + total_height + padding,
+            ]
+            draw.rectangle(bg_box, fill=bg_color)
+
+        # Draw text lines
+        font_color = tuple(font_config.get("color", [255, 255, 255, 255]))
+        current_y = y
+        for line in lines:
+            if line:
+                draw.text((x, current_y), line, fill=font_color, font=font_bold)
+            current_y += line_height
+
+        return True
+
     def apply_overlay(
         self,
         image_path: str,
@@ -616,29 +860,7 @@ class ImageOverlay:
             size_ratio = font_config.get("size_ratio", 0.025)
             font_size = int(img_height * size_ratio)
 
-            # Load fonts with calculated size (bold and regular)
-            font_bold = None
-            font_regular = None
-
-            if self.font:
-                try:
-                    # Load bold font
-                    font_bold = ImageFont.truetype(self.font, font_size)
-
-                    # Load regular font (for details)
-                    regular_font_path = self.font.replace("-Bold", "").replace("-bold", "")
-                    try:
-                        font_regular = ImageFont.truetype(regular_font_path, font_size)
-                    except Exception:
-                        font_regular = font_bold  # Fallback to bold
-
-                except Exception as e:
-                    logger.warning(f"Could not load font with size {font_size}: {e}")
-                    font_bold = ImageFont.load_default()
-                    font_regular = ImageFont.load_default()
-            else:
-                font_bold = ImageFont.load_default()
-                font_regular = ImageFont.load_default()
+            font_bold, font_regular = self._load_sized_fonts(font_size)
 
             # Prepare overlay data
             data = self._prepare_overlay_data(metadata, mode)
@@ -650,205 +872,9 @@ class ImageOverlay:
 
             # Check if we're in top-bar mode (special 2-line layout)
             if position_preset == "top-bar":
-                # Two-line layout with left/right alignment
-                margin = self.overlay_config.get("margin", 10)
-                padding = int(font_size * 0.6)
-
-                # Get content config
-                content_config = self.overlay_config.get("content", {})
-
-                # Calculate line height
-                try:
-                    line_height = int(font_bold.size * 1.2)
-                except AttributeError:
-                    line_height = int(font_size * 1.2)
-
-                # Get bottom padding multiplier for extra spacing
-                layout_config = self.overlay_config.get("layout", {})
-                bottom_padding_mult = layout_config.get("bottom_padding_multiplier", 1.3)
-
-                # Fixed 2 lines for top bar (ships are rendered as separate floating boxes)
-                num_lines = 2
-
-                # Total bar height with extra bottom spacing
-                bar_height = (
-                    (line_height * num_lines) + (padding * 2) + int(padding * bottom_padding_mult)
-                )
-
-                # Get background config and color (used for bar and ship boxes)
-                bg_config = self.overlay_config.get("background", {})
-                bg_color = bg_config.get("color", [0, 0, 0, 140])
-
-                # Draw gradient background bar
-                if bg_config.get("enabled", True):
-                    self._draw_gradient_bar(draw, img_width, bar_height, bg_color)
-
-                # Font color
-                font_color = tuple(font_config.get("color", [255, 255, 255, 255]))
-
-                # Line positions
-                y1 = margin + padding
-                y2 = y1 + line_height
-
-                # LEFT SIDE
-                left_x = margin + padding
-
-                # Line 1 Left
-                line_1_left_template = content_config.get("line_1_left", "{camera_name}")
-                line_1_left = format_slot(line_1_left_template, data, "line_1_left")
-                draw.text((left_x, y1), line_1_left, fill=font_color, font=font_bold)
-
-                # Line 2 Left (use localized datetime if it contains date/time variables)
-                line_2_left_template = content_config.get("line_2_left", "{date} {time}")
-
-                # Check if it's the default date/time template
-                if line_2_left_template == "{date} {time}":
-                    line_2_left = data.get("datetime_localized", f"{data['date']} {data['time']}")
-                else:
-                    line_2_left = format_slot(line_2_left_template, data, "line_2_left")
-                draw.text((left_x, y2), line_2_left, fill=font_color, font=font_regular)
-
-                # RIGHT SIDE. Each section draws itself against the right
-                # edge, inset by what the sections to its right already took,
-                # and reports the width it used. See widgets.py.
-                geometry = BarGeometry(
-                    img_width=img_width,
-                    y1=y1,
-                    y2=y2,
-                    line_height=line_height,
-                    margin=margin,
-                    padding=padding,
-                    section_gap=int(padding * 2),
-                    font_size=font_size,
-                )
-
-                aurora_section_width = 0
-                if self.aurora.enabled:
-                    aurora_section_width = draw_aurora_section(
-                        draw, self.aurora, geometry, font_regular, font_color
-                    )
-
-                tide_section_width = 0
-                if self.tide.enabled:
-                    tide_section_width = draw_tide_section(
-                        draw,
-                        self.tide,
-                        geometry,
-                        font_regular,
-                        font_color,
-                        occupied=aurora_section_width,
-                    )
-
-                # Line 1 Right (positioned to left of tide section)
-                line_1_right_template = content_config.get("line_1_right", "")
-                if line_1_right_template:
-                    line_1_right = format_slot(line_1_right_template, data, "line_1_right")
-
-                    # Calculate width to position from right (accounting for tide section)
-                    line_1_width = text_width(draw, line_1_right, font_regular, font_size)
-
-                    right_x = (
-                        img_width
-                        - line_1_width
-                        - margin
-                        - padding
-                        - tide_section_width
-                        - aurora_section_width
-                    )
-                    draw.text(
-                        (right_x, y1),
-                        line_1_right,
-                        fill=font_color,
-                        font=font_regular,
-                    )
-
-                # Line 2 Right (positioned to left of tide section)
-                line_2_right_template = content_config.get("line_2_right", "")
-                if line_2_right_template:
-                    line_2_right = format_slot(line_2_right_template, data, "line_2_right")
-
-                    line_2_width = text_width(draw, line_2_right, font_regular, font_size)
-
-                    right_x = (
-                        img_width
-                        - line_2_width
-                        - margin
-                        - padding
-                        - tide_section_width
-                        - aurora_section_width
-                    )
-                    draw.text(
-                        (right_x, y2),
-                        line_2_right,
-                        fill=font_color,
-                        font=font_regular,
-                    )
-
-                # Draw ship boxes below the bar (floating boxes with rounded corners)
-                try:
-                    self._draw_ship_boxes(
-                        img=img,
-                        bar_height=bar_height,
-                        font=font_regular,
-                        font_color=font_color,
-                        bg_color=bg_color,
-                        margin=margin,
-                        padding=padding,
-                    )
-                except Exception as ships_err:
-                    logger.error(f"Failed to draw ship boxes: {ships_err}", exc_info=True)
-
-            else:
-                # Original box layout for non-bar modes
-                lines = self._get_text_lines(data)
-
-                if not lines:
-                    logger.debug("No overlay content configured")
-                    return image_path
-
-                # Calculate text dimensions
-                layout_config = self.overlay_config.get("layout", {})
-                line_spacing = layout_config.get("line_spacing", 1.3)
-
-                # Get line height from font
-                try:
-                    line_height = int(font_bold.size * line_spacing)
-                except AttributeError:
-                    line_height = int(font_size * line_spacing)
-
-                # Calculate max text width and total height
-                max_width = 0
-                for line in lines:
-                    max_width = max(max_width, text_width(draw, line, font_bold, font_size))
-
-                total_height = len(lines) * line_height
-
-                # Get position
-                text_bbox = (0, 0, max_width, total_height)
-                x, y = self._get_position(img_width, img_height, text_bbox)
-
-                # Draw background
-                bg_config = self.overlay_config.get("background", {})
-                if bg_config.get("enabled", True):
-                    bg_color = tuple(bg_config.get("color", [0, 0, 0, 180]))
-                    padding_ratio = bg_config.get("padding", 0.3)
-                    padding = int(font_size * padding_ratio)
-
-                    bg_box = [
-                        x - padding,
-                        y - padding,
-                        x + max_width + padding,
-                        y + total_height + padding,
-                    ]
-                    draw.rectangle(bg_box, fill=bg_color)
-
-                # Draw text lines
-                font_color = tuple(font_config.get("color", [255, 255, 255, 255]))
-                current_y = y
-                for line in lines:
-                    if line:
-                        draw.text((x, current_y), line, fill=font_color, font=font_bold)
-                    current_y += line_height
+                self._draw_top_bar(img, draw, data, font_bold, font_regular, font_size)
+            elif not self._draw_corner_box(img, draw, data, font_bold, font_size):
+                return image_path
 
             # Save image
             if output_path is None:
