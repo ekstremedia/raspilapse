@@ -1,6 +1,7 @@
 """Tests for database module."""
 
 import os
+import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -11,7 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.database import CaptureDatabase, DatabaseConfig
+from src.database import CAPTURES_DDL, CaptureDatabase, DatabaseConfig
 
 
 @pytest.fixture
@@ -738,3 +739,180 @@ class TestGetLastCapture:
         db = CaptureDatabase(config)
         result = db.get_last_capture()
         assert result is None
+
+
+class TestPrune:
+    """Retention pruning."""
+
+    def _db(self, tmp_path, retention_days=0):
+        return CaptureDatabase(
+            {
+                "database": {
+                    "enabled": True,
+                    "path": str(tmp_path / "t.db"),
+                    "retention_days": retention_days,
+                },
+                "output": {"project_name": "cam"},
+            }
+        )
+
+    def _insert(self, db, days_ago, name):
+        ts = datetime.now() - timedelta(days=days_ago)
+        with db._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO captures (timestamp, unix_timestamp, camera_id, image_path) "
+                "VALUES (?, ?, ?, ?)",
+                (ts.isoformat(), ts.timestamp(), "cam", name),
+            )
+            conn.commit()
+
+    def test_disabled_by_default_keeps_everything(self, tmp_path):
+        # A missing retention_days must never silently delete an existing
+        # camera's history just because it pulled a new version.
+        db = self._db(tmp_path)
+        self._insert(db, 900, "ancient.jpg")
+
+        assert db.prune() == {"captures": 0, "upload_queue": 0}
+        assert db.get_statistics()["total_captures"] == 1
+
+    def test_deletes_only_rows_past_the_window(self, tmp_path):
+        db = self._db(tmp_path, retention_days=180)
+        self._insert(db, 200, "old.jpg")
+        self._insert(db, 10, "recent.jpg")
+
+        assert db.prune()["captures"] == 1
+        with db._get_connection() as conn:
+            remaining = [r["image_path"] for r in conn.execute("SELECT image_path FROM captures")]
+        assert remaining == ["recent.jpg"]
+
+    def test_dry_run_counts_without_deleting(self, tmp_path):
+        db = self._db(tmp_path, retention_days=180)
+        self._insert(db, 200, "old.jpg")
+
+        assert db.prune(dry_run=True)["captures"] == 1
+        assert db.get_statistics()["total_captures"] == 1
+
+    def test_retention_days_override(self, tmp_path):
+        db = self._db(tmp_path, retention_days=0)
+        self._insert(db, 30, "old.jpg")
+
+        assert db.prune(retention_days=7)["captures"] == 1
+
+    def test_prunes_completed_upload_rows(self, tmp_path):
+        db = self._db(tmp_path, retention_days=180)
+        old = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d %H:%M:%S")
+        recent = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
+        with db._get_connection() as conn:
+            conn.executemany(
+                "INSERT INTO upload_queue (video_date, video_path, status, completed_at) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    ("2026-01-01", "/a.mp4", "success", old),
+                    ("2026-02-01", "/b.mp4", "cancelled", old),
+                    ("2026-07-01", "/c.mp4", "success", recent),
+                    ("2026-07-02", "/d.mp4", "pending", None),
+                ],
+            )
+            conn.commit()
+
+        assert db.prune()["upload_queue"] == 2
+        with db._get_connection() as conn:
+            left = {r["video_date"] for r in conn.execute("SELECT video_date FROM upload_queue")}
+        # Pending rows are never touched, whatever their age.
+        assert left == {"2026-07-01", "2026-07-02"}
+
+    def test_vacuum_runs(self, tmp_path):
+        db = self._db(tmp_path, retention_days=180)
+        self._insert(db, 200, "old.jpg")
+        db.prune()
+        assert db.vacuum() is True
+
+
+class TestSchemaSingleSource:
+    """One definition of the schema, applied to whichever connection you have."""
+
+    def test_wal_enabled_for_file_databases(self, tmp_path):
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(tmp_path / "wal.db")},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+    def test_schema_version_is_current(self, tmp_path):
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(tmp_path / "v.db")},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        assert version == CaptureDatabase.SCHEMA_VERSION
+
+    def test_dropped_indexes_are_not_recreated(self, tmp_path):
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(tmp_path / "i.db")},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            names = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
+                )
+            }
+        assert "idx_captures_lux" not in names
+        assert "idx_captures_mode" not in names
+        assert "idx_captures_brightness" not in names
+        assert "idx_captures_camera_time" in names
+
+    def test_migration_5_drops_indexes_on_an_existing_database(self, tmp_path):
+        path = tmp_path / "legacy.db"
+        # A pre-migration database: schema v4 with all five old indexes.
+        with sqlite3.connect(path) as conn:
+            conn.execute(CAPTURES_DDL)
+            conn.execute("CREATE INDEX idx_captures_lux ON captures(lux)")
+            conn.execute("CREATE INDEX idx_captures_mode ON captures(mode)")
+            conn.execute(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT)"
+            )
+            conn.execute("INSERT INTO schema_version (version) VALUES (4)")
+            conn.commit()
+
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(path)},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            names = {
+                r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+            }
+            version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+
+        assert version == 5
+        assert "idx_captures_lux" not in names
+        assert "idx_captures_mode" not in names
+
+    def test_upload_service_creates_the_v4_index(self, tmp_path):
+        # UploadService used to carry its own DDL that predated migration v4,
+        # so a database it created first was permanently missing that index.
+        from src.upload_service import UploadService
+
+        path = tmp_path / "queue.db"
+        UploadService({"database": {"path": str(path)}, "video_upload": {}})
+
+        with sqlite3.connect(path) as conn:
+            names = {
+                r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+            }
+            version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+
+        assert "idx_upload_queue_status_retry" in names
+        assert version == CaptureDatabase.SCHEMA_VERSION

@@ -3,21 +3,19 @@
 import os
 import sys
 import tempfile
-import argparse
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
+
 import pytest
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.make_timelapse import (
+    find_images_in_range,
     main,
     parse_time,
-    find_images_in_range,
-    create_video,
-    load_config,
 )
 
 
@@ -242,13 +240,13 @@ class TestErrorHandling:
 
     @patch("src.make_timelapse.find_images_in_range")
     def test_no_images_found(self, mock_find_images, mock_config_file):
-        """Test handling when no images are found."""
+        """No images is 'nothing to do' (exit 2), not an error (exit 1)."""
         mock_find_images.return_value = []
 
         with patch("sys.argv", ["make_timelapse.py", "-c", mock_config_file]):
             result = main()
 
-        assert result == 1  # Should return error code
+        assert result == 2
 
     @patch("src.make_timelapse.find_images_in_range")
     @patch("src.make_timelapse.create_video")

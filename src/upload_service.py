@@ -13,7 +13,6 @@ Provides:
 Exponential backoff: 5min, 10min, 20min, 40min, 80min... capped at 24h
 """
 
-import json
 import os
 import sqlite3
 import sys
@@ -23,44 +22,25 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from requests_toolbelt import MultipartEncoder
+
+try:
+    # Optional: streams the multipart body instead of buffering it in memory.
+    # A daily video is ~300 MB, which a 4 GB Pi cannot afford to hold twice.
+    from requests_toolbelt import MultipartEncoder
+except ImportError:  # pragma: no cover - exercised via patching in tests
+    MultipartEncoder = None
 
 # Add project root to path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-import logging
-
-
-# Setup fallback logger
-def _get_fallback_logger(name):
-    logger = logging.getLogger(name)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        )
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
-    return logger
-
-
 try:
-    from src.logging_config import get_logger as _get_project_logger
+    from src.database import apply_schema
+    from src.logging_config import get_logger
 except ImportError:
-    try:
-        from logging_config import get_logger as _get_project_logger
-    except ImportError:
-        _get_project_logger = None
-
-
-def get_logger(name, config_path=None):
-    """Get logger, using project logger if config_path provided, else fallback."""
-    if config_path and _get_project_logger:
-        return _get_project_logger(name, config_path)
-    return _get_fallback_logger(name)
-
+    from database import apply_schema
+    from logging_config import get_logger
 
 # Exponential backoff settings
 BASE_RETRY_DELAY_MINUTES = 5
@@ -144,36 +124,19 @@ class UploadService:
                     pass
 
     def _ensure_table_exists(self) -> bool:
-        """Ensure the upload_queue table exists."""
+        """Ensure the upload_queue table and its indexes exist.
+
+        Applies database.apply_schema to this service's own connection rather
+        than carrying a second copy of the DDL. The two copies had already
+        drifted: this one predated the v4 composite index, so whichever process
+        opened the file first decided which indexes existed, leaving the schema
+        pinned at v3.
+        """
         try:
             with self._get_connection() as conn:
                 if conn is None:
                     return False
-
-                cursor = conn.cursor()
-                cursor.execute(
-                    """CREATE TABLE IF NOT EXISTS upload_queue (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        video_date DATE NOT NULL UNIQUE,
-                        video_path TEXT NOT NULL,
-                        keogram_path TEXT,
-                        slitscan_path TEXT,
-                        status TEXT DEFAULT 'pending',
-                        retry_count INTEGER DEFAULT 0,
-                        max_retries INTEGER DEFAULT 5,
-                        created_at TEXT DEFAULT (datetime('now')),
-                        last_attempt_at TEXT,
-                        next_retry_at TEXT,
-                        completed_at TEXT,
-                        last_error TEXT,
-                        server_response TEXT
-                    )"""
-                )
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_upload_queue_status ON upload_queue(status)"
-                )
-                conn.commit()
-                return True
+                return apply_schema(conn, wal=self.db_path != ":memory:")
         except Exception as e:
             self.logger.error(f"[Upload] Failed to ensure table exists: {e}")
             return False
@@ -238,18 +201,30 @@ class UploadService:
                 fields.append(("slitscan", (Path(slitscan_path).name, f, "image/jpeg")))
                 self.logger.info(f"[Upload] Slitscan: {slitscan_path}")
 
-            encoder = MultipartEncoder(fields=fields)
             file_names = [name for name, val in fields if isinstance(val, tuple)]
-            self.logger.info(f"[Upload] Uploading files: {file_names} ({encoder.len} bytes)")
+            headers = {"Authorization": f"Bearer {api_key}"}
 
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": encoder.content_type,
-            }
-
-            # Stream the body so we don't buffer hundreds of MB in memory.
             # timeout=(connect, read); read is the socket idle timeout.
-            response = requests.post(url, data=encoder, headers=headers, timeout=(30, 3600))
+            if MultipartEncoder is not None:
+                encoder = MultipartEncoder(fields=fields)
+                self.logger.info(f"[Upload] Uploading files: {file_names} ({encoder.len} bytes)")
+                # Stream the body so we don't buffer hundreds of MB in memory.
+                headers["Content-Type"] = encoder.content_type
+                response = requests.post(url, data=encoder, headers=headers, timeout=(30, 3600))
+            else:
+                self.logger.warning(
+                    "[Upload] requests-toolbelt not installed - uploading without streaming "
+                    "(the whole file is held in memory). "
+                    "Install it with: sudo apt install python3-requests-toolbelt"
+                )
+                self.logger.info(f"[Upload] Uploading files: {file_names}")
+                # requests builds the multipart body itself, including the boundary,
+                # so Content-Type must NOT be set here or the body is unreadable.
+                files = {name: val for name, val in fields if isinstance(val, tuple)}
+                data = {name: val for name, val in fields if not isinstance(val, tuple)}
+                response = requests.post(
+                    url, files=files, data=data, headers=headers, timeout=(30, 3600)
+                )
 
             if response.status_code == 200:
                 self.logger.info("[Upload] Upload successful!")
@@ -323,13 +298,23 @@ class UploadService:
             self.logger.error(f"[Upload] Failed to queue upload: {e}")
             return None
 
-    def get_pending_uploads(self) -> List[Dict]:
+    def get_pending_uploads(self, include_failed: bool = False) -> List[Dict]:
         """
-        Get all pending/failed uploads.
+        Get uploads awaiting retry.
+
+        'failed' is a terminal status - a row reaches it only after the retry
+        schedule has been exhausted, so the automatic queue must not pick it
+        back up. `retry_uploads.py --force` opts in explicitly.
+
+        Args:
+            include_failed: Also return rows that have been given up on
 
         Returns:
-            List of upload records with status 'pending' or 'failed'
+            List of upload records
         """
+        statuses = ("pending", "failed") if include_failed else ("pending",)
+        placeholders = ", ".join("?" for _ in statuses)
+
         try:
             with self._get_connection() as conn:
                 if conn is None:
@@ -337,9 +322,10 @@ class UploadService:
 
                 cursor = conn.cursor()
                 cursor.execute(
-                    """SELECT * FROM upload_queue
-                       WHERE status IN ('pending', 'failed')
-                       ORDER BY created_at DESC"""
+                    f"""SELECT * FROM upload_queue
+                        WHERE status IN ({placeholders})
+                        ORDER BY created_at DESC""",
+                    statuses,
                 )
                 return [dict(row) for row in cursor.fetchall()]
 
@@ -555,6 +541,15 @@ class UploadService:
             if datetime.now() < next_retry:
                 return False, f"Not due for retry until {next_retry}"
 
+        # The source video is deleted long before the queue gives up on it.
+        # Rescheduling a row whose file is gone means retrying forever, so
+        # cancel it instead of letting it accumulate attempts.
+        if not Path(upload["video_path"]).exists():
+            self.cancel_upload(upload_id)
+            msg = f"source video no longer exists: {upload['video_path']}"
+            self.logger.info(f"[Upload] Cancelled upload {upload_id} - {msg}")
+            return False, msg
+
         # Mark as uploading
         try:
             with self._get_connection() as conn:
@@ -640,7 +635,9 @@ class UploadService:
         # firing between mark-uploading and the final mark-success/failed).
         self._reset_stale_uploading_rows(stale_after_minutes=30)
 
-        pending = self.get_pending_uploads()
+        # force is an explicit "try everything again", which includes rows the
+        # scheduler has already given up on.
+        pending = self.get_pending_uploads(include_failed=force)
         self.logger.info(f"[Upload] Processing retry queue: {len(pending)} pending uploads")
 
         for upload in pending:

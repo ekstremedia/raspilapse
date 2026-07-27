@@ -1,0 +1,16 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Capture Watchdog Timer
+Documentation=https://github.com/ekstremedia/raspilapse
+# No Requires= here on purpose: a timer already starts the service of the same
+# name. Adding Requires= makes systemd pull the service in the moment the
+# *timer* starts, i.e. immediately on every boot.
+
+[Timer]
+# Give the capture service time to take its first frame after a boot before
+# the watchdog starts judging it.
+OnBootSec=10min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

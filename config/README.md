@@ -14,7 +14,8 @@ This directory contains the configuration files for Raspilapse.
 ### `config.yml`
 **Your personal configuration file**
 - **Not tracked by git** - safe to customize with your personal settings
-- Created automatically during installation by copying `config.example.yml`
+- You create it by copying `config.example.yml`; nothing does it for you.
+  `./scripts/install.sh --check` will say so if you have not
 - This is the file that Raspilapse actually uses
 - Customize this with your own:
   - Camera settings (resolution, exposure, etc.)
@@ -30,7 +31,7 @@ This directory contains the configuration files for Raspilapse.
 When you first clone/install Raspilapse:
 
 ```bash
-# The installation script will do this automatically:
+# ./scripts/install.sh --check will tell you if you have not done this:
 cp config/config.example.yml config/config.yml
 
 # Or do it manually:
@@ -85,14 +86,17 @@ If there are new configuration options in `config.example.yml`:
 If you want to share your configuration (without personal details):
 
 ```bash
-# Copy your config to a new file
-cp config/config.yml config/my-setup.yml
+# Somewhere outside config/, which is not gitignored for arbitrary names
+cp config/config.yml ~/my-setup.yml
 
-# Edit to remove any sensitive info (API endpoints, paths, etc.)
-nano config/my-setup.yml
-
-# Share my-setup.yml with others
+# Strip anything private: video_upload.api_key, weather.endpoint, the
+# pi-overlay-data paths, and your location if you would rather not share it
+nano ~/my-setup.yml
 ```
+
+Copying it to `config/my-setup.yml` instead would stage a file this section is
+telling you to sanitise — only `config.yml` and `config/*.backup*` are
+ignored.
 
 ### Reset to Defaults
 
@@ -111,11 +115,13 @@ sudo systemctl restart raspilapse
 
 ## Configuration Reference
 
-For detailed documentation on all configuration options, see:
-- **docs/USAGE.md** - Basic configuration guide
+`config.example.yml` is the reference: every setting is explained inline, and
+`tests/test_config_example.py` fails if it drifts from what the code reads.
+
+For the areas with more to say than fits in a comment:
 - **docs/OVERLAY.md** - Overlay system configuration
 - **docs/WEATHER.md** - Weather integration setup
-- **docs/ADAPTIVE_TIMELAPSE_FLOW.md** - Adaptive timelapse settings
+- **docs/EXPOSURE.md** - Exposure control settings
 
 ## Troubleshooting
 
@@ -154,8 +160,10 @@ sudo chmod -R 775 /var/www/html/images
 
 ### What's NOT Tracked
 ❌ `config.yml` - Your personal configuration
-❌ `*.yml.backup` - Backup files
-❌ `*.yml.old` - Old configuration files
+❌ `config/*.backup*` - Backup files
+
+Note that the ignore rules cover exactly those two patterns. Any other `.yml`
+you leave in `config/` **will** be committed.
 
 This ensures:
 - You can safely customize `config.yml` without git conflicts

@@ -24,8 +24,8 @@ from typing import Dict, List, Optional, Tuple
 import matplotlib
 
 matplotlib.use("Agg")  # Non-interactive backend for headless systems
-import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
 
 # Add project root to path
@@ -34,7 +34,7 @@ sys.path.insert(0, str(project_root))
 
 # Import solar patterns graph generator
 try:
-    from src.graph_ml_patterns import create_solar_pattern_graph
+    from graph_solar_patterns import create_solar_pattern_graph
 
     HAS_SOLAR_GRAPH = True
 except ImportError:
@@ -62,6 +62,9 @@ COLORS = {
     "wind": "#66ffaa",
     "cpu": "#ff9966",
     "load": "#cc99ff",
+    "wb_red": "#ff7766",
+    "wb_blue": "#6699ff",
+    "wb_temp": "#ffcc66",
 }
 
 # Mode colors for zone shading
@@ -80,9 +83,9 @@ def smooth_data(data: List[float], window: int = SMOOTH_WINDOW) -> List[float]:
     if len(data) < window:
         return data
 
-    # Create Gaussian kernel for smoother results than rolling average
-    sigma = window / 4
-    kernel_size = window if window % 2 == 1 else window + 1  # Ensure odd size
+    # Gaussian kernel: smoother than a rolling average. The +/-2 sigma span is
+    # fixed, so `window` sets how many samples the curve is spread across.
+    kernel_size = window if window % 2 == 1 else window + 1  # Must be odd
     x = np.linspace(-2, 2, kernel_size)
     kernel = np.exp(-(x**2) / 2)
     kernel = kernel / kernel.sum()
@@ -147,65 +150,21 @@ def plot_gradient_line(ax, x_data, y_data, linewidth=2.5):
     ax.autoscale()
 
 
+from src.config_utils import format_duration as _format_duration  # noqa: E402
+from src.config_utils import (
+    get_db_path,  # noqa: E402
+    parse_time_arg_or_exit,  # noqa: E402
+)
+
+
 def parse_time_arg(time_str: str) -> timedelta:
-    """Parse time string like '5m', '1h', '24h', '7d' into timedelta."""
-    if not time_str:
-        return timedelta(hours=24)  # Default
-
-    time_str = time_str.lower().strip()
-
-    # Handle with or without leading dash
-    if time_str.startswith("-"):
-        time_str = time_str[1:]
-
-    try:
-        if time_str.endswith("m"):
-            return timedelta(minutes=int(time_str[:-1]))
-        elif time_str.endswith("h"):
-            return timedelta(hours=int(time_str[:-1]))
-        elif time_str.endswith("d"):
-            return timedelta(days=int(time_str[:-1]))
-        else:
-            # Assume hours if no unit
-            return timedelta(hours=int(time_str))
-    except ValueError:
-        print(f"Invalid time format: {time_str}")
-        print("Use format like: 5m, 1h, 24h, 7d")
-        sys.exit(1)
+    """Parse a duration like '5m', '1h', '24h', '7d'. Defaults to 24 hours."""
+    return parse_time_arg_or_exit(time_str, default=timedelta(hours=24))
 
 
 def format_duration(seconds: float) -> str:
-    """Format seconds into human readable duration."""
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    elif seconds < 3600:
-        return f"{seconds/60:.0f}m"
-    elif seconds < 86400:
-        return f"{seconds/3600:.0f}h"
-    else:
-        return f"{seconds/86400:.0f}d"
-
-
-def get_db_path() -> str:
-    """Get database path from config or default."""
-    default_path = project_root / "data" / "timelapse.db"
-
-    # Try to load from config
-    config_path = project_root / "config" / "config.yml"
-    if config_path.exists():
-        try:
-            import yaml
-
-            with open(config_path) as f:
-                config = yaml.safe_load(f)
-            db_path = config.get("database", {}).get("path", str(default_path))
-            if not os.path.isabs(db_path):
-                db_path = project_root / db_path
-            return str(db_path)
-        except Exception:
-            pass
-
-    return str(default_path)
+    """Format seconds without decimals, as this tool's labels expect."""
+    return _format_duration(seconds, precision=0)
 
 
 def fetch_data(
@@ -257,6 +216,9 @@ def fetch_data(
         "system_cpu_temp": [],
         "system_load_1min": [],
         "sun_elevation": [],
+        "colour_gains_r": [],
+        "colour_gains_b": [],
+        "colour_temperature": [],
     }
 
     for row in rows:
@@ -281,7 +243,10 @@ def fetch_data(
             data["system_cpu_temp"].append(row["system_cpu_temp"])
             data["system_load_1min"].append(row["system_load_1min"])
             data["sun_elevation"].append(row["sun_elevation"])
-        except Exception as e:
+            data["colour_gains_r"].append(row["colour_gains_r"])
+            data["colour_gains_b"].append(row["colour_gains_b"])
+            data["colour_temperature"].append(row["colour_temperature"])
+        except Exception:
             continue
 
     return data
@@ -309,8 +274,13 @@ def find_mode_zones(
     return zones
 
 
-def add_mode_shading(ax, zones: List[Tuple], y_min: float, y_max: float):
-    """Add colored background zones for day/night/transition modes."""
+def add_mode_shading(ax, zones: List[Tuple]):
+    """Shade the background by light mode.
+
+    axvspan covers the full height of the axis, so no y bounds are needed --
+    they used to be parameters and were silently ignored, while every call site
+    computed them first.
+    """
     for start, end, mode in zones:
         if mode in MODE_COLORS:
             color, alpha = MODE_COLORS[mode]
@@ -361,9 +331,12 @@ def create_lux_graph(data: Dict, output_dir: Path, time_desc: str):
 
     # Add mode zone shading
     zones = find_mode_zones(timestamps, modes)
-    min_lux = max(0.01, min(l for l in lux if l > 0)) if any(l > 0 for l in lux) else 0.01
+    add_mode_shading(ax, zones)
+
+    # Still needed for set_ylim below, just not by add_mode_shading.
+    positive = [v for v in lux if v > 0]
+    min_lux = max(0.01, min(positive)) if positive else 0.01
     max_lux = max(lux) if lux else 100000
-    add_mode_shading(ax, zones, min_lux, max_lux)
 
     # Plot smoothed lux line
     ax.plot(
@@ -402,7 +375,7 @@ def create_lux_graph(data: Dict, output_dir: Path, time_desc: str):
     ax.set_ylim(min_lux * 0.5, max_lux * 2)
 
     # Use plain numbers instead of scientific notation
-    from matplotlib.ticker import FuncFormatter, LogLocator
+    from matplotlib.ticker import FuncFormatter
 
     def plain_number_formatter(x, pos):
         if x >= 1000:
@@ -445,7 +418,7 @@ def create_exposure_gain_graph(data: Dict, output_dir: Path, time_desc: str):
 
     # Add mode zone shading
     zones = find_mode_zones(timestamps, modes)
-    add_mode_shading(ax1, zones, 0, max(exposure) if exposure else 1)
+    add_mode_shading(ax1, zones)
 
     # Plot smoothed exposure time
     ax1.semilogy(
@@ -871,16 +844,17 @@ def create_overview_graph(data: Dict, output_dir: Path, time_desc: str):
     print(f"    Saved: {output_path}")
 
 
-def create_ml_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
+def create_brightness_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
     """
-    Create ML diagnostics graph for monitoring ML-first exposure system.
+    Create a brightness diagnostics graph: how well the exposure loop is
+    holding its target, and how fast the light is changing under it.
 
     Shows:
     - Brightness error from target (120)
     - Brightness stability (rolling std dev - detects oscillation)
     - Lux rate of change (detects rapid transitions)
     """
-    print("  Creating ml_diagnostics.png...")
+    print("  Creating brightness_diagnostics.png...")
 
     # Filter out None values for brightness
     valid_indices = [i for i, v in enumerate(data["brightness_mean"]) if v is not None]
@@ -1022,7 +996,7 @@ def create_ml_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
     ax3.fill_between(timestamps, lux_rate_smooth, alpha=0.4, color="#ffaa66")
     ax3.plot(timestamps, lux_rate_smooth, color="#ffaa66", linewidth=2, label="Lux change rate")
 
-    # ML trust reduction threshold
+    # Above this rate of change, the loop is chasing rather than holding
     ax3.axhline(
         y=0.3,
         color="#ffaa00",
@@ -1060,11 +1034,97 @@ def create_ml_diagnostics_graph(data: Dict, output_dir: Path, time_desc: str):
         spine.set_edgecolor(GRID_COLOR)
 
     fig.suptitle(
-        f"ML Exposure Diagnostics - {time_desc}", fontsize=14, fontweight="bold", color=TEXT_COLOR
+        f"Exposure Diagnostics - {time_desc}", fontsize=14, fontweight="bold", color=TEXT_COLOR
     )
     fig.tight_layout()
 
-    output_path = output_dir / "ml_diagnostics.png"
+    output_path = output_dir / "brightness_diagnostics.png"
+    plt.savefig(output_path, dpi=DPI, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"    Saved: {output_path}")
+
+
+def create_white_balance_graph(data: Dict, output_dir: Path, time_desc: str):
+    """Create a white-balance graph: colour gains plus colour temperature.
+
+    Replaces the equivalent chart from the old analyze_timelapse.py, which read
+    per-frame metadata JSON files. Those are deleted after 7 days, so it could
+    never show more than a week; these columns go back as far as the database.
+    """
+    print("  Creating white_balance.png...")
+
+    timestamps = data["timestamps"]
+    gains_r = data["colour_gains_r"]
+    gains_b = data["colour_gains_b"]
+    temps = data["colour_temperature"]
+
+    if not any(g is not None for g in gains_r):
+        print("    Skipped: no white-balance data in range")
+        return
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(FIG_WIDTH, FIG_HEIGHT * 1.5), sharex=True)
+    setup_dark_style(fig, ax1)
+    setup_dark_style(fig, ax2)
+
+    zones = find_mode_zones(timestamps, data["mode"])
+
+    # Top panel: red and blue gains. Manual WB holds these steady in day mode;
+    # visible drift means AWB is running or the seeded reference changed.
+    add_mode_shading(ax1, zones)
+
+    ax1.plot(
+        timestamps,
+        smooth_data([g if g is not None else float("nan") for g in gains_r]),
+        color=COLORS["wb_red"],
+        linewidth=2,
+        label="Red gain",
+        zorder=5,
+    )
+    ax1.plot(
+        timestamps,
+        smooth_data([g if g is not None else float("nan") for g in gains_b]),
+        color=COLORS["wb_blue"],
+        linewidth=2,
+        label="Blue gain",
+        zorder=5,
+    )
+    ax1.set_ylabel("Colour Gain", fontsize=12, color=TEXT_COLOR)
+    ax1.set_title(
+        f"White Balance - {time_desc}", fontsize=14, fontweight="bold", pad=15, color=TEXT_COLOR
+    )
+    legend = ax1.legend(loc="upper right", fontsize=10, facecolor=AXES_BG, edgecolor=GRID_COLOR)
+    plt.setp(legend.get_texts(), color=TEXT_COLOR)
+
+    # Bottom panel: colour temperature as the ISP reported it.
+    valid_temps = [t for t in temps if t]
+    if valid_temps:
+        add_mode_shading(ax2, zones)
+        ax2.plot(
+            timestamps,
+            smooth_data([t if t else float("nan") for t in temps]),
+            color=COLORS["wb_temp"],
+            linewidth=2,
+            label="Colour temperature",
+            zorder=5,
+        )
+        legend = ax2.legend(loc="upper right", fontsize=10, facecolor=AXES_BG, edgecolor=GRID_COLOR)
+        plt.setp(legend.get_texts(), color=TEXT_COLOR)
+    else:
+        ax2.text(
+            0.5,
+            0.5,
+            "No colour temperature recorded",
+            transform=ax2.transAxes,
+            ha="center",
+            color=TEXT_COLOR,
+        )
+
+    ax2.set_ylabel("Colour Temperature (K)", fontsize=12, color=TEXT_COLOR)
+    ax2.set_xlabel("Time", fontsize=12, fontweight="bold", color=TEXT_COLOR)
+    format_x_axis(ax2, timestamps)
+
+    fig.tight_layout()
+    output_path = output_dir / "white_balance.png"
     plt.savefig(output_path, dpi=DPI, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
     print(f"    Saved: {output_path}")
@@ -1074,8 +1134,8 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
     """
     Compare actual exposure to formula-predicted exposure.
 
-    Shows how much ML is deviating from the simple formula.
-    Positive = ML using more exposure, Negative = ML using less.
+    Shows how far actual exposure sits from the lux-based reference curve.
+    Positive = using more exposure than the reference, negative = less.
     """
     print("  Creating exposure_efficiency.png...")
 
@@ -1098,7 +1158,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
     valid_timestamps = []
     exposure_ratio = []
 
-    for i, (ts, lux, exp) in enumerate(zip(timestamps, lux_values, exposure_values)):
+    for ts, lux, exp in zip(timestamps, lux_values, exposure_values):
         if lux > 0 and exp > 0:
             formula_exp = (night_exposure * reference_lux) / lux
             # Clamp to reasonable range
@@ -1106,7 +1166,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
             formula_exposure.append(formula_exp)
             actual_exposure.append(exp)
             valid_timestamps.append(ts)
-            # Ratio: >1 means ML using more exposure than formula
+            # Ratio: >1 means more exposure than the reference curve
             ratio = exp / formula_exp
             exposure_ratio.append(ratio)
 
@@ -1140,7 +1200,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
         actual_smooth,
         color=COLORS["exposure"],
         linewidth=2,
-        label="Actual (ML-blended)",
+        label="Actual",
     )
 
     ax1.set_ylabel("Exposure (s)", fontsize=11, color=TEXT_COLOR)
@@ -1168,7 +1228,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
     for spine in ax1.spines.values():
         spine.set_edgecolor(GRID_COLOR)
 
-    # === Panel 2: Exposure Ratio (ML deviation from formula) ===
+    # === Panel 2: Exposure ratio (deviation from the reference curve) ===
     ax2.set_facecolor(AXES_BG)
 
     # Color by ratio: green near 1.0, red for large deviations
@@ -1179,7 +1239,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
         where=[r >= 1.0 for r in ratio_smooth],
         alpha=0.4,
         color="#88ff88",
-        label="ML > Formula",
+        label="Above reference curve",
     )
     ax2.fill_between(
         valid_timestamps,
@@ -1188,7 +1248,7 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
         where=[r < 1.0 for r in ratio_smooth],
         alpha=0.4,
         color="#ff8888",
-        label="ML < Formula",
+        label="Below reference curve",
     )
     ax2.plot(valid_timestamps, ratio_smooth, color="#ffffff", linewidth=1.5, alpha=0.8)
 
@@ -1200,7 +1260,10 @@ def create_exposure_efficiency_graph(data: Dict, output_dir: Path, time_desc: st
     ax2.set_xlabel("Time", fontsize=11, color=TEXT_COLOR)
     ax2.set_ylabel("Ratio (Actual/Formula)", fontsize=11, color=TEXT_COLOR)
     ax2.set_title(
-        "ML Exposure Deviation from Formula", fontsize=12, fontweight="bold", color=TEXT_COLOR
+        "Exposure Deviation from Reference Curve",
+        fontsize=12,
+        fontweight="bold",
+        color=TEXT_COLOR,
     )
     ax2.set_ylim(0.3, 3.0)
     ax2.set_yscale("log")
@@ -1273,12 +1336,12 @@ Examples:
     print(f"  Time range: {time_desc}")
 
     # Fetch data
-    print(f"\n  Fetching data from database...")
+    print("\n  Fetching data from database...")
     data = fetch_data(db_path, time_range, args.all)
 
     if not data or not data.get("timestamps"):
         print(f"\n  No data found for: {time_desc}")
-        print(f"  Check that captures exist in the database.\n")
+        print("  Check that captures exist in the database.\n")
         sys.exit(1)
 
     print(f"  Found {len(data['timestamps'])} data points")
@@ -1291,7 +1354,7 @@ Examples:
         output_dir = project_root / output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n  Generating graphs...")
+    print("\n  Generating graphs...")
 
     # Create all graphs
     create_lux_graph(data, output_dir, time_desc)
@@ -1301,9 +1364,10 @@ Examples:
     create_system_graph(data, output_dir, time_desc)
     create_overview_graph(data, output_dir, time_desc)
 
-    # ML diagnostics graphs (for monitoring ML-first exposure system)
-    create_ml_diagnostics_graph(data, output_dir, time_desc)
+    # Brightness/exposure diagnostics
+    create_brightness_diagnostics_graph(data, output_dir, time_desc)
     create_exposure_efficiency_graph(data, output_dir, time_desc)
+    create_white_balance_graph(data, output_dir, time_desc)
 
     # Generate daily solar patterns graph from database
     if HAS_SOLAR_GRAPH:

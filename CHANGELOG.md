@@ -5,6 +5,130 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-07-26
+
+A cleanup pass over the whole project. Behaviour is unchanged apart from
+highlight protection, which is new and can be turned off in config.
+
+### Removed
+- **The ML exposure system.** It had not run since January: `_init_ml_predictor()`
+  returned early whenever `direct_brightness_control` was true. With ML inert the
+  "legacy" branches of `get_camera_settings` were unreachable too, and the formula
+  functions behind them had one live caller left -- the metadata diagnostics, which
+  re-ran the entire exposure calculation to fill in a JSON field.
+  Gone: `ml_exposure.py`, `ml_exposure_v2.py`, `bootstrap_ml.py`,
+  `bootstrap_ml_v2.py`, `ML.md`, `ml_state/` and four test modules.
+- **`analyze_timelapse.py`** (1,967 lines). It read per-frame metadata JSON that
+  cleanup deletes after 7 days, so it could never look back further than a week,
+  while `scripts/db_graphs.py` reads months from the database. Its one
+  non-overlapping chart, white balance, is now `create_white_balance_graph()`.
+- **`manuals/*.pdf`** -- 45 MB of third-party PDFs nothing referenced.
+- **A leaked Codecov token** from `docs/MAINTAINER.md`. Rotate it if you forked
+  this repo before now; it remains in history.
+- **`ml_state/ml_state.json`**, which shipped one camera's learned model to
+  everyone who cloned.
+- Five installer scripts, `test.sh`, `check_disk_space.sh`,
+  `check_capture_rate.sh`, and twelve documentation files.
+
+### Added
+- **Highlight protection** (`adaptive_timelapse.highlight_protection`). Lowers the
+  brightness target when the top of the histogram nears clipping, so bright skies
+  keep detail. Off at night by default. `enabled: false` reverts.
+  Not to be confused with the p95 protection listed under 1.3.0: that one scaled
+  the *exposure*, lived in the now-deleted ML path, and never reached the camera.
+  This one scales the *target*, which is what makes its equilibrium independent
+  of `brightness_damping`.
+- **`scripts/install.sh` as the single entry point**, with `--only`, `--check`,
+  `--dry-run`, `--uninstall` and `--with-watchdog`. It renders `systemd/*.in`
+  templates rather than copying units that hardcode `pi` and `/home/pi`.
+- **`database.retention_days`** and `python3 src/database.py --prune|--vacuum|--stats`.
+  Defaults to 0, keep everything; the example ships 180 days.
+- **`src/exposure.py`** and **`src/config_utils.py`**.
+- **`tests/test_config_example.py`**, which fails when the example config and the
+  code that reads it drift apart in either direction.
+
+### Fixed
+- **The daily-video service could not run.** `upload_service.py` imported
+  `requests_toolbelt` unguarded and `/usr/bin/python3` did not have it. Guarded,
+  with a `requests.post` fallback.
+- **An empty day failed the unit.** `make_timelapse.py` now exits 2 for "no images"
+  and `daily_timelapse.py` maps that to success.
+- **The upload retry queue retried the impossible.** 172 rows, all pending since
+  January, all pointing at videos deleted long ago, and no installer had ever
+  installed the timer that drains them. Rows whose source is gone are cancelled;
+  `failed` is treated as terminal; `--purge-missing` clears a backlog.
+- **The installed daily-video timer had drifted** from the repo: `Requires=`, two
+  `OnCalendar=` lines and `Persistent=true`, all removed months ago and never
+  redeployed, which is why it fired at boot and failed.
+- **Every log line was stored twice**, once in `logs/` and once in the journal.
+  `logging.console` becomes tri-state; `auto` skips the console handler under
+  systemd. journald is capped at 200 MB.
+- **Logging ignored `-c/--config`.** Seven modules call `get_logger()` at import
+  time, before argparse runs; `configure_logging()` now reconfigures them.
+- **Weather hammered its endpoint.** The 300 s cache was per-instance and the
+  instance was rebuilt twice per capture cycle, so it never applied. There was no
+  backoff either: one outage produced 72,536 identical error lines. Also fixed
+  `data.get("data", {})` returning `None` on `"data": null`, which was 2,204 more.
+- **`brightness_p25` and `brightness_p75` were NULL on every row** ever written --
+  the producer emitted p10/p90.
+- **The upload queue schema was defined twice** and had drifted, leaving the live
+  database pinned at v3 with the v4 index missing.
+- **18 tests had never run**, in four classes shadowed by a later class of the
+  same name.
+- **The overlay bar was darker than its config said.** Each gradient row was
+  drawn as a two-pixel rectangle, so every row got painted twice and its alpha
+  compounded: `background.color` alpha 70 rendered at roughly 124. The bar also
+  ran one scanline past `bar_height`. Both fixed, which means **the bar now
+  renders lighter than before at the same setting** -- if you want the old look,
+  multiply your alpha by about 1.8. `config.example.yml` keeps 70, which for the
+  first time is what it actually produces.
+- **Tide points with an explicit `"level_cm": null`** reached the interpolation
+  arithmetic as `None` and raised, taking the whole overlay down over one bad
+  forecast entry. `.get("level_cm", 0)` only defaults a *missing* key.
+- **A never-present ships/tide/aurora file was stat()ed on every render.** The
+  retry interval was gated on there being a cached value, so it did nothing in
+  the one case it existed for.
+
+### Changed
+- SQLite runs in WAL mode. Three unused indexes dropped (26 MB on a 515k-row
+  database, three fewer B-tree writes per capture).
+- `auto_timelapse.py` is under 1,000 lines, down from 3,230.
+- ruff replaces flake8 and pylint, and the CI lint step can now fail -- it was
+  `--exit-zero` *and* `continue-on-error`.
+- black pinned to one version across `requirements-dev.txt`, `pyproject.toml` and
+  `.pre-commit-config.yaml`. The mismatch was the cause of the recurring CI
+  formatting failures.
+- `pyproject.toml` version is now read from `src/__version__.py`, and its
+  dependency list matches what the code imports.
+- `graph_ml_patterns.py` -> `scripts/graph_solar_patterns.py`; it was never ML.
+- The `timelapse:` and `graphs:` config blocks are gone -- no code read either,
+  and `timelapse.interval: 3` sat next to `adaptive_timelapse.interval: 30`.
+
+### Migrating
+
+Existing installs:
+
+```bash
+git pull
+./scripts/install.sh --check
+./scripts/install.sh              # redeploys the corrected units
+sudo systemctl restart raspilapse
+```
+
+Then, in `config/config.yml`:
+
+- set `logging.console: auto`
+- optionally add `adaptive_timelapse.highlight_protection` (see the example)
+- optionally set `database.retention_days` -- absent means keep everything
+- remove `adaptive_timelapse.ml_exposure` and `direct_brightness_control`,
+  both now inert
+
+If uploads were configured, clear any stale queue:
+
+```bash
+python3 src/retry_uploads.py --purge-missing
+```
+
 ## [1.3.2] - 2026-01-23
 
 ### Fixed
@@ -550,7 +674,7 @@ Raspilapse v1.0.0 is production-ready for year-long operation.
 3. Documentation moved to `docs/` folder
 4. No configuration changes required
 
-See [docs/V1_RELEASE_NOTES.md](docs/V1_RELEASE_NOTES.md) for complete release details.
+See the v1.0.0 release notes on GitHub for complete release details.
 
 ---
 

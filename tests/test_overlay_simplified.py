@@ -1,11 +1,12 @@
 """Tests for simplified overlay structure."""
 
 import os
-import tempfile
-import pytest
-from unittest.mock import Mock, patch
-from PIL import Image
 import sys
+import tempfile
+from unittest.mock import patch
+
+import pytest
+from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

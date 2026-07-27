@@ -5,13 +5,13 @@ import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.upload_service import UploadService, BASE_RETRY_DELAY_MINUTES, MAX_RETRY_DELAY_MINUTES
+from src.upload_service import MAX_RETRY_DELAY_MINUTES, UploadService
 
 
 @pytest.fixture
@@ -234,6 +234,24 @@ class TestGetPendingUploads:
 
         pending = service.get_pending_uploads()
         assert len(pending) == 0
+
+    def test_excludes_failed_by_default(self, upload_config):
+        """'failed' is terminal - the automatic queue must not pick it back up."""
+        service = UploadService(upload_config)
+
+        queue_id = service.queue_upload(
+            video_path="/path/to/video.mp4",
+            keogram_path=None,
+            slitscan_path=None,
+            video_date="2026-01-21",
+        )
+        # Exhaust the retry schedule so the row lands in 'failed'
+        for _ in range(12):
+            service.mark_upload_failed(queue_id, "nope")
+
+        assert service.get_upload_by_id(queue_id)["status"] == "failed"
+        assert service.get_pending_uploads() == []
+        assert len(service.get_pending_uploads(include_failed=True)) == 1
 
 
 class TestMarkUploadStatus:
@@ -480,6 +498,55 @@ class TestUploadToServer:
             assert error is None
             assert response == '{"id": 123, "status": "uploaded"}'
 
+    def test_upload_without_toolbelt_uses_files_fallback(self, upload_config, temp_video_file):
+        """Without requests-toolbelt, fall back to requests' own multipart encoder."""
+        service = UploadService(upload_config)
+
+        with patch("src.upload_service.MultipartEncoder", None):
+            with patch("src.upload_service.requests.post") as mock_post:
+                mock_response = Mock()
+                mock_response.status_code = 200
+                mock_response.text = "ok"
+                mock_post.return_value = mock_response
+
+                success, error, _ = service.upload_to_server(
+                    video_path=Path(temp_video_file),
+                    keogram_path=None,
+                    slitscan_path=None,
+                    date="2026-01-21",
+                )
+
+        assert success is True
+        assert error is None
+        kwargs = mock_post.call_args.kwargs
+        assert "video" in kwargs["files"]
+        assert kwargs["data"]["date"] == "2026-01-21"
+        # requests generates the multipart boundary itself; setting Content-Type
+        # by hand here would produce a body the server cannot parse.
+        assert "Content-Type" not in kwargs["headers"]
+        assert kwargs["headers"]["Authorization"].startswith("Bearer ")
+
+    def test_upload_with_toolbelt_sets_content_type(self, upload_config, temp_video_file):
+        """With requests-toolbelt, the encoder's Content-Type must be passed through."""
+        service = UploadService(upload_config)
+
+        with patch("src.upload_service.requests.post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.text = "ok"
+            mock_post.return_value = mock_response
+
+            service.upload_to_server(
+                video_path=Path(temp_video_file),
+                keogram_path=None,
+                slitscan_path=None,
+                date="2026-01-21",
+            )
+
+        kwargs = mock_post.call_args.kwargs
+        assert kwargs["headers"]["Content-Type"].startswith("multipart/form-data; boundary=")
+        assert "files" not in kwargs
+
     def test_upload_failure_http_error(self, upload_config, temp_video_file):
         """Test upload failure with HTTP error."""
         service = UploadService(upload_config)
@@ -575,6 +642,22 @@ class TestRetrySingleUpload:
         success, message = service.retry_single_upload(queue_id)
         assert success is False
         assert "already completed" in message.lower()
+
+    def test_retry_cancels_when_source_video_is_gone(self, upload_config):
+        """A queued upload whose video was deleted is cancelled, not rescheduled."""
+        service = UploadService(upload_config)
+
+        queue_id = service.queue_upload("/no/such/video.mp4", None, None, "2026-01-21")
+
+        with patch("src.upload_service.requests.post") as mock_post:
+            success, message = service.retry_single_upload(queue_id, force=True)
+
+        mock_post.assert_not_called()
+        assert success is False
+        assert "no longer exists" in message
+        # cancel_upload removes the row, so it never comes back around
+        assert service.get_upload_by_id(queue_id) is None
+        assert service.get_pending_uploads(include_failed=True) == []
 
     def test_retry_respects_backoff(self, upload_config, temp_video_file):
         """Test that retry respects backoff timing (without force)."""

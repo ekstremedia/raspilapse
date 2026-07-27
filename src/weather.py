@@ -1,13 +1,20 @@
 """Weather data fetcher for Raspilapse.
 
-Fetches weather data from Netatmo API endpoint for display in overlay.
+Fetches weather data from a Netatmo API endpoint for display in the overlay.
+
+The cache lives at module level, keyed by endpoint, rather than on the
+instance. ImageOverlay -- and therefore WeatherData -- is rebuilt inside every
+ImageCapture, and ImageCapture is constructed twice per capture cycle, so a
+per-instance cache started empty every single time and the configured
+cache_duration never took effect.
 """
 
 import json
-from typing import Dict, Optional
-from datetime import datetime, timedelta
-import urllib.request
 import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Dict, Optional
 
 try:
     from src.logging_config import get_logger
@@ -16,9 +23,36 @@ except ImportError:
 
 logger = get_logger("weather")
 
+# How long to suppress repeats of an unchanged error message.
+ERROR_LOG_INTERVAL = timedelta(minutes=10)
+
+# Smallest retry delay, so cache_duration: 0 cannot mean "retry immediately".
+MIN_BACKOFF = timedelta(seconds=30)
+
+
+@dataclass
+class _CacheEntry:
+    """Per-endpoint fetch state, shared by every WeatherData in the process."""
+
+    data: Optional[Dict] = None
+    fetched_at: Optional[datetime] = None
+    failures: int = 0
+    next_attempt_at: Optional[datetime] = None
+    last_error: str = ""
+    last_error_logged_at: Optional[datetime] = None
+    suppressed: int = field(default=0)
+
+
+_CACHE: Dict[str, _CacheEntry] = {}
+
+
+def reset_cache() -> None:
+    """Drop all cached weather state. For tests."""
+    _CACHE.clear()
+
 
 class WeatherData:
-    """Fetches and caches weather data from Netatmo API."""
+    """Fetches and caches weather data from a Netatmo API endpoint."""
 
     def __init__(self, config: Dict):
         """
@@ -31,46 +65,71 @@ class WeatherData:
         self.weather_config = config.get("weather", {})
         self.enabled = self.weather_config.get("enabled", False)
 
-        # Cache settings
-        self.cache_duration = timedelta(
-            seconds=self.weather_config.get("cache_duration", 300)
-        )  # Default 5 minutes
-        self._cached_data: Optional[Dict] = None
-        self._cache_time: Optional[datetime] = None
+        self.cache_duration = timedelta(seconds=self.weather_config.get("cache_duration", 300))
+        # Cap on the exponential backoff applied after consecutive failures.
+        self.max_backoff = timedelta(seconds=self.weather_config.get("max_backoff_seconds", 900))
 
         if self.enabled:
             logger.debug("Weather data fetcher initialized")
         else:
             logger.debug("Weather data fetcher disabled")
 
+    @property
+    def _entry(self) -> _CacheEntry:
+        endpoint = self.weather_config.get("endpoint") or ""
+        return _CACHE.setdefault(endpoint, _CacheEntry())
+
+    # Kept as properties so existing callers and tests that poke at the cache
+    # keep working now that the storage moved to module level.
+    @property
+    def _cached_data(self) -> Optional[Dict]:
+        return self._entry.data
+
+    @_cached_data.setter
+    def _cached_data(self, value: Optional[Dict]) -> None:
+        self._entry.data = value
+
+    @property
+    def _cache_time(self) -> Optional[datetime]:
+        return self._entry.fetched_at
+
+    @_cache_time.setter
+    def _cache_time(self, value: Optional[datetime]) -> None:
+        self._entry.fetched_at = value
+
     def get_weather_data(self) -> Optional[Dict]:
         """
         Get weather data, using cache if available and fresh.
 
         Returns:
-            Weather data dictionary or None if stale/unavailable
+            Weather data dictionary, or None if nothing has ever been fetched
         """
         if not self.enabled:
             return None
 
-        # Check cache
+        entry = self._entry
+
         if self._is_cache_valid():
             logger.debug("Using cached weather data")
-            return self._cached_data
+            return entry.data
 
-        # Try to fetch fresh data
+        # After a failure, don't touch the network again until the backoff
+        # expires. Without this, a DNS outage produced one error line per call,
+        # twice per 30-second cycle -- 72,000 identical lines in one log file.
+        now = datetime.now()
+        if entry.next_attempt_at and now < entry.next_attempt_at:
+            return entry.data
+
         fresh_data = self._fetch_weather_data()
 
-        # If fetch failed but we have stale cached data, use it (prevents blinking)
-        if fresh_data is None and self._cached_data is not None:
-            stale_age = datetime.now() - self._cache_time if self._cache_time else None
-            logger.warning(
-                f"Weather fetch failed, using stale cached data "
-                f"(age: {stale_age.total_seconds():.0f}s)"
-                if stale_age
-                else "Weather fetch failed, using stale cached data"
+        # Serve stale data rather than blanking the overlay.
+        if fresh_data is None and entry.data is not None:
+            age = (now - entry.fetched_at).total_seconds() if entry.fetched_at else None
+            logger.debug(
+                "Weather fetch failed, using stale cached data"
+                + (f" (age: {age:.0f}s)" if age is not None else "")
             )
-            return self._cached_data
+            return entry.data
 
         return fresh_data
 
@@ -81,61 +140,102 @@ class WeatherData:
         Returns:
             True if cache is valid, False otherwise
         """
-        if self._cached_data is None or self._cache_time is None:
+        entry = self._entry
+        if entry.data is None or entry.fetched_at is None:
             return False
 
-        age = datetime.now() - self._cache_time
+        age = datetime.now() - entry.fetched_at
         is_valid = age < self.cache_duration
 
         if not is_valid:
             logger.debug(
-                f"Cache expired (age: {age.total_seconds():.0f}s, limit: {self.cache_duration.total_seconds():.0f}s)"
+                f"Cache expired (age: {age.total_seconds():.0f}s, "
+                f"limit: {self.cache_duration.total_seconds():.0f}s)"
             )
 
         return is_valid
 
+    def _record_failure(self, message: str) -> None:
+        """Apply backoff and log at most one line per distinct error per interval."""
+        entry = self._entry
+        now = datetime.now()
+        entry.failures += 1
+
+        # 300s, 600s, 1200s, ... capped at max_backoff. The floor matters
+        # because cache_duration: 0 would otherwise give a zero delay and
+        # restore the every-call retry this exists to prevent.
+        base = max(self.cache_duration, MIN_BACKOFF)
+        delay = min(base * (2 ** (entry.failures - 1)), self.max_backoff)
+        entry.next_attempt_at = now + delay
+
+        changed = message != entry.last_error
+        due = (
+            entry.last_error_logged_at is None
+            or now - entry.last_error_logged_at >= ERROR_LOG_INTERVAL
+        )
+
+        if changed or due:
+            if entry.suppressed:
+                logger.warning(
+                    f"{message} (attempt {entry.failures}, "
+                    f"{entry.suppressed} identical error(s) suppressed; "
+                    f"retrying in {delay.total_seconds():.0f}s)"
+                )
+            else:
+                logger.warning(f"{message} (retrying in {delay.total_seconds():.0f}s)")
+            entry.last_error = message
+            entry.last_error_logged_at = now
+            entry.suppressed = 0
+        else:
+            entry.suppressed += 1
+
     def _fetch_weather_data(self) -> Optional[Dict]:
         """
-        Fetch weather data from API endpoint.
+        Fetch weather data from the API endpoint.
 
         Returns:
             Parsed weather data or None on error
         """
         endpoint = self.weather_config.get("endpoint")
         if not endpoint:
-            logger.warning("Weather endpoint not configured")
+            self._record_failure("Weather endpoint not configured")
             return None
 
         timeout = self.weather_config.get("timeout", 5)
+        entry = self._entry
 
         try:
             logger.debug(f"Fetching weather data from {endpoint}")
 
             with urllib.request.urlopen(endpoint, timeout=timeout) as response:
                 if response.status != 200:
-                    logger.error(f"HTTP error {response.status} fetching weather data")
+                    self._record_failure(f"HTTP error {response.status} fetching weather data")
                     return None
 
                 data = json.loads(response.read().decode("utf-8"))
 
-            # Extract relevant data from Netatmo response
             parsed_data = self._parse_netatmo_data(data)
 
-            # Update cache
-            self._cached_data = parsed_data
-            self._cache_time = datetime.now()
+            entry.data = parsed_data
+            entry.fetched_at = datetime.now()
+            if entry.failures:
+                logger.info(f"Weather data recovered after {entry.failures} failed attempt(s)")
+            entry.failures = 0
+            entry.next_attempt_at = None
+            entry.last_error = ""
+            entry.suppressed = 0
 
             logger.debug(f"Weather data fetched successfully: {parsed_data}")
             return parsed_data
 
         except urllib.error.URLError as e:
-            logger.error(f"Network error fetching weather data: {e}")
+            self._record_failure(f"Network error fetching weather data: {e}")
             return None
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON response from weather API: {e}")
+            self._record_failure(f"Invalid JSON response from weather API: {e}")
             return None
         except Exception as e:
-            logger.error(f"Unexpected error fetching weather data: {e}")
+            self._record_failure(f"Unexpected error fetching weather data: {e}")
             return None
 
     def _parse_netatmo_data(self, data: Dict) -> Dict:
@@ -162,14 +262,20 @@ class WeatherData:
         }
 
         try:
-            # Navigate to modules array
-            # API can return modules directly at root level or nested under "data"
+            # The API returns modules either at the root or nested under "data".
+            # `or {}` rather than a .get default: the API sends an explicit
+            # "data": null when the station is offline, and a default only
+            # applies when the key is absent. That produced 2,204 logged
+            # AttributeErrors on one Pi.
             if "modules" in data:
-                modules = data.get("modules", [])
                 station_data = data
+                modules = data.get("modules") or []
             else:
-                station_data = data.get("data", {})
-                modules = station_data.get("modules", [])
+                station_data = data.get("data") or {}
+                modules = station_data.get("modules") or []
+
+            if not isinstance(modules, list):
+                modules = []
 
             # Find outdoor module (temperature, humidity)
             for module in modules:
@@ -203,6 +309,61 @@ class WeatherData:
 
         return result
 
+    # Placeholders emitted by format_fields().
+    #
+    # "temperature" is deliberately absent: in overlay templates that name
+    # means the *camera sensor* temperature, which comes from capture metadata.
+    # Only format_weather_line(), whose templates are weather-only, aliases it
+    # to the outdoor reading.
+    PLACEHOLDERS = (
+        "temp",
+        "temperature_outdoor",
+        "humidity",
+        "wind",
+        "wind_speed",
+        "wind_gust",
+        "wind_dir",
+        "rain",
+        "rain_1h",
+        "rain_24h",
+        "pressure",
+    )
+
+    def format_fields(self, weather_data: Optional[Dict] = None) -> Dict[str, str]:
+        """
+        Build the overlay placeholder dictionary for some weather data.
+
+        Args:
+            weather_data: Data to format; fetched (or taken from cache) if omitted
+
+        Returns:
+            Placeholder name -> formatted string. Every key in PLACEHOLDERS is
+            always present, filled with "-" when there is no data at all.
+        """
+        if weather_data is None:
+            weather_data = self.get_weather_data()
+
+        if not weather_data:
+            return {name: "-" for name in self.PLACEHOLDERS}
+
+        temperature = self._format_temperature(weather_data.get("temperature"))
+        return {
+            "temp": temperature,
+            # Alias used by the top-bar overlay templates.
+            "temperature_outdoor": temperature,
+            "humidity": self._format_humidity(weather_data.get("humidity")),
+            "wind": self._format_wind(
+                weather_data.get("wind_speed"), weather_data.get("wind_gust")
+            ),
+            "wind_speed": self._format_wind_speed(weather_data.get("wind_speed")),
+            "wind_gust": self._format_wind_speed(weather_data.get("wind_gust")),
+            "wind_dir": self._format_wind_direction(weather_data.get("wind_angle")),
+            "rain": self._format_rain(weather_data.get("rain")),
+            "rain_1h": self._format_rain(weather_data.get("rain_1h")),
+            "rain_24h": self._format_rain(weather_data.get("rain_24h")),
+            "pressure": self._format_pressure(weather_data.get("pressure")),
+        }
+
     def format_weather_line(self, template: str) -> str:
         """
         Format weather data according to template string.
@@ -218,25 +379,12 @@ class WeatherData:
         if not weather_data:
             return ""
 
-        # Create formatting dictionary
-        format_dict = {
-            "temp": self._format_temperature(weather_data.get("temperature")),
-            "temperature": self._format_temperature(weather_data.get("temperature")),
-            "humidity": self._format_humidity(weather_data.get("humidity")),
-            "wind": self._format_wind(
-                weather_data.get("wind_speed"), weather_data.get("wind_gust")
-            ),
-            "wind_speed": self._format_wind_speed(weather_data.get("wind_speed")),
-            "wind_gust": self._format_wind_speed(weather_data.get("wind_gust")),
-            "wind_dir": self._format_wind_direction(weather_data.get("wind_angle")),
-            "rain": self._format_rain(weather_data.get("rain")),
-            "rain_1h": self._format_rain(weather_data.get("rain_1h")),
-            "rain_24h": self._format_rain(weather_data.get("rain_24h")),
-            "pressure": self._format_pressure(weather_data.get("pressure")),
-        }
+        fields = self.format_fields(weather_data)
+        # Weather-only templates: here "temperature" means the outdoor reading.
+        fields["temperature"] = fields["temp"]
 
         try:
-            return template.format(**format_dict)
+            return template.format(**fields)
         except KeyError as e:
             logger.warning(f"Unknown weather placeholder: {e}")
             return template

@@ -4,32 +4,44 @@ Database module for Raspilapse timelapse capture storage.
 Provides SQLite storage for capture metadata, brightness analysis, and weather data,
 enabling historical analysis, graphs, and exposure planning.
 
+A capture row deliberately outlives its JPEG. cleanup_old_images.sh deletes
+images after 7 days; rows are kept for database.retention_days because they hold
+the lux, brightness and weather history the graphs are built from. Only
+image_path goes stale.
+
 Usage:
     from src.database import CaptureDatabase
 
     db = CaptureDatabase(config)
     db.store_capture(image_path, metadata, mode, lux, brightness_metrics, weather_data)
     captures = db.get_captures_in_range(start_time, end_time)
+
+    python3 src/database.py --stats
+    python3 src/database.py --prune
 """
 
 import os
 import sqlite3
+import sys
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 # Handle imports for both module and script execution
 try:
-    from src.logging_config import get_logger
+    from src.logging_config import configure_logging, get_logger
 except ImportError:
     try:
-        from logging_config import get_logger
+        from logging_config import configure_logging, get_logger
     except ImportError:
         import logging
 
         def get_logger(name):
             return logging.getLogger(name)
+
+        def configure_logging(config_path=None):
+            pass
 
 
 logger = get_logger("database")
@@ -49,9 +61,156 @@ class DatabaseConfig:
         self.enabled = self.db_config.get("enabled", False)
         self.db_path = self.db_config.get("path", "data/timelapse.db")
         self.create_directories = self.db_config.get("create_directories", True)
+        # 0 (and a missing key) means keep everything, so existing installs
+        # never lose rows just by pulling this change. The example config ships
+        # 180 days: a full seasonal cycle, which is the point of the graphs.
+        self.retention_days = int(self.db_config.get("retention_days", 0) or 0)
 
         # Get camera_id from project_name
         self.camera_id = config.get("output", {}).get("project_name", "unknown")
+
+
+CAPTURES_DDL = """
+    CREATE TABLE IF NOT EXISTS captures (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        -- Core identification
+        timestamp TEXT NOT NULL,
+        unix_timestamp REAL NOT NULL,
+        camera_id TEXT NOT NULL,
+        image_path TEXT NOT NULL,
+
+        -- Camera metadata
+        exposure_time_us INTEGER,
+        analogue_gain REAL,
+        colour_gains_r REAL,
+        colour_gains_b REAL,
+        colour_temperature INTEGER,
+        digital_gain REAL,
+        sensor_temperature REAL,
+
+        -- Calculated values
+        lux REAL,
+        mode TEXT,
+        sun_elevation REAL,
+
+        -- Brightness metrics
+        brightness_mean REAL,
+        brightness_median REAL,
+        brightness_std REAL,
+        brightness_p5 REAL,
+        brightness_p25 REAL,
+        brightness_p75 REAL,
+        brightness_p95 REAL,
+        underexposed_pct REAL,
+        overexposed_pct REAL,
+
+        -- Weather data
+        weather_temperature REAL,
+        weather_humidity INTEGER,
+        weather_wind_speed REAL,
+        weather_wind_gust REAL,
+        weather_wind_angle INTEGER,
+        weather_rain REAL,
+        weather_rain_1h REAL,
+        weather_rain_24h REAL,
+        weather_pressure REAL,
+
+        -- System metrics
+        system_cpu_temp REAL,
+        system_load_1min REAL,
+        system_load_5min REAL,
+        system_load_15min REAL,
+
+        -- Metadata
+        created_at TEXT DEFAULT (datetime('now')),
+
+        -- Constraints
+        UNIQUE(timestamp, camera_id)
+    )
+"""
+
+# Indexes for the queries that actually run. Deliberately none on lux, mode or
+# brightness_mean -- see migration 5.
+CAPTURES_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_captures_timestamp ON captures(unix_timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_captures_camera_time ON captures(camera_id, unix_timestamp)",
+)
+
+
+def apply_schema(conn: sqlite3.Connection, wal: bool = True) -> bool:
+    """
+    Create and migrate the whole schema on an existing connection.
+
+    The single definition of the schema. UploadService used to carry its own
+    copy of the upload_queue DDL, and the two had drifted -- whichever process
+    opened the file first decided which indexes existed, which left one camera
+    pinned at schema v3 with the v4 index missing.
+
+    Args:
+        conn: An open connection. Not closed here.
+        wal: Enable WAL journalling. False for :memory:, which cannot use it.
+
+    Returns:
+        True if the schema is present and up to date
+    """
+    cursor = conn.cursor()
+
+    if wal:
+        # WAL lets the dashboard and graph scripts read while the capture loop
+        # writes, instead of contending for a lock every 30 seconds. It is a
+        # persistent property of the file, so this sticks after the first run.
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.Error as e:
+            # Fails while another connection is open; the rollback journal
+            # still works, so this is not fatal.
+            logger.warning(f"[DB] Could not enable WAL: {e}")
+
+    cursor.execute(CAPTURES_DDL)
+    for statement in CAPTURES_INDEXES:
+        cursor.execute(statement)
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+
+    cursor.execute("SELECT MAX(version) FROM schema_version")
+    row = cursor.fetchone()
+    current_version = row[0] if row and row[0] is not None else 0
+
+    for version in sorted(CaptureDatabase.MIGRATIONS):
+        if version <= current_version:
+            continue
+        description, statements = CaptureDatabase.MIGRATIONS[version]
+        logger.info(f"[DB] Applying migration v{version}: {description}")
+
+        for sql in statements:
+            try:
+                cursor.execute(sql)
+            except sqlite3.OperationalError as e:
+                # Fresh databases already have the column the migration adds.
+                if "duplicate column" in str(e).lower():
+                    logger.debug(f"[DB] Column already exists, skipping: {e}")
+                else:
+                    raise
+
+        cursor.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", (version,))
+        logger.info(f"[DB] Migration v{version} complete")
+
+    if current_version == 0:
+        cursor.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
+            (CaptureDatabase.SCHEMA_VERSION,),
+        )
+
+    conn.commit()
+    return True
 
 
 class CaptureDatabase:
@@ -66,7 +225,7 @@ class CaptureDatabase:
         SCHEMA_VERSION: Current database schema version
     """
 
-    SCHEMA_VERSION = 4  # Bumped for upload_queue retry composite index
+    SCHEMA_VERSION = 5  # Bumped for dropping three unused captures indexes
 
     # Migration definitions: version -> (description, SQL statements)
     MIGRATIONS = {
@@ -103,6 +262,23 @@ class CaptureDatabase:
             [
                 "CREATE INDEX IF NOT EXISTS idx_upload_queue_status_retry "
                 "ON upload_queue(status, next_retry_at)",
+            ],
+        ),
+        5: (
+            "Drop three unused captures indexes",
+            [
+                # Measured with dbstat on a 515k-row database: these three cost
+                # 26 MB (a third of all index space) and three extra B-tree
+                # writes on every capture, twice a minute, forever.
+                #
+                #   idx_captures_lux        - get_captures_by_lux_range() has no
+                #                             production caller, only tests
+                #   idx_captures_brightness - nothing filters or sorts on it
+                #   idx_captures_mode       - three distinct values across 515k
+                #                             rows; SQLite scans anyway
+                "DROP INDEX IF EXISTS idx_captures_lux",
+                "DROP INDEX IF EXISTS idx_captures_brightness",
+                "DROP INDEX IF EXISTS idx_captures_mode",
             ],
         ),
     }
@@ -165,6 +341,11 @@ class CaptureDatabase:
                 isolation_level=None,  # Autocommit for simple operations
             )
             conn.row_factory = sqlite3.Row  # Dict-like access
+            # NORMAL is the standard pairing with WAL: durable across process
+            # crashes, and only at risk from a power cut mid-write. On an SD
+            # card the fsync savings matter. Not persistent, unlike the
+            # journal_mode set in _initialize_database, so set it per connection.
+            conn.execute("PRAGMA synchronous=NORMAL")
             yield conn
         except sqlite3.Error as e:
             logger.warning(f"[DB] Connection error: {e}")
@@ -178,155 +359,21 @@ class CaptureDatabase:
 
     def _initialize_database(self) -> bool:
         """
-        Initialize database schema if needed.
+        Create and migrate the schema on this instance's connection.
 
-        Creates the captures table and indexes if they don't exist.
-        Safe to call multiple times (uses IF NOT EXISTS).
+        Safe to call repeatedly.
 
         Returns:
             True if successful, False otherwise
         """
         try:
-            # Create directory if needed
-            if self.config.create_directories:
-                db_dir = Path(self.config.db_path).parent
-                db_dir.mkdir(parents=True, exist_ok=True)
+            if self.config.create_directories and self.config.db_path != ":memory:":
+                Path(self.config.db_path).parent.mkdir(parents=True, exist_ok=True)
 
             with self._get_connection() as conn:
                 if conn is None:
                     return False
-
-                cursor = conn.cursor()
-
-                # Create captures table with all fields
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS captures (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                        -- Core identification
-                        timestamp TEXT NOT NULL,
-                        unix_timestamp REAL NOT NULL,
-                        camera_id TEXT NOT NULL,
-                        image_path TEXT NOT NULL,
-
-                        -- Camera metadata
-                        exposure_time_us INTEGER,
-                        analogue_gain REAL,
-                        colour_gains_r REAL,
-                        colour_gains_b REAL,
-                        colour_temperature INTEGER,
-                        digital_gain REAL,
-                        sensor_temperature REAL,
-
-                        -- Calculated values
-                        lux REAL,
-                        mode TEXT,
-                        sun_elevation REAL,
-
-                        -- Brightness metrics
-                        brightness_mean REAL,
-                        brightness_median REAL,
-                        brightness_std REAL,
-                        brightness_p5 REAL,
-                        brightness_p25 REAL,
-                        brightness_p75 REAL,
-                        brightness_p95 REAL,
-                        underexposed_pct REAL,
-                        overexposed_pct REAL,
-
-                        -- Weather data
-                        weather_temperature REAL,
-                        weather_humidity INTEGER,
-                        weather_wind_speed REAL,
-                        weather_wind_gust REAL,
-                        weather_wind_angle INTEGER,
-                        weather_rain REAL,
-                        weather_rain_1h REAL,
-                        weather_rain_24h REAL,
-                        weather_pressure REAL,
-
-                        -- System metrics
-                        system_cpu_temp REAL,
-                        system_load_1min REAL,
-                        system_load_5min REAL,
-                        system_load_15min REAL,
-
-                        -- Metadata
-                        created_at TEXT DEFAULT (datetime('now')),
-
-                        -- Constraints
-                        UNIQUE(timestamp, camera_id)
-                    )
-                """
-                )
-
-                # Create indexes for common queries
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_captures_timestamp "
-                    "ON captures(unix_timestamp)"
-                )
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_captures_camera_time "
-                    "ON captures(camera_id, unix_timestamp)"
-                )
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_captures_lux " "ON captures(lux)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_captures_mode " "ON captures(mode)")
-                cursor.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_captures_brightness "
-                    "ON captures(brightness_mean)"
-                )
-
-                # Create schema version table
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS schema_version (
-                        version INTEGER PRIMARY KEY,
-                        applied_at TEXT DEFAULT (datetime('now'))
-                    )
-                """
-                )
-
-                # Get current schema version
-                cursor.execute("SELECT MAX(version) FROM schema_version")
-                row = cursor.fetchone()
-                current_version = row[0] if row[0] is not None else 0
-
-                # Apply pending migrations
-                for migration_version in sorted(self.MIGRATIONS.keys()):
-                    if migration_version > current_version:
-                        description, statements = self.MIGRATIONS[migration_version]
-                        logger.info(f"[DB] Applying migration v{migration_version}: {description}")
-
-                        for sql in statements:
-                            try:
-                                cursor.execute(sql)
-                                logger.debug(f"[DB] Executed: {sql[:50]}...")
-                            except sqlite3.OperationalError as e:
-                                # Column may already exist (e.g., fresh database)
-                                if "duplicate column" in str(e).lower():
-                                    logger.debug(f"[DB] Column already exists, skipping: {e}")
-                                else:
-                                    raise
-
-                        # Record migration
-                        cursor.execute(
-                            "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
-                            (migration_version,),
-                        )
-                        logger.info(f"[DB] Migration v{migration_version} complete")
-
-                # Ensure current version is recorded for fresh databases
-                if current_version == 0:
-                    cursor.execute(
-                        "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
-                        (self.SCHEMA_VERSION,),
-                    )
-
-                logger.info(
-                    f"[DB] Initialized: {self.config.db_path} (schema v{self.SCHEMA_VERSION})"
-                )
-                return True
+                return apply_schema(conn, wal=self.config.db_path != ":memory:")
 
         except Exception as e:
             logger.error(f"[DB] Failed to initialize: {e}")
@@ -678,6 +725,109 @@ class CaptureDatabase:
             logger.warning(f"[DB] Failed to get statistics: {e}")
             return {"enabled": True, "error": str(e)}
 
+    def prune(self, retention_days: Optional[int] = None, dry_run: bool = False) -> Dict[str, int]:
+        """
+        Delete rows older than the retention window.
+
+        Note that a capture row outliving its JPEG is intended, not a bug.
+        cleanup_old_images.sh removes images after 7 days; the rows are kept far
+        longer because they hold the lux, brightness and weather history the
+        graphs are built from. Only image_path goes stale.
+
+        Args:
+            retention_days: Override the configured window. 0 means keep everything.
+            dry_run: Count what would be deleted without deleting it.
+
+        Returns:
+            {"captures": n, "upload_queue": n}
+        """
+        days = self.config.retention_days if retention_days is None else int(retention_days)
+        result = {"captures": 0, "upload_queue": 0}
+
+        if days <= 0:
+            logger.debug("[DB] Retention disabled (retention_days=0), nothing to prune")
+            return result
+
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return result
+
+                cursor = conn.cursor()
+                cutoff = f"-{days} days"
+
+                cursor.execute(
+                    "SELECT COUNT(*) FROM captures WHERE unix_timestamp < "
+                    "strftime('%s', 'now', ?)",
+                    (cutoff,),
+                )
+                result["captures"] = cursor.fetchone()[0]
+
+                # Terminal queue rows are only kept as history; three months is
+                # plenty to answer "did last quarter's uploads go through".
+                cursor.execute(
+                    "SELECT COUNT(*) FROM upload_queue "
+                    "WHERE status IN ('success', 'cancelled') "
+                    "AND completed_at IS NOT NULL "
+                    "AND completed_at < datetime('now', '-90 days')"
+                )
+                result["upload_queue"] = cursor.fetchone()[0]
+
+                if dry_run:
+                    logger.info(
+                        f"[DB] Would prune {result['captures']} capture(s) older than "
+                        f"{days} days and {result['upload_queue']} completed upload(s)"
+                    )
+                    return result
+
+                cursor.execute(
+                    "DELETE FROM captures WHERE unix_timestamp < strftime('%s', 'now', ?)",
+                    (cutoff,),
+                )
+                cursor.execute(
+                    "DELETE FROM upload_queue "
+                    "WHERE status IN ('success', 'cancelled') "
+                    "AND completed_at IS NOT NULL "
+                    "AND completed_at < datetime('now', '-90 days')"
+                )
+
+                # Fold the WAL back into the main file, otherwise a large
+                # delete leaves a -wal that never shrinks.
+                if self.config.db_path != ":memory:":
+                    try:
+                        cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    except sqlite3.Error as e:
+                        logger.debug(f"[DB] WAL checkpoint skipped: {e}")
+
+                if result["captures"] or result["upload_queue"]:
+                    logger.info(
+                        f"[DB] Pruned {result['captures']} capture(s) older than {days} days "
+                        f"and {result['upload_queue']} completed upload(s)"
+                    )
+                return result
+
+        except Exception as e:
+            logger.warning(f"[DB] Prune failed: {e}")
+            return result
+
+    def vacuum(self) -> bool:
+        """
+        Rebuild the database file to reclaim space freed by prune().
+
+        Needs as much free disk as the database currently occupies and takes
+        minutes on a large file, which is why it is never run from the timer.
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return False
+                conn.execute("VACUUM")
+                logger.info("[DB] Vacuum complete")
+                return True
+        except Exception as e:
+            logger.warning(f"[DB] Vacuum failed: {e}")
+            return False
+
     def get_hourly_averages(
         self,
         start_time: datetime,
@@ -748,58 +898,83 @@ class CaptureDatabase:
 
 
 # Convenience function for quick testing
-if __name__ == "__main__":
-    import sys
 
-    # Test with in-memory database
-    test_config = {
-        "database": {
-            "enabled": True,
-            "path": ":memory:",
-            "create_directories": False,
-        },
-        "output": {"project_name": "test_camera"},
-    }
 
-    db = CaptureDatabase(test_config)
-    print(f"Database initialized: {db.get_statistics()}")
+def main() -> int:
+    """Database maintenance CLI.
 
-    # Test storing a capture
-    test_metadata = {
-        "capture_timestamp": datetime.now().isoformat(),
-        "ExposureTime": 100000,
-        "AnalogueGain": 2.5,
-        "ColourGains": [1.8, 2.0],
-        "ColourTemperature": 5500,
-    }
+    Run by raspilapse-cleanup.service alongside the image cleanup, so both
+    kinds of expired data go at the same time.
+    """
+    import argparse
 
-    test_brightness = {
-        "mean_brightness": 125.5,
-        "median_brightness": 128.0,
-        "std_brightness": 45.2,
-        "percentile_5": 20.0,
-        "percentile_95": 235.0,
-        "underexposed_percent": 2.5,
-        "overexposed_percent": 1.0,
-    }
+    import yaml
 
-    test_weather = {
-        "temperature": -5.2,
-        "humidity": 85,
-        "wind_speed": 15,
-        "rain": 0.0,
-        "pressure": 1015,
-    }
-
-    result = db.store_capture(
-        image_path="/test/image.jpg",
-        metadata=test_metadata,
-        mode="transition",
-        lux=50.0,
-        brightness_metrics=test_brightness,
-        weather_data=test_weather,
-        sun_elevation=15.5,
+    parser = argparse.ArgumentParser(
+        description="Raspilapse database maintenance",
+        epilog=(
+            "Examples:\n"
+            "  python3 src/database.py --stats\n"
+            "  python3 src/database.py --prune --dry-run\n"
+            "  python3 src/database.py --prune\n"
+            "  python3 src/database.py --prune --vacuum   # reclaims disk, slow\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("-c", "--config", default="config/config.yml", help="Config file")
+    parser.add_argument("--stats", action="store_true", help="Show database statistics")
+    parser.add_argument(
+        "--prune", action="store_true", help="Delete rows past database.retention_days"
+    )
+    parser.add_argument("--dry-run", action="store_true", help="With --prune: only count")
+    parser.add_argument(
+        "--vacuum",
+        action="store_true",
+        help="Rebuild the file to reclaim space. Needs free disk equal to the "
+        "database size and takes minutes; never run from the timer.",
+    )
+    parser.add_argument("--retention-days", type=int, help="Override database.retention_days")
+    args = parser.parse_args()
 
-    print(f"Store result: {result}")
-    print(f"Statistics: {db.get_statistics()}")
+    configure_logging(args.config)
+
+    try:
+        with open(args.config) as f:
+            config = yaml.safe_load(f) or {}
+    except OSError as e:
+        print(f"Error: could not read {args.config}: {e}")
+        return 1
+
+    db = CaptureDatabase(config)
+    if not db.config.enabled:
+        print("Database is disabled in config; nothing to do.")
+        return 0
+
+    if args.stats or not (args.prune or args.vacuum):
+        stats = db.get_statistics()
+        print(f"Database:  {db.config.db_path}")
+        print(f"Captures:  {stats.get('total_captures', 0):,}")
+        print(f"Earliest:  {stats.get('earliest') or '-'}")
+        print(f"Latest:    {stats.get('latest') or '-'}")
+        print(f"Size:      {stats.get('db_size_mb', 0):.1f} MB")
+        retention = db.config.retention_days
+        print(f"Retention: {retention} days" if retention else "Retention: keep everything")
+        if not (args.prune or args.vacuum):
+            return 0
+
+    if args.prune:
+        removed = db.prune(retention_days=args.retention_days, dry_run=args.dry_run)
+        verb = "Would delete" if args.dry_run else "Deleted"
+        print(f"{verb} {removed['captures']:,} capture(s), {removed['upload_queue']} queue row(s)")
+
+    if args.vacuum:
+        print("Vacuuming (this can take several minutes)...")
+        if not db.vacuum():
+            return 1
+        print(f"Size now:  {db.get_statistics().get('db_size_mb', 0):.1f} MB")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

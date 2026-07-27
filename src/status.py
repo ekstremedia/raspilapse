@@ -5,12 +5,12 @@ Shows service status, configuration, and recent captures with beautiful colored 
 """
 
 import os
-import sys
-import json
 import subprocess
-from pathlib import Path
+import sys
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Tuple
+
 import yaml
 
 # Add project root to path for imports
@@ -32,6 +32,8 @@ class StatusDisplay:
         self.config_path = config_path
         self.config = self._load_config()
 
+    # Kept as a method rather than delegating to config_utils.load_config so the
+    # coloured, user-facing error handling below stays where the user sees it.
     def _load_config(self) -> Dict:
         """Load configuration from YAML file."""
         config_file = Path(self.config_path)

@@ -12,13 +12,13 @@ Usage:
     python3 src/create_keogram.py --dir /path/to/images --output keogram.jpg
 """
 
+import argparse
+import logging
 import os
 import sys
-import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
-import logging
+from typing import List, Optional
 
 from PIL import Image
 
@@ -28,11 +28,11 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 try:
-    from src.logging_config import get_logger
-    from src.colors import Colors, print_section, print_info
+    from src.colors import Colors, print_info, print_section
+    from src.logging_config import configure_logging, get_logger
 except ModuleNotFoundError:
-    from logging_config import get_logger
-    from colors import Colors, print_section, print_info
+    from colors import Colors, print_info, print_section
+    from logging_config import configure_logging, get_logger
 
 
 def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:
@@ -206,40 +206,6 @@ def create_keogram(
         if logger:
             logger.error(msg)
         return False
-
-
-def create_keogram_from_images(
-    images: List[Path],
-    output_path: Path,
-    quality: int = 95,
-    crop_top_percent: float = 7.0,
-    crop_bottom_percent: float = 0.0,
-    logger: Optional[logging.Logger] = None,
-) -> bool:
-    """
-    Convenience function to create keogram from a list of image paths.
-
-    This is the main entry point for integration with make_timelapse.py.
-
-    Args:
-        images: List of image paths (sorted chronologically)
-        output_path: Output path for the keogram
-        quality: JPEG quality (1-100)
-        crop_top_percent: Percentage to crop from top (default 7% for overlay bar)
-        crop_bottom_percent: Percentage to crop from bottom
-        logger: Optional logger
-
-    Returns:
-        True if successful
-    """
-    return create_keogram(
-        images,
-        output_path,
-        quality=quality,
-        crop_top_percent=crop_top_percent,
-        crop_bottom_percent=crop_bottom_percent,
-        logger=logger,
-    )
 
 
 def create_slitscan(
@@ -418,40 +384,6 @@ def create_slitscan(
         return False
 
 
-def create_slitscan_from_images(
-    images: List[Path],
-    output_path: Path,
-    quality: int = 95,
-    crop_top_percent: float = 7.0,
-    crop_bottom_percent: float = 0.0,
-    logger: Optional[logging.Logger] = None,
-) -> bool:
-    """
-    Convenience function to create slitscan from a list of image paths.
-
-    This is the main entry point for integration with make_timelapse.py.
-
-    Args:
-        images: List of image paths (sorted chronologically)
-        output_path: Output path for the slitscan
-        quality: JPEG quality (1-100)
-        crop_top_percent: Percentage to crop from top (default 7% for overlay bar)
-        crop_bottom_percent: Percentage to crop from bottom
-        logger: Optional logger
-
-    Returns:
-        True if successful
-    """
-    return create_slitscan(
-        images,
-        output_path,
-        quality=quality,
-        crop_top_percent=crop_top_percent,
-        crop_bottom_percent=crop_bottom_percent,
-        logger=logger,
-    )
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Generate keogram or slitscan image from timelapse images",
@@ -539,13 +471,9 @@ What is a Slitscan?
     )
 
     args = parser.parse_args()
+    configure_logging(args.config)
 
-    # Setup logger
-    try:
-        logger = get_logger("create_keogram", args.config)
-    except Exception:
-        logger = logging.getLogger("create_keogram")
-        logger.setLevel(logging.INFO)
+    logger = get_logger("create_keogram")
 
     # Determine mode
     mode = "slitscan" if args.slitscan else "keogram"

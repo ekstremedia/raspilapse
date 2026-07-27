@@ -4,18 +4,18 @@ Adds configurable text overlays to captured images with camera settings,
 timestamps, and debug information.
 """
 
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime
 import json
 import math
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 try:
     from PIL import Image, ImageDraw, ImageFont
-except ImportError:
+except ImportError as e:
     raise ImportError(
         "Pillow is required for overlay functionality. Install with: pip3 install Pillow"
-    )
+    ) from e
 
 try:
     from src.logging_config import get_logger
@@ -32,721 +32,41 @@ try:
 except ImportError:
     from system_monitor import SystemMonitor
 
+try:
+    from src.overlay_draw import (
+        draw_divider,
+        draw_gradient_bar,
+        format_slot,
+        measure_widest,
+        text_height,
+        text_width,
+    )
+
+    # Re-exported: these used to live here, and callers and tests still import
+    # them from this module.
+    from src.overlay_sources import (  # noqa: F401
+        AuroraData,
+        CachedJsonSource,
+        ShipsData,
+        TideData,
+    )
+except ImportError:
+    from overlay_draw import (
+        draw_divider,
+        draw_gradient_bar,
+        format_slot,
+        measure_widest,
+        text_height,
+        text_width,
+    )
+    from overlay_sources import (  # noqa: F401
+        AuroraData,
+        CachedJsonSource,
+        ShipsData,
+        TideData,
+    )
+
 logger = get_logger("overlay")
-
-
-class ShipsData:
-    """Handles loading and formatting ship data from pi-overlay-data."""
-
-    def __init__(self, config: Dict):
-        """
-        Initialize ships data handler.
-
-        Args:
-            config: Full configuration dictionary
-        """
-        self.config = config
-        self.barentswatch_config = config.get("barentswatch", {})
-        self.enabled = self.barentswatch_config.get("enabled", False)
-        self.ships_file = self.barentswatch_config.get("ships_file", "")
-        self._cache: Optional[Dict] = None
-        self._cache_time: Optional[datetime] = None
-        self._cache_duration = 60  # Cache for 60 seconds
-
-    def get_ships_data(self) -> Optional[Dict]:
-        """
-        Load ship data from JSON file with caching.
-
-        Returns:
-            Ships data dictionary or None if unavailable
-        """
-        if not self.enabled or not self.ships_file:
-            return None
-
-        # Check cache
-        now = datetime.now()
-        if self._cache is not None and self._cache_time is not None:
-            age = (now - self._cache_time).total_seconds()
-            if age < self._cache_duration:
-                return self._cache
-
-        # Load from file
-        try:
-            ships_path = Path(self.ships_file)
-            if not ships_path.exists():
-                logger.warning(f"Ships file not found: {self.ships_file}")
-                return self._cache  # Return stale cache if available
-
-            with open(ships_path, "r") as f:
-                data = json.load(f)
-
-            self._cache = data
-            self._cache_time = now
-            return data
-
-        except Exception as e:
-            logger.warning(f"Failed to load ships data: {e}")
-            return self._cache  # Return stale cache if available
-
-    def _format_ship(self, ship: Dict) -> str:
-        """Format a single ship compactly: NAME (category speed dir) or NAME (category stationary)"""
-        name = ship.get("name", "Unknown")
-        speed = ship.get("speed", 0)
-        direction = ship.get("direction", "")
-        category = ship.get("category", "")
-
-        # Show "(category, stationary)" for ships not moving (speed <= 0.5 kts)
-        if speed <= 0.5:
-            if category:
-                return f"{name} ({category}, stationary)"
-            return f"{name} (stationary)"
-
-        # Abbreviate direction
-        dir_abbrev = {
-            "north": "N",
-            "north-east": "NE",
-            "east": "E",
-            "south-east": "SE",
-            "south": "S",
-            "south-west": "SW",
-            "west": "W",
-            "north-west": "NW",
-            "unknown": "",
-        }
-        dir_short = dir_abbrev.get(direction, direction[:2].upper() if direction else "")
-
-        if category:
-            if dir_short:
-                return f"{name} ({category}, {speed:.1f} kts {dir_short})"
-            else:
-                return f"{name} ({category}, {speed:.1f} kts)"
-        else:
-            if dir_short:
-                return f"{name} ({speed:.1f} kts {dir_short})"
-            else:
-                return f"{name} ({speed:.1f} kts)"
-
-    def get_moving_ships_list(self) -> List[Dict]:
-        """Get list of moving ships sorted by speed descending."""
-        data = self.get_ships_data()
-        if data is None:
-            return []
-
-        items = data.get("items", [])
-        # Filter to moving ships only (speed > 0.5 kts to ignore drift)
-        moving_ships = [s for s in items if s.get("speed", 0) > 0.5]
-        # Sort by speed descending (fastest first)
-        moving_ships.sort(key=lambda s: s.get("speed", 0), reverse=True)
-        return moving_ships
-
-    def get_all_ships_list(self) -> List[Dict]:
-        """Get list of all ships sorted by speed descending."""
-        data = self.get_ships_data()
-        if data is None:
-            return []
-
-        items = data.get("items", [])
-        # Sort by speed descending (fastest/moving ships first)
-        ships = sorted(items, key=lambda s: s.get("speed", 0), reverse=True)
-        return ships
-
-    def format_ships_lines(self, ships_per_line: int = 4) -> List[str]:
-        """
-        Format ships data as multiple lines for overlay display.
-
-        Args:
-            ships_per_line: Number of ships per line
-
-        Returns:
-            List of formatted lines (first line includes count header)
-        """
-        all_ships = self.get_all_ships_list()
-
-        if not all_ships:
-            return ["0 Ships"]
-
-        # Format all ships
-        ship_strings = [self._format_ship(ship) for ship in all_ships]
-        ship_count = len(all_ships)
-
-        # Split into chunks
-        lines = []
-        for i in range(0, len(ship_strings), ships_per_line):
-            chunk = ship_strings[i : i + ships_per_line]
-            if i == 0:
-                # First line includes count header
-                lines.append(f"{ship_count} Ships: " + ", ".join(chunk))
-            else:
-                # Continuation lines - no indent, align with left margin
-                lines.append(", ".join(chunk))
-
-        return lines
-
-    def format_ships_overlay(self) -> str:
-        """
-        Format ships data for overlay display (single line, all ships).
-
-        Returns:
-            Formatted string for overlay
-        """
-        lines = self.format_ships_lines(ships_per_line=100)  # Effectively no limit
-        return lines[0] if lines else ""
-
-    def get_ship_boxes_data(self) -> List[str]:
-        """
-        Get list of formatted ship strings for individual box rendering.
-
-        Returns:
-            List of formatted strings, one per ship (e.g., "NORDLYS 14.1 kts SE")
-        """
-        moving_ships = self.get_moving_ships_list()
-        return [self._format_ship(ship) for ship in moving_ships]
-
-    def get_ships_count(self) -> int:
-        """Get total number of ships in the area."""
-        data = self.get_ships_data()
-        if data is None:
-            return 0
-        return data.get("count", len(data.get("items", [])))
-
-    def get_moving_ships_count(self) -> int:
-        """Get number of moving ships (speed > 0.5 kts)."""
-        data = self.get_ships_data()
-        if data is None:
-            return 0
-        items = data.get("items", [])
-        return len([s for s in items if s.get("speed", 0) > 0.5])
-
-
-class TideData:
-    """Handles loading and formatting tide data from pi-overlay-data."""
-
-    def __init__(self, config: Dict):
-        """
-        Initialize tide data handler.
-
-        Args:
-            config: Full configuration dictionary
-        """
-        self.config = config
-        self.tide_config = config.get("tide", {})
-        self.enabled = self.tide_config.get("enabled", False)
-        self.tide_file = self.tide_config.get("tide_file", "")
-        self._cache: Optional[Dict] = None
-        self._cache_time: Optional[datetime] = None
-        self._cache_duration = 600  # Cache for 10 minutes (points array covers 24h)
-
-    def get_tide_data(self) -> Optional[Dict]:
-        """
-        Load tide data from JSON file with caching.
-
-        Returns:
-            Tide data dictionary or None if unavailable
-        """
-        if not self.enabled or not self.tide_file:
-            return None
-
-        # Check cache
-        now = datetime.now()
-        if self._cache is not None and self._cache_time is not None:
-            age = (now - self._cache_time).total_seconds()
-            if age < self._cache_duration:
-                return self._cache
-
-        # Load from file
-        try:
-            tide_path = Path(self.tide_file)
-            if not tide_path.exists():
-                logger.warning(f"Tide file not found: {self.tide_file}")
-                return self._cache  # Return stale cache if available
-
-            with open(tide_path, "r") as f:
-                data = json.load(f)
-
-            # Extract tide_data from the cache wrapper
-            tide_data = data.get("tide_data", data)
-
-            self._cache = tide_data
-            self._cache_time = now
-            return tide_data
-
-        except Exception as e:
-            logger.warning(f"Failed to load tide data: {e}")
-            return self._cache  # Return stale cache if available
-
-    def get_current_level(self) -> Optional[float]:
-        """
-        Get current tide level in meters, interpolated from points array.
-
-        Uses the points array to find the level for the current time,
-        interpolating between the two nearest points.
-        """
-        data = self.get_tide_data()
-        if data is None:
-            return None
-
-        points = data.get("points", [])
-        if not points:
-            # Fallback to static current level if no points
-            current = data.get("current", {})
-            level_cm = current.get("level_cm")
-            if level_cm is not None:
-                return level_cm / 100.0
-            return None
-
-        now = datetime.now().astimezone()
-
-        # Find the two points surrounding the current time
-        prev_point = None
-        next_point = None
-
-        for point in points:
-            point_time = self._parse_time(point.get("time"))
-            if point_time is None:
-                continue
-
-            if point_time <= now:
-                prev_point = point
-            elif next_point is None:
-                next_point = point
-                break
-
-        # If we have both points, interpolate
-        if prev_point and next_point:
-            prev_time = self._parse_time(prev_point["time"])
-            next_time = self._parse_time(next_point["time"])
-            prev_level = prev_point.get("level_cm", 0)
-            next_level = next_point.get("level_cm", 0)
-
-            # Calculate interpolation factor (0.0 to 1.0)
-            total_diff = (next_time - prev_time).total_seconds()
-            current_diff = (now - prev_time).total_seconds()
-
-            if total_diff > 0:
-                factor = current_diff / total_diff
-                level_cm = prev_level + (next_level - prev_level) * factor
-                return level_cm / 100.0
-
-        # If we only have previous point, use it
-        if prev_point:
-            return prev_point.get("level_cm", 0) / 100.0
-
-        # If we only have next point, use it
-        if next_point:
-            return next_point.get("level_cm", 0) / 100.0
-
-        # Fallback to static current level
-        current = data.get("current", {})
-        level_cm = current.get("level_cm")
-        if level_cm is not None:
-            return level_cm / 100.0
-        return None
-
-    def get_trend(self) -> str:
-        """
-        Get tide trend (rising, falling, stable) based on points array.
-
-        Calculates trend from the current interpolated position in the points array.
-        """
-        data = self.get_tide_data()
-        if data is None:
-            return "unknown"
-
-        points = data.get("points", [])
-        if len(points) < 2:
-            # Fallback to static trend
-            current = data.get("current", {})
-            return current.get("trend", "unknown")
-
-        now = datetime.now().astimezone()
-
-        # Find the two points surrounding current time
-        prev_point = None
-        next_point = None
-
-        for point in points:
-            point_time = self._parse_time(point.get("time"))
-            if point_time is None:
-                continue
-
-            if point_time <= now:
-                prev_point = point
-            elif next_point is None:
-                next_point = point
-                break
-
-        # Determine trend from the two surrounding points
-        if prev_point and next_point:
-            prev_level = prev_point.get("level_cm", 0)
-            next_level = next_point.get("level_cm", 0)
-
-            diff = next_level - prev_level
-            if diff > 2:  # Rising threshold
-                return "rising"
-            elif diff < -2:  # Falling threshold
-                return "falling"
-            else:
-                return "stable"
-
-        # Fallback to static trend
-        current = data.get("current", {})
-        return current.get("trend", "unknown")
-
-    def get_trend_arrow(self) -> str:
-        """Get arrow character for trend direction."""
-        trend = self.get_trend()
-        if trend == "rising":
-            return "↑"
-        elif trend == "falling":
-            return "↓"
-        else:
-            return "→"
-
-    def _find_extremes_from_points(self) -> Tuple[List[Dict], List[Dict]]:
-        """
-        Find all high and low tides from the points array.
-
-        Walks the series tracking direction (rising/falling). An extreme is
-        emitted only when direction actually reverses; plateaus on a slope
-        (e.g. 149,149,149 then 150) are NOT extremes — only plateaus where
-        the direction before differs from the direction after qualify, and
-        the midpoint of such a plateau is reported as the extreme.
-
-        Returns:
-            Tuple of (highs_list, lows_list) where each item is
-            {"time": iso_string, "level_cm": int}
-        """
-        data = self.get_tide_data()
-        if data is None:
-            return [], []
-
-        points = data.get("points", [])
-        if len(points) < 3:
-            return [], []
-
-        min_amplitude_cm = 5  # reject reversals smaller than this vs. previous extreme
-
-        highs: List[Dict] = []
-        lows: List[Dict] = []
-
-        # Track the previous accepted opposite extreme for amplitude filtering.
-        last_extreme_level: Optional[int] = None  # level of previous accepted extreme
-        last_extreme_kind: Optional[str] = None  # "high" or "low"
-
-        # State for the current monotonic run.
-        # run_start is the index where the current run (or pending plateau) began.
-        # prev_dir is the direction (1 rising, -1 falling, 0 unknown) leading INTO the current point.
-        run_start = 0
-        prev_dir = 0  # direction of the most recent strict change
-
-        def emit(kind: str, idx: int) -> None:
-            nonlocal last_extreme_level, last_extreme_kind
-            level = points[idx].get("level_cm", 0)
-            if last_extreme_level is not None and last_extreme_kind != kind:
-                if abs(level - last_extreme_level) < min_amplitude_cm:
-                    return
-            entry = {"time": points[idx].get("time"), "level_cm": level}
-            if kind == "high":
-                highs.append(entry)
-            else:
-                lows.append(entry)
-            last_extreme_level = level
-            last_extreme_kind = kind
-
-        for i in range(1, len(points)):
-            prev_level = points[i - 1].get("level_cm", 0)
-            curr_level = points[i].get("level_cm", 0)
-
-            if curr_level > prev_level:
-                cur_dir = 1
-            elif curr_level < prev_level:
-                cur_dir = -1
-            else:
-                cur_dir = 0  # plateau
-
-            if cur_dir == 0:
-                # Continuing a plateau; run_start stays at the start of the plateau.
-                continue
-
-            if prev_dir == 0:
-                # First strict move; nothing to emit yet.
-                run_start = i - 1
-                prev_dir = cur_dir
-                continue
-
-            if cur_dir == prev_dir:
-                # Same direction: extend the run, plateau resolved as continuation.
-                run_start = i - 1
-                continue
-
-            # Direction reversed between the previous strict move and this one.
-            # The extreme is at the midpoint of the plateau (or the single peak
-            # point if no plateau). prev_dir was the direction up to the
-            # plateau; cur_dir is the direction leaving it.
-            plateau_end = i - 1  # last index at the plateau level
-            plateau_start = plateau_end
-            plateau_level = points[plateau_end].get("level_cm", 0)
-            while (
-                plateau_start > 0 and points[plateau_start - 1].get("level_cm", 0) == plateau_level
-            ):
-                plateau_start -= 1
-            mid_idx = (plateau_start + plateau_end) // 2
-
-            if prev_dir == 1 and cur_dir == -1:
-                emit("high", mid_idx)
-            elif prev_dir == -1 and cur_dir == 1:
-                emit("low", mid_idx)
-
-            run_start = i - 1
-            prev_dir = cur_dir
-
-        return highs, lows
-
-    def get_next_high(self) -> Optional[Dict]:
-        """
-        Get next high tide info by calculating from points array.
-
-        Always calculates from the points array to ensure accuracy,
-        filtering to only return future events.
-        """
-        now = datetime.now().astimezone()
-
-        highs, _ = self._find_extremes_from_points()
-        for high in highs:
-            high_time = self._parse_time(high.get("time"))
-            if high_time and high_time > now:
-                return high
-
-        return None
-
-    def get_next_low(self) -> Optional[Dict]:
-        """
-        Get next low tide info by calculating from points array.
-
-        Always calculates from the points array to ensure accuracy,
-        filtering to only return future events.
-        """
-        now = datetime.now().astimezone()
-
-        _, lows = self._find_extremes_from_points()
-        for low in lows:
-            low_time = self._parse_time(low.get("time"))
-            if low_time and low_time > now:
-                return low
-
-        return None
-
-    def _parse_time(self, time_str: str) -> Optional[datetime]:
-        """Parse ISO format time string, always returning timezone-aware datetime."""
-        if not time_str:
-            return None
-        try:
-            dt = datetime.fromisoformat(time_str)
-            # Ensure timezone-aware for comparison with datetime.now().astimezone()
-            if dt.tzinfo is None:
-                dt = dt.astimezone()
-            return dt
-        except (ValueError, TypeError):
-            return None
-
-    def get_next_event(self) -> Tuple[str, Optional[datetime], Optional[float]]:
-        """
-        Get the next tide event (whichever is sooner).
-
-        Returns:
-            Tuple of (event_type, event_time, level_m)
-            event_type is "high" or "low"
-        """
-        next_high = self.get_next_high()
-        next_low = self.get_next_low()
-
-        high_time = None
-        low_time = None
-
-        if next_high:
-            high_time = self._parse_time(next_high.get("time"))
-        if next_low:
-            low_time = self._parse_time(next_low.get("time"))
-
-        if high_time and low_time:
-            if high_time < low_time:
-                level = next_high.get("level_cm", 0) / 100.0
-                return ("high", high_time, level)
-            else:
-                level = next_low.get("level_cm", 0) / 100.0
-                return ("low", low_time, level)
-        elif high_time:
-            level = next_high.get("level_cm", 0) / 100.0
-            return ("high", high_time, level)
-        elif low_time:
-            level = next_low.get("level_cm", 0) / 100.0
-            return ("low", low_time, level)
-
-        return ("unknown", None, None)
-
-    def format_time(self, dt: Optional[datetime]) -> str:
-        """Format datetime as HH:MM in local time."""
-        if dt is None:
-            return "--:--"
-        if dt.tzinfo is not None:
-            dt = dt.astimezone()
-        return dt.strftime("%H:%M")
-
-    def format_tide_compact(self) -> str:
-        """
-        Format tide info in compact form for text overlay.
-
-        Returns:
-            String like "1.4m ↑ (high 18:30)"
-        """
-        level = self.get_current_level()
-        if level is None:
-            return ""
-
-        arrow = self.get_trend_arrow()
-        event_type, event_time, _ = self.get_next_event()
-        time_str = self.format_time(event_time)
-
-        return f"{level:.1f}m {arrow} ({event_type} {time_str})"
-
-    def get_widget_data(self) -> Optional[Dict]:
-        """
-        Get formatted data for the tide widget display.
-
-        Returns:
-            Dictionary with widget display data or None
-        """
-        level = self.get_current_level()
-        if level is None:
-            return None
-
-        trend = self.get_trend()
-        arrow = self.get_trend_arrow()
-        event_type, event_time, target_level = self.get_next_event()
-
-        next_high = self.get_next_high()
-        next_low = self.get_next_low()
-
-        high_time = self._parse_time(next_high.get("time")) if next_high else None
-        low_time = self._parse_time(next_low.get("time")) if next_low else None
-        high_level = next_high.get("level_cm", 0) / 100.0 if next_high else None
-        low_level = next_low.get("level_cm", 0) / 100.0 if next_low else None
-
-        return {
-            "level": level,
-            "level_str": f"{int(level * 100)}cm",
-            "trend": trend,
-            "arrow": arrow,
-            "next_event_type": event_type,
-            "next_event_time": event_time,
-            "next_event_time_str": self.format_time(event_time),
-            "target_level": target_level,
-            "target_level_str": f"{int(target_level * 100)}cm" if target_level else "",
-            "high_time": high_time,
-            "high_time_str": self.format_time(high_time),
-            "high_level": high_level,
-            "high_level_str": f"{int(high_level * 100)}cm" if high_level else "",
-            "low_time": low_time,
-            "low_time_str": self.format_time(low_time),
-            "low_level": low_level,
-            "low_level_str": f"{int(low_level * 100)}cm" if low_level else "",
-        }
-
-
-class AuroraData:
-    """Handles loading and formatting aurora data from pi-overlay-data."""
-
-    def __init__(self, config: Dict):
-        """
-        Initialize aurora data handler.
-
-        Args:
-            config: Full configuration dictionary
-        """
-        self.config = config
-        self.aurora_config = config.get("aurora", {})
-        self.enabled = self.aurora_config.get("enabled", False)
-        self.aurora_file = self.aurora_config.get("aurora_file", "")
-        self._cache: Optional[Dict] = None
-        self._cache_time: Optional[datetime] = None
-        self._cache_duration = 60  # Cache for 60 seconds
-
-    def get_aurora_data(self) -> Optional[Dict]:
-        """
-        Load aurora data from JSON file with caching.
-
-        Returns:
-            Aurora data dictionary or None if unavailable
-        """
-        if not self.enabled or not self.aurora_file:
-            return None
-
-        # Check cache
-        now = datetime.now()
-        if self._cache is not None and self._cache_time is not None:
-            age = (now - self._cache_time).total_seconds()
-            if age < self._cache_duration:
-                return self._cache
-
-        # Load from file
-        try:
-            aurora_path = Path(self.aurora_file)
-            if not aurora_path.exists():
-                logger.warning(f"Aurora file not found: {self.aurora_file}")
-                return self._cache  # Return stale cache if available
-
-            with open(aurora_path, "r") as f:
-                data = json.load(f)
-
-            # Extract aurora_data from the cache wrapper
-            aurora_data = data.get("aurora_data", data)
-
-            self._cache = aurora_data
-            self._cache_time = now
-            return aurora_data
-
-        except Exception as e:
-            logger.warning(f"Failed to load aurora data: {e}")
-            return self._cache  # Return stale cache if available
-
-    def get_bz_arrow(self, bz_status: str) -> str:
-        """Get arrow for Bz direction (south is good for aurora)."""
-        if "south" in bz_status:
-            return "↓"
-        elif "north" in bz_status:
-            return "↑"
-        return "→"
-
-    def get_widget_data(self) -> Optional[Dict]:
-        """
-        Get formatted data for the aurora widget display.
-
-        Returns:
-            Dictionary with widget display data or None
-        """
-        data = self.get_aurora_data()
-        if data is None:
-            return None
-
-        kp = data.get("kp", 0)
-        bz = data.get("bz", 0)
-        bz_status = data.get("bz_status", "unknown")
-        speed = data.get("speed", 0)
-        storm = data.get("storm", "G0")
-        favorable = data.get("favorable", False)
-
-        return {
-            "kp": kp,
-            "kp_str": f"{kp:.1f}" if isinstance(kp, (int, float)) else "N/A",
-            "bz": bz,
-            "bz_str": f"{bz:.1f}" if isinstance(bz, (int, float)) else "N/A",
-            "bz_status": bz_status,
-            "bz_arrow": self.get_bz_arrow(bz_status),
-            "speed": speed,
-            "speed_str": f"{speed}",
-            "storm": storm,
-            "favorable": favorable,
-        }
 
 
 class ImageOverlay:
@@ -799,36 +119,6 @@ class ImageOverlay:
                 logger.warning(f"Could not load ship icon: {e}")
 
         logger.debug("Overlay initialized")
-
-    def _load_ships(self) -> List[Dict]:
-        """
-        Load ships from pi-overlay-data ships_current.json file.
-
-        Returns:
-            List of ship dictionaries with display info
-        """
-        if not self.barentswatch_enabled:
-            return []
-
-        try:
-            ships_path = Path(self.ships_file)
-            if not ships_path.exists():
-                logger.debug(f"Ships file not found: {self.ships_file}")
-                return []
-
-            with open(ships_path, "r") as f:
-                data = json.load(f)
-
-            ships = data.get("items", [])
-            logger.debug(f"Loaded {len(ships)} ships from {self.ships_file}")
-            return ships
-
-        except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in ships file: {e}")
-            return []
-        except Exception as e:
-            logger.warning(f"Failed to load ships: {e}")
-            return []
 
     def _load_font(self) -> Optional[ImageFont.FreeTypeFont]:
         """
@@ -1142,43 +432,9 @@ class ImageOverlay:
             # Update our fallback cache with fresh data
             self._last_weather_data = weather_data
 
-        if weather_data:
-            data.update(
-                {
-                    "temp": self.weather._format_temperature(weather_data.get("temperature")),
-                    "temperature_outdoor": self.weather._format_temperature(
-                        weather_data.get("temperature")
-                    ),
-                    "humidity": self.weather._format_humidity(weather_data.get("humidity")),
-                    "wind": self.weather._format_wind(
-                        weather_data.get("wind_speed"), weather_data.get("wind_gust")
-                    ),
-                    "wind_speed": self.weather._format_wind_speed(weather_data.get("wind_speed")),
-                    "wind_gust": self.weather._format_wind_speed(weather_data.get("wind_gust")),
-                    "wind_dir": self.weather._format_wind_direction(weather_data.get("wind_angle")),
-                    "rain": self.weather._format_rain(weather_data.get("rain")),
-                    "rain_1h": self.weather._format_rain(weather_data.get("rain_1h")),
-                    "rain_24h": self.weather._format_rain(weather_data.get("rain_24h")),
-                    "pressure": self.weather._format_pressure(weather_data.get("pressure")),
-                }
-            )
-        else:
-            # Only show "-" if we have no data at all (first run, never succeeded)
-            data.update(
-                {
-                    "temp": "-",
-                    "temperature_outdoor": "-",
-                    "humidity": "-",
-                    "wind": "-",
-                    "wind_speed": "-",
-                    "wind_gust": "-",
-                    "wind_dir": "-",
-                    "rain": "-",
-                    "rain_1h": "-",
-                    "rain_24h": "-",
-                    "pressure": "-",
-                }
-            )
+        # format_fields fills every placeholder with "-" when there is no data
+        # at all (first run, never succeeded).
+        data.update(self.weather.format_fields(weather_data))
 
         # Add ships data if available
         if hasattr(self, "ships") and self.ships.enabled:
@@ -1252,21 +508,11 @@ class ImageOverlay:
         # For corner modes, stack all configured lines
         # Line 1 left
         if content_config.get("line_1_left"):
-            try:
-                line = content_config["line_1_left"].format(**data)
-                lines.append(line)
-            except KeyError as e:
-                logger.warning(f"Unknown variable in line_1_left: {e}")
-                lines.append(content_config["line_1_left"])
+            lines.append(format_slot(content_config["line_1_left"], data, "line_1_left"))
 
         # Line 1 right (if you want it in corner mode)
         if content_config.get("line_1_right"):
-            try:
-                line = content_config["line_1_right"].format(**data)
-                lines.append(line)
-            except KeyError as e:
-                logger.warning(f"Unknown variable in line_1_right: {e}")
-                lines.append(content_config["line_1_right"])
+            lines.append(format_slot(content_config["line_1_right"], data, "line_1_right"))
 
         # Line 2 left
         if content_config.get("line_2_left"):
@@ -1274,21 +520,11 @@ class ImageOverlay:
             if content_config["line_2_left"] == "{date} {time}":
                 lines.append(data.get("datetime_localized", f"{data['date']} {data['time']}"))
             else:
-                try:
-                    line = content_config["line_2_left"].format(**data)
-                    lines.append(line)
-                except KeyError as e:
-                    logger.warning(f"Unknown variable in line_2_left: {e}")
-                    lines.append(content_config["line_2_left"])
+                lines.append(format_slot(content_config["line_2_left"], data, "line_2_left"))
 
         # Line 2 right (if you want it in corner mode)
         if content_config.get("line_2_right"):
-            try:
-                line = content_config["line_2_right"].format(**data)
-                lines.append(line)
-            except KeyError as e:
-                logger.warning(f"Unknown variable in line_2_right: {e}")
-                lines.append(content_config["line_2_right"])
+            lines.append(format_slot(content_config["line_2_right"], data, "line_2_right"))
 
         return lines
 
@@ -1306,8 +542,9 @@ class ImageOverlay:
         Returns:
             (x, y) position for top-left corner of text
         """
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
+        # Named to avoid shadowing overlay_draw.text_width / text_height.
+        bbox_width = text_bbox[2] - text_bbox[0]
+        bbox_height = text_bbox[3] - text_bbox[1]
         margin = self.overlay_config.get("margin", 20)
 
         position_preset = self.overlay_config.get("position", "bottom-left")
@@ -1315,19 +552,19 @@ class ImageOverlay:
         # Check for bar mode
         if position_preset == "top-bar":
             # Center horizontally, small margin from top
-            x = (img_width - text_width) // 2
+            x = (img_width - bbox_width) // 2
             y = margin
             return (x, y)
         elif position_preset == "top-left":
             return (margin, margin)
         elif position_preset == "top-right":
-            return (img_width - text_width - margin, margin)
+            return (img_width - bbox_width - margin, margin)
         elif position_preset == "bottom-left":
-            return (margin, img_height - text_height - margin)
+            return (margin, img_height - bbox_height - margin)
         elif position_preset == "bottom-right":
             return (
-                img_width - text_width - margin,
-                img_height - text_height - margin,
+                img_width - bbox_width - margin,
+                img_height - bbox_height - margin,
             )
         elif position_preset == "custom":
             custom_pos = self.overlay_config.get("custom_position", {})
@@ -1338,29 +575,11 @@ class ImageOverlay:
             return (x, y)
         else:
             # Default to bottom-left
-            return (margin, img_height - text_height - margin)
+            return (margin, img_height - bbox_height - margin)
 
     def _draw_gradient_bar(self, draw, img_width: int, bar_height: int, base_color: List[int]):
-        """
-        Draw a gradient background bar that fades from solid to transparent.
-
-        Args:
-            draw: ImageDraw object
-            img_width: Image width
-            bar_height: Height of the bar
-            base_color: Base RGBA color [R, G, B, A]
-        """
-        # Create gradient from top to bottom
-        r, g, b, max_alpha = base_color
-
-        for y in range(bar_height):
-            # Calculate alpha based on position (fade out towards bottom)
-            alpha_ratio = 1.0 - (y / bar_height) * 0.3  # Fade 30% at bottom
-            alpha = int(max_alpha * alpha_ratio)
-
-            # Draw horizontal line with calculated alpha
-            color = (r, g, b, alpha)
-            draw.rectangle([0, y, img_width, y + 1], fill=color)
+        """Draw the gradient background bar. See overlay_draw.draw_gradient_bar."""
+        draw_gradient_bar(draw, img_width, bar_height, base_color)
 
     def _draw_ship_boxes(
         self,
@@ -1412,11 +631,7 @@ class ImageOverlay:
         img_width = img.size[0]
 
         # Calculate consistent text height using reference characters (covers ascenders/descenders)
-        try:
-            ref_bbox = draw.textbbox((0, 0), "Ayg", font=font)
-            consistent_text_height = ref_bbox[3] - ref_bbox[1]
-        except Exception:
-            consistent_text_height = 20
+        consistent_text_height = text_height(draw, font)
 
         # Use icon height for box height if icon is taller than text
         ship_icon = self._ship_icon
@@ -1435,11 +650,7 @@ class ImageOverlay:
 
         if ship_icon:
             # Calculate header box width: icon + spacing + count
-            try:
-                count_bbox = draw.textbbox((0, 0), count_text, font=font)
-                count_width = count_bbox[2] - count_bbox[0]
-            except Exception:
-                count_width = len(count_text) * 10
+            count_width = text_width(draw, count_text, font)
 
             header_content_width = ship_icon.width + icon_spacing + count_width
             header_box_width = header_content_width + (box_padding_h * 2)
@@ -1464,13 +675,9 @@ class ImageOverlay:
         # Draw ship name boxes (no icons)
         for ship_text in ship_texts:
             # Calculate text width
-            try:
-                bbox = draw.textbbox((0, 0), ship_text, font=font)
-                text_width = bbox[2] - bbox[0]
-            except Exception:
-                text_width = len(ship_text) * 10
+            ship_text_width = text_width(draw, ship_text, font)
 
-            box_width = text_width + (box_padding_h * 2)
+            box_width = ship_text_width + (box_padding_h * 2)
             box_height = consistent_box_height
 
             # Check if box fits on current line
@@ -1603,11 +810,7 @@ class ImageOverlay:
 
                 # Line 1 Left
                 line_1_left_template = content_config.get("line_1_left", "{camera_name}")
-                try:
-                    line_1_left = line_1_left_template.format(**data)
-                except KeyError as e:
-                    logger.warning(f"Unknown variable in line_1_left: {e}")
-                    line_1_left = line_1_left_template
+                line_1_left = format_slot(line_1_left_template, data, "line_1_left")
                 draw.text((left_x, y1), line_1_left, fill=font_color, font=font_bold)
 
                 # Line 2 Left (use localized datetime if it contains date/time variables)
@@ -1617,11 +820,7 @@ class ImageOverlay:
                 if line_2_left_template == "{date} {time}":
                     line_2_left = data.get("datetime_localized", f"{data['date']} {data['time']}")
                 else:
-                    try:
-                        line_2_left = line_2_left_template.format(**data)
-                    except KeyError as e:
-                        logger.warning(f"Unknown variable in line_2_left: {e}")
-                        line_2_left = line_2_left_template
+                    line_2_left = format_slot(line_2_left_template, data, "line_2_left")
                 draw.text((left_x, y2), line_2_left, fill=font_color, font=font_regular)
 
                 # RIGHT SIDE - Calculate aurora and tide sections first to know offset
@@ -1648,13 +847,11 @@ class ImageOverlay:
                             try:
                                 max_line_1 = "Kp: 9.9 | Bz: -99.9↓"  # Max width template
                                 max_line_2 = "G5 | 9999 km/s"
-                                bbox1 = draw.textbbox((0, 0), max_line_1, font=font_regular)
-                                bbox2 = draw.textbbox((0, 0), max_line_2, font=font_regular)
-                                aurora_text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
-                            except Exception:
-                                aurora_text_width = (
-                                    max(len(max_line_1), len(max_line_2)) * font_size * 0.6
+                                aurora_text_width = measure_widest(
+                                    draw, (max_line_1, max_line_2), font_regular, font_size
                                 )
+                            except Exception:
+                                aurora_text_width = 0
 
                             aurora_section_width = aurora_text_width
 
@@ -1672,15 +869,13 @@ class ImageOverlay:
                             # Add gap for next section
                             aurora_section_width += section_gap
 
-                            # Draw subtle vertical divider line to left of aurora section
-                            divider_x = aurora_x - int(section_gap * 0.5)
-                            divider_y1 = y1
-                            divider_y2 = y2 + line_height - int(padding * 0.3)
-                            divider_color = font_color[:3] + (60,)  # Very subtle
-                            draw.line(
-                                [(divider_x, divider_y1), (divider_x, divider_y2)],
-                                fill=divider_color,
-                                width=1,
+                            # Subtle vertical rule to the left of the aurora section
+                            draw_divider(
+                                draw,
+                                x=aurora_x - int(section_gap * 0.5),
+                                y_top=y1,
+                                y_bottom=y2 + line_height - int(padding * 0.3),
+                                color=font_color[:3] + (60,),
                             )
                     except Exception as aurora_err:
                         logger.error(f"Failed to draw aurora widget: {aurora_err}", exc_info=True)
@@ -1713,14 +908,14 @@ class ImageOverlay:
                             try:
                                 max_line_1 = "Tide level: 999cm → 999cm"
                                 max_line_2 = "H 00:00 (999cm) | L 00:00 (999cm)"
-                                bbox1 = draw.textbbox((0, 0), max_line_1, font=font_regular)
-                                bbox2 = draw.textbbox((0, 0), max_line_2, font=font_regular)
-                                text_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0])
+                                tide_text_width = measure_widest(
+                                    draw, (max_line_1, max_line_2), font_regular, font_size
+                                )
                             except Exception:
-                                text_width = max(len(max_line_1), len(max_line_2)) * font_size * 0.6
+                                tide_text_width = 0
 
                             # Total tide section width: fixed text area + margin + wave
-                            tide_section_width = text_width + wave_margin + wave_width
+                            tide_section_width = tide_text_width + wave_margin + wave_width
 
                             # Position for tide section (to left of aurora)
                             tide_x = (
@@ -1732,7 +927,7 @@ class ImageOverlay:
                             )
                             text_x = tide_x
                             # Wave position is fixed relative to section start
-                            wave_x = tide_x + text_width + wave_margin
+                            wave_x = tide_x + tide_text_width + wave_margin
 
                             # Draw text
                             draw.text((text_x, y1), tide_line_1, fill=font_color, font=font_regular)
@@ -1845,22 +1040,14 @@ class ImageOverlay:
                 # Line 1 Right (positioned to left of tide section)
                 line_1_right_template = content_config.get("line_1_right", "")
                 if line_1_right_template:
-                    try:
-                        line_1_right = line_1_right_template.format(**data)
-                    except KeyError as e:
-                        logger.warning(f"Unknown variable in line_1_right: {e}")
-                        line_1_right = line_1_right_template
+                    line_1_right = format_slot(line_1_right_template, data, "line_1_right")
 
                     # Calculate width to position from right (accounting for tide section)
-                    try:
-                        bbox = draw.textbbox((0, 0), line_1_right, font=font_regular)
-                        text_width = bbox[2] - bbox[0]
-                    except Exception:
-                        text_width = len(line_1_right) * font_size * 0.6
+                    line_1_width = text_width(draw, line_1_right, font_regular, font_size)
 
                     right_x = (
                         img_width
-                        - text_width
+                        - line_1_width
                         - margin
                         - padding
                         - tide_section_width
@@ -1876,21 +1063,13 @@ class ImageOverlay:
                 # Line 2 Right (positioned to left of tide section)
                 line_2_right_template = content_config.get("line_2_right", "")
                 if line_2_right_template:
-                    try:
-                        line_2_right = line_2_right_template.format(**data)
-                    except KeyError as e:
-                        logger.warning(f"Unknown variable in line_2_right: {e}")
-                        line_2_right = line_2_right_template
+                    line_2_right = format_slot(line_2_right_template, data, "line_2_right")
 
-                    try:
-                        bbox = draw.textbbox((0, 0), line_2_right, font=font_regular)
-                        text_width = bbox[2] - bbox[0]
-                    except Exception:
-                        text_width = len(line_2_right) * font_size * 0.6
+                    line_2_width = text_width(draw, line_2_right, font_regular, font_size)
 
                     right_x = (
                         img_width
-                        - text_width
+                        - line_2_width
                         - margin
                         - padding
                         - tide_section_width
@@ -1938,13 +1117,7 @@ class ImageOverlay:
                 # Calculate max text width and total height
                 max_width = 0
                 for line in lines:
-                    try:
-                        bbox = draw.textbbox((0, 0), line, font=font_bold)
-                        line_width = bbox[2] - bbox[0]
-                        max_width = max(max_width, line_width)
-                    except Exception:
-                        line_width = len(line) * font_size * 0.6
-                        max_width = max(max_width, int(line_width))
+                    max_width = max(max_width, text_width(draw, line, font_bold, font_size))
 
                 total_height = len(lines) * line_height
 

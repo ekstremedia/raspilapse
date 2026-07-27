@@ -1,0 +1,29 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Daily Timelapse Video Generation
+Documentation=https://github.com/ekstremedia/raspilapse
+After=network.target
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=@PYTHON@ @PROJECT_DIR@/src/daily_timelapse.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raspilapse-daily-video
+
+Environment="PYTHONUNBUFFERED=1"
+RemainAfterExit=no
+
+# Encoding a day of 4K frames takes ~25 minutes; let it finish.
+TimeoutStartSec=infinity
+
+# ...but never at the expense of the capture loop, which runs every 30s.
+Nice=10
+IOSchedulingClass=idle
+
+# No [Install] section on purpose. This service is triggered by
+# raspilapse-daily-video.timer; without [Install] it cannot be enabled at all,
+# which is exactly the intent.

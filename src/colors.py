@@ -97,6 +97,12 @@ def print_section(title: str):
     print(f"{Colors.header('═' * 70)}")
 
 
+def print_subsection(title: str):
+    """Print a subsection header with a single rule."""
+    print(f"\n{Colors.bold(title)}")
+    print(Colors.CYAN + "─" * 70 + Colors.END)
+
+
 def print_info(label: str, value: str):
     """Print an info line with label and value."""
     print(f"  {Colors.BOLD}{label}:{Colors.END} {value}")

@@ -1,0 +1,15 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Upload Retry Timer
+Documentation=https://github.com/ekstremedia/raspilapse
+# No Requires= here on purpose: a timer already starts the service of the same
+# name. Adding Requires= makes systemd pull the service in the moment the
+# *timer* starts, i.e. immediately on every boot.
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+# Persistent= only applies to OnCalendar= timers; it does nothing here.
+
+[Install]
+WantedBy=timers.target

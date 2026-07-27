@@ -171,17 +171,6 @@ video:
   # End time (comment out or set to null to use current time)
   default_end_time: "05:00"
 
-# Timelapse Settings (for future timelapse.py script)
-timelapse:
-  # Interval between captures in seconds
-  interval: 3
-
-  # Total number of frames to capture (0 = unlimited)
-  num_frames: 0
-
-  # Stabilization delay after camera start (seconds)
-  stabilization_delay: 2
-
 # Adaptive Timelapse Settings (for auto_timelapse.py)
 adaptive_timelapse:
   # Enable adaptive exposure based on light conditions
@@ -212,6 +201,44 @@ adaptive_timelapse:
 
     # Between night and day = transition mode (gradual adjustment)
     # Automatically calculated between night and day thresholds
+
+  # How hard the exposure loop corrects toward the brightness target each frame:
+  #     new_exposure = current * (target / measured) ** brightness_damping
+  # Lower is gentler and slower; higher converges faster but can overshoot.
+  #   0.5 = conservative (recommended, converges in 3-5 frames)
+  #   0.7 = balanced
+  #   0.8 = aggressive
+  brightness_damping: 0.5
+
+  # Highlight protection: scale the brightness target down when the top of the
+  # histogram approaches clipping, so bright skies keep detail instead of
+  # blowing out to pure white.
+  #
+  # The scale applies to the *target*, not to the controller's output, so how
+  # much protection you get depends only on the settings below and not on
+  # brightness_damping.
+  #
+  # Set enabled: false to revert to unprotected exposure with no code change.
+  highlight_protection:
+    enabled: true
+
+    # p95 (95th percentile brightness, 0-255) thresholds.
+    # Below safe_p95 there is nothing to protect and the scale is exactly 1.0.
+    safe_p95: 200
+    warning_p95: 220
+    critical_p95: 240
+
+    # Never pull the target below this fraction of its configured value.
+    min_scale: 0.70
+
+    # How fast the scale may move per frame (0-1). Low values stop a single
+    # noisy frame from stepping the target.
+    slew: 0.25
+
+    # Off at night by default: streetlamps and the moon push p95 high while the
+    # frame as a whole is already darker than target, so protecting highlights
+    # there just makes aurora frames worse.
+    apply_in_night: false
 
   # Night mode settings (for dark conditions - stars, aurora, etc.)
   night_mode:
@@ -255,16 +282,7 @@ adaptive_timelapse:
 
   # Transition mode settings (dawn/dusk)
   transition_mode:
-    # Gradually adjust between day and night settings
-    # Based on calculated lux value
-    smooth_transition: true
 
-    # === SEQUENTIAL RAMPING (Noise Reduction) ===
-    # When enabled, prioritizes shutter speed over gain to minimize noise:
-    # - Phase 1: Ramp shutter from day value to max, keep gain locked at ~1.0
-    # - Phase 2: Only after shutter is maxed, ramp gain up to night target
-    # This produces cleaner twilight images by keeping ISO low as long as possible
-    sequential_ramping: true
 
     # === SMOOTH TRANSITION SETTINGS ===
     # These settings prevent flickering and ISO jumps during day/night transitions
@@ -302,10 +320,6 @@ adaptive_timelapse:
     # When false, uses camera's AWB in full day mode (legacy behavior)
     smooth_wb_in_day_mode: true
 
-    # Use smooth exposure/gain in day mode
-    # When true, calculates exposure and gain based on lux (prevents ISO jumps)
-    # When false, uses camera's auto-exposure (legacy behavior, may cause ISO jumps)
-    smooth_exposure_in_day_mode: true
 
     # === BRIGHTNESS FEEDBACK SETTINGS ===
     # These settings enable real-time brightness correction for butter-smooth
@@ -319,17 +333,6 @@ adaptive_timelapse:
     # Higher = brighter images, lower = darker images
     target_brightness: 120
 
-    # Brightness tolerance (pixels within target ± tolerance are acceptable)
-    # Larger tolerance = less correction, more stable
-    # Smaller tolerance = more correction, may cause subtle fluctuations
-    brightness_tolerance: 40
-
-    # Brightness feedback strength (0.0-1.0)
-    # How quickly the correction factor adjusts per frame
-    # Lower = smoother but slower to correct (recommended: 0.1-0.3)
-    # Higher = faster correction but may cause subtle jumps
-    brightness_feedback_strength: 0.2
-
     # === OVEREXPOSURE FAST RAMP-DOWN ===
     # When overexposure is detected (brightness > 180 or >10% clipped pixels),
     # exposure ramps down faster to prevent the "light flash" at dawn.
@@ -341,21 +344,14 @@ adaptive_timelapse:
     # - 0.50 = 5x faster (recommended for quick overexposure correction)
     fast_rampdown_speed: 0.50
 
-    # === EV SAFETY CLAMP ===
-    # Prevents brightness jumps when transitioning from day (auto) to night (manual) mode.
-    # Uses the "Holy Grail" technique: seeds manual exposure from last auto-exposure values.
-    #
-    # IMPORTANT: Disable this for scenes with bright point light sources (street lamps,
-    # security lights, etc.) as they can fool the auto-exposure seeding and cause
-    # extremely short exposures (e.g., 330ms instead of 20s) in night mode.
-    #
-    # When enabled: First manual frame matches last auto frame exactly (no brightness jump)
-    # When disabled: Manual exposure calculated purely from lux (may have slight jump but
-    #                works correctly with bright point light sources in frame)
-    #
-    # ev_safety_clamp_enabled: true (default) - Enable for scenes without bright point lights
-    # ev_safety_clamp_enabled: false - Disable for scenes with street lamps, etc.
-    ev_safety_clamp_enabled: true
+    # Severe overexposure (brightness > 200): even faster, to stop a dawn flare
+    # from burning several frames before the loop catches up.
+    critical_rampdown_speed: 0.70
+
+    # The mirror images, for recovering from underexposure at dusk.
+    fast_rampup_speed: 0.50
+    critical_rampup_speed: 0.70
+
 
   # === HDR MODE ===
   # Enables ISP tone-mapped HDR (SingleExposure mode) during daytime.
@@ -561,8 +557,6 @@ overlay:
     # Line spacing multiplier (1.0 = normal, 1.5 = 1.5x spacing)
     line_spacing: 1.2  # Tighter spacing for bar mode
 
-    # Separate sections with blank line
-    section_spacing: false  # No blank lines in compact bar
 
     # Extra bottom spacing for bar (adds padding below text)
     bottom_padding_multiplier: 0.7  # 30% more space at bottom
@@ -586,27 +580,18 @@ logging:
   # Date format for timestamps
   date_format: "%Y-%m-%d %H:%M:%S"
 
-  # Also log to console
-  console: true
+  # Console output: auto | true | false
+  #   auto  - skip it under systemd, which already captures stdout into the
+  #           journal. Without this, every line is stored twice.
+  #   true  - always add a console handler
+  #   false - never
+  console: auto
 
   # Maximum log file size in MB (0 = unlimited)
   max_size_mb: 5
 
   # Number of backup log files to keep
   backup_count: 2
-
-# Analysis and Graphs Settings
-graphs:
-  # Directory for generated analysis graphs
-  directory: "graphs"
-
-  # Graph image settings
-  width: 14  # inches
-  height: 8  # inches
-  dpi: 150   # resolution (dots per inch)
-
-  # Default time window for analysis (hours)
-  default_hours: 24
 
 # Video Upload Settings (for daily_timelapse.py)
 video_upload:
@@ -627,12 +612,17 @@ weather:
   # Enable/disable weather data fetching
   enabled: false
 
-  # Netatmo API endpoint URL
-  # Example: "http://nesthus2026.local/api/netatmo/stations/d7bb2025-0a6e-4cf5-bbc3-9e2b4dfb1bb4"
+  # Netatmo API endpoint URL. Expects JSON with a "modules" array; see docs/WEATHER.md.
+  # Example: "https://example.com/api/netatmo/stations/<your-station-id>"
   endpoint:
 
   # Cache duration in seconds (how long to keep weather data before refreshing)
   cache_duration: 300  # 5 minutes
+
+  # After a failed fetch, wait before trying again, doubling each consecutive
+  # failure up to this cap. Without it, an outage means one request and one
+  # error line per capture, indefinitely.
+  max_backoff_seconds: 900  # 15 minutes
 
   # Request timeout in seconds
   timeout: 5
@@ -647,6 +637,21 @@ database:
 
   # Automatically create directories if they don't exist
   create_directories: true
+
+  # Delete capture rows older than this many days. 0 keeps everything.
+  #
+  # Rows outlive their JPEGs on purpose -- images go after 7 days (see
+  # scripts/cleanup_old_images.sh) while the rows keep the lux, brightness and
+  # weather history the graphs are drawn from, so only image_path goes stale.
+  #
+  # 180 days is a full seasonal cycle, which is what makes the solar-pattern
+  # graphs worth having at high latitudes. At a 30s interval a year is roughly
+  # 1 million rows and about 200 MB.
+  #
+  # Pruning runs from raspilapse-cleanup.timer. Space is only handed back to
+  # the filesystem by an explicit `python3 src/database.py --vacuum`, which is
+  # slow and needs free disk equal to the database size.
+  retention_days: 180
 
 # Barentswatch Ship Tracking Overlay
 # Shows ships in the camera's field of view (from pi-overlay-data service)

@@ -6,17 +6,16 @@ Can be used to add overlays to previously captured images or batch process
 multiple images.
 """
 
-import sys
 import argparse
+import sys
 from pathlib import Path
-import json
 
 try:
+    from src.logging_config import configure_logging, get_logger
     from src.overlay import apply_overlay_to_image
-    from src.logging_config import get_logger
 except ImportError:
+    from logging_config import configure_logging, get_logger
     from overlay import apply_overlay_to_image
-    from logging_config import get_logger
 
 logger = get_logger("apply_overlay")
 
@@ -95,6 +94,7 @@ Examples:
     )
 
     args = parser.parse_args()
+    configure_logging(getattr(args, "config", None))
 
     # Set log level
     if args.verbose:
@@ -164,7 +164,7 @@ Examples:
 
     # Summary
     total = success_count + error_count
-    logger.info(f"\n=== Processing Complete ===")
+    logger.info("\n=== Processing Complete ===")
     logger.info(f"Total images: {total}")
     logger.info(f"Successful: {success_count}")
     logger.info(f"Errors: {error_count}")

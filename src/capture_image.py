@@ -1,19 +1,19 @@
 """Image capture module for Raspilapse."""
 
-import os
 import json
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+
 import yaml
 
 # Handle imports for both module and script execution
 try:
-    from src.logging_config import get_logger
+    from src.logging_config import configure_logging, get_logger
     from src.overlay import ImageOverlay
 except ImportError:
-    from logging_config import get_logger
+    from logging_config import configure_logging, get_logger
     from overlay import ImageOverlay
 
 # Initialize logger
@@ -33,7 +33,7 @@ class CameraConfig:
         self.config_path = config_path
         logger.info(f"Loading configuration from: {config_path}")
         self.config = self._load_config()
-        logger.debug(f"Configuration loaded successfully")
+        logger.debug("Configuration loaded successfully")
 
     def _load_config(self) -> Dict:
         """Load configuration from YAML file."""
@@ -45,7 +45,7 @@ class CameraConfig:
         try:
             with open(config_file, "r") as f:
                 config = yaml.safe_load(f)
-                logger.debug(f"Successfully parsed YAML configuration")
+                logger.debug("Successfully parsed YAML configuration")
                 return config
         except yaml.YAMLError as e:
             logger.error(f"Failed to parse configuration file: {e}")
@@ -135,8 +135,8 @@ class ImageCapture:
         logger.debug("Initializing camera...")
 
         try:
-            from picamera2 import Picamera2
             import libcamera
+            from picamera2 import Picamera2
         except ImportError as e:
             logger.error(
                 "Picamera2 library not found. Install with: sudo apt install -y python3-picamera2"
@@ -300,18 +300,6 @@ class ImageCapture:
 
         return control_map
 
-    def _apply_controls(self, controls: Dict):
-        """
-        Apply camera controls to an already-started camera (legacy method).
-
-        Args:
-            controls: Dictionary of control settings
-        """
-        control_map = self._prepare_control_map(controls)
-        if control_map:
-            logger.debug(f"Applying controls to camera: {control_map}")
-            self.picam2.set_controls(control_map)
-
     def _compute_brightness_from_lores(self, request) -> Dict:
         """
         Compute brightness metrics from the lores stream.
@@ -343,11 +331,12 @@ class ImageCapture:
             median_brightness = float(np.median(gray))
             std_brightness = float(np.std(gray))
 
-            # Percentiles for exposure analysis
-            p5 = float(np.percentile(gray, 5))
-            p10 = float(np.percentile(gray, 10))
-            p90 = float(np.percentile(gray, 90))
-            p95 = float(np.percentile(gray, 95))
+            # Percentiles for exposure analysis. p5/p95 drive the shadow and
+            # highlight checks; p25/p75 are the interquartile range, and are
+            # what the brightness_p25/p75 database columns expect -- this used
+            # to emit p10/p90, so both columns were NULL on every row ever
+            # written, and nothing else read them.
+            p5, p25, p75, p95 = (float(v) for v in np.percentile(gray, [5, 25, 75, 95]))
 
             # Under/overexposure percentages
             total_pixels = gray.size
@@ -359,8 +348,8 @@ class ImageCapture:
                 "median_brightness": round(median_brightness, 2),
                 "std_brightness": round(std_brightness, 2),
                 "percentile_5": round(p5, 2),
-                "percentile_10": round(p10, 2),
-                "percentile_90": round(p90, 2),
+                "percentile_25": round(p25, 2),
+                "percentile_75": round(p75, 2),
                 "percentile_95": round(p95, 2),
                 "underexposed_percent": round(underexposed, 2),
                 "overexposed_percent": round(overexposed, 2),
@@ -500,9 +489,9 @@ class ImageCapture:
                 logger.debug(f"Applying overlay to {output_path} (mode: {mode})...")
                 result = self.overlay.apply_overlay(str(output_path), metadata_dict, mode)
                 if result:
-                    logger.debug(f"Overlay applied successfully")
+                    logger.debug("Overlay applied successfully")
                 else:
-                    logger.warning(f"Overlay application returned None/False")
+                    logger.warning("Overlay application returned None/False")
             else:
                 if not self.overlay.enabled:
                     logger.debug("Overlay is disabled")
@@ -550,19 +539,6 @@ class ImageCapture:
             json.dump(metadata, f, indent=2, default=str)
 
         return str(metadata_path)
-
-    def _save_metadata(self, image_path: Path) -> str:
-        """
-        Save capture metadata (legacy method using capture_metadata()).
-
-        Args:
-            image_path: Path to captured image
-
-        Returns:
-            Path to metadata file
-        """
-        metadata = self.picam2.capture_metadata()
-        return self._save_metadata_from_dict(image_path, metadata)
 
     def close(self):
         """Close and cleanup camera resources."""
@@ -615,6 +591,7 @@ def main():
     parser.add_argument("-o", "--output", help="Output file path (overrides config pattern)")
 
     args = parser.parse_args()
+    configure_logging(args.config)
 
     logger.info("=== Raspilapse Image Capture Started ===")
     logger.debug(f"Config file: {args.config}")
