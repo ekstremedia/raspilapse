@@ -78,9 +78,18 @@ change.
 
 **Blown-out skies.** Enable `adaptive_timelapse.highlight_protection`.
 
-**Colour shifting frame to frame.** Confirm
-`transition_mode.smooth_wb_in_day_mode` is `true`. Manual white balance in every
-mode is what keeps colour stable; AWB drift is the usual culprit.
+**Colour shifting frame to frame.** Every frame is taken with manual white
+balance, so this is not AWB running — it is the cross-fade moving. Lower
+`transition_mode.wb_transition_speed` to slow it down.
+
+**Daylight colour drifting over days, or not matching
+`day_mode.fixed_colour_gains`.** The configured gains take priority over the
+learned reference, so a value set there is what you get. If the key is absent,
+the camera learns its own white point from the test shot and it will follow the
+season. Set `fixed_colour_gains` to pin it. The recorded gains per frame are in
+the `colour_gains_r` / `colour_gains_b` database columns, and
+`scripts/db_graphs.py` plots them as `white_balance.png` — a flat line there is
+what fixed looks like.
 
 **The first frame after a restart is blown out.** The controller seeds from the
 last good database row on startup. If the database is empty or disabled, there

@@ -154,7 +154,9 @@ database column and the graphs. Nothing decides from it.
 
 White balance is manual in every condition — AWB drifting between frames is the
 main cause of colour flicker in a timelapse — and cross-fades along the ladder
-between a daylight reference the camera learns and the configured night gains.
+between a daylight white point and the configured night gains. The daylight end
+is `day_mode.fixed_colour_gains` where that is set, and otherwise a reference
+the camera learns for itself.
 Optional highlight protection lowers the brightness target when the top of the
 histogram nears clipping, so bright skies keep detail.
 

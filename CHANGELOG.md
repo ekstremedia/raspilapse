@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A one-frame colour step at every dusk, and daylight colour that drifted a
+  little each day.** Both came from AWB readings reaching the manual gains by
+  paths that stopped making sense when white balance became manual on every
+  frame.
+
+  The step: `_seed_across_mode_change` primed the controller from the AWB
+  reference shot on the day-to-transition crossing, and `seed_from_metadata`
+  assigned those gains straight to `_last_colour_gains`, bypassing the
+  `wb_transition_speed` cross-fade. So AWB's twilight guess arrived whole, in
+  one frame, and slid back over the following ten. Seven of them are visible in
+  this camera's database between 26 July and 3 August, one per dusk, each about
+  0.3 in R. The seed now carries exposure only; colour crosses the boundary the
+  way it crosses everywhere else.
+
+  The drift: `_target_colour_gains` read `day_mode.fixed_colour_gains` and then
+  unconditionally overwrote it with `_day_wb_reference`, so a configured white
+  point silently did nothing. Worse, that reference was learned in `_record`
+  from the frame's own capture metadata -- a frame taken with AWB off, whose
+  `ColourGains` are the ones the controller just chose. The reference was its
+  own input: it held wherever it was pushed and adopted each dusk's step
+  permanently. Daylight R went 2.500 -> 2.547 over nine days.
+
+  Configured gains now win, the learned reference is the fallback for a camera
+  that has not set one, and it is learned in `_take_reference_shot` from the
+  one frame actually taken with AWB on.
+
+  If you have been running the drifted values and want the rendered output to
+  match, set `fixed_colour_gains` to the gains your recent frames carry rather
+  than the config's original pair.
+
 ## [1.4.0] - 2026-07-26
 
 A cleanup pass over the whole project. Behaviour is unchanged apart from

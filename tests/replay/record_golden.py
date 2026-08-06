@@ -12,7 +12,14 @@ behaviour is better. `compare.py` is that something -- it runs both
 controllers against the same recorded light, closed-loop, and reports which
 exposes it more accurately and with less flicker.
 
-Re-recorded once so far, for the exposure ladder.
+Re-recorded twice so far. For the exposure ladder; and for the white balance
+fix, where `fixed_colour_gains` stopped being overridden by a reference the
+camera learned from its own manual frames. That second one moved
+`settings.ColourGains` on 749 of 3239 frames and no other field at all -- not
+one exposure decision changed -- and what said the new behaviour was better
+was the camera's own database rather than anything here: a one-frame colour
+step at each of seven consecutive dusks, and daylight gains creeping 2.500 to
+2.547 over nine days against a config that asked for 2.5.
 """
 
 import sys
