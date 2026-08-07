@@ -6,6 +6,7 @@ including stars and aurora activity.
 """
 
 import json
+import math
 import signal
 import sys
 import time
@@ -253,9 +254,27 @@ class AdaptiveTimelapse:
             seed_exposure = exposure_us / 1_000_000 if has_exposure else None
             seed_gains = (colour_gains_r, colour_gains_b) if has_wb else None
 
+            # The analogue_gain column holds what the sensor reported, and the
+            # loop's state is in commanded units -- the two differ by the
+            # sensor's gain floor, 1.1228 against a commanded 1.0 on this
+            # camera. The loop never notices in flight, because it is a
+            # feedback loop and the constant is absorbed; it notices here,
+            # where the number is read back as if it were a command. Measured
+            # at the restart on 2026-08-07 08:06:33: 604us -> 657us, brightness
+            # 119.9 -> 126.2, corrected one frame later.
+            #
+            # ladder.allocate only asks for gain above 1.0 once the shutter is
+            # at its ceiling, so that is exactly when the column is worth
+            # trusting. Anywhere below it the ladder commanded 1.0 whatever the
+            # sensor answered. Deriving the condition from the ceiling rather
+            # than a threshold of its own keeps this from disagreeing with the
+            # ladder if the ceiling is reconfigured.
+            at_the_ceiling = has_exposure and seed_exposure >= self.exposure.max_shutter
+            seed_gain = analogue_gain if (has_gain and at_the_ceiling) else None
+
             self.exposure.seed_from_capture(
                 exposure_time=seed_exposure,
-                analogue_gain=analogue_gain if has_gain else None,
+                analogue_gain=seed_gain,
                 colour_gains=seed_gains,
                 brightness=last_brightness,
                 lux=last_lux,
@@ -265,8 +284,10 @@ class AdaptiveTimelapse:
             parts = []
             if seed_exposure:
                 parts.append(f"exposure={seed_exposure:.4f}s")
-            if has_gain:
-                parts.append(f"gain={analogue_gain:.2f}")
+            if seed_gain:
+                parts.append(f"gain={seed_gain:.2f}")
+            elif has_gain:
+                parts.append(f"gain={analogue_gain:.2f} reported, seeded as commanded 1.0")
             if seed_gains:
                 parts.append(f"WB=[{seed_gains[0]:.2f}, {seed_gains[1]:.2f}]")
             if last_mode:
@@ -701,11 +722,21 @@ class AdaptiveTimelapse:
         The controller keeps it as the daylight white point for a camera that
         has not configured `fixed_colour_gains`, and cross-fades towards it at
         wb_transition_speed like any other target. Where the gains are
-        configured, this whole path is dead weight and `test_shot.enabled: false`
-        turns it off.
+        configured this whole path is dead weight, and the controller says so
+        itself via `learns_day_wb` -- it used to be dead weight the operator
+        had to know to switch off by hand with `test_shot.enabled: false`,
+        which nobody did, so this camera spent 68 camera teardowns a day
+        computing a number it discarded.
         """
         reference = self.config["adaptive_timelapse"]["test_shot"]
         if not reference.get("enabled", True):
+            return False
+
+        # Asked, not assumed: the controller owns the precedence between a
+        # configured white point and a learned one, so it is the only thing
+        # that can say whether a reading would be used. Where it would not,
+        # taking it costs a camera teardown and a late frame for nothing.
+        if not self.exposure.learns_day_wb:
             return False
 
         if self._reference_position is None:
@@ -751,6 +782,28 @@ class AdaptiveTimelapse:
             f"[WB] Reference at ladder {self._reference_position:.3f}: "
             f"{metadata.get('ColourGains')}"
         )
+
+    @staticmethod
+    def _next_slot(interval: float, after: float) -> float:
+        """The next capture time on the absolute grid.
+
+        Multiples of the interval since the epoch, not since this process
+        started. Three things follow from that, none of which the old
+        `sleep = interval - (now - loop_start)` gave:
+
+        - A frame that costs more than its slot no longer shifts every later
+          frame by the overrun. That arithmetic clamps at zero, so the train
+          keeps whatever phase an expensive frame left it on, permanently.
+        - A restart resumes the grid the previous process was on instead of
+          starting a new arbitrary phase.
+        - The drift stops. `elapsed` excludes the time between waking and
+          reading the clock, so the train slipped tens of milliseconds a frame.
+
+        It does *not* fix a frame that runs late inside its own slot -- the old
+        code re-anchored each iteration and recovered from those too. The white
+        balance reference shot was the source of those, and it is gone.
+        """
+        return math.floor(after / interval) * interval + interval
 
     def _decide(self) -> Decision:
         """Choose settings for the next frame."""
@@ -917,10 +970,13 @@ class AdaptiveTimelapse:
         capture = None
         last_mode = None
 
+        # Put the first frame on the grid too, so a restart does not leave one
+        # short interval behind it.
+        next_slot = self._next_slot(interval, time.time())
+        time.sleep(max(0.0, next_slot - time.time()))
+
         try:
             while self.running:
-                loop_start = time.time()
-
                 if num_frames > 0 and self.frame_count >= num_frames:
                     logger.info(f"Reached frame limit: {num_frames}")
                     break
@@ -1005,15 +1061,22 @@ class AdaptiveTimelapse:
                 except Exception as e:
                     logger.error(f"Frame capture failed: {e}", exc_info=True)
 
-                elapsed = time.time() - loop_start
-                sleep_time = max(0, interval - elapsed)
-                if sleep_time > 0:
-                    logger.debug(f"Sleeping for {sleep_time:.1f} seconds...")
-                    time.sleep(sleep_time)
-                else:
+                next_slot += interval
+                now = time.time()
+                if now >= next_slot:
+                    behind = now - next_slot
+                    skipped = int(behind // interval) + 1
+                    # Skip whole slots rather than firing a burst to catch up.
+                    # Even spacing is the entire premise of a timelapse, and
+                    # three captures 200 ms apart damage it far more than one
+                    # missing frame does.
                     logger.warning(
-                        f"Capture took longer than interval ({elapsed:.1f}s > {interval}s)"
+                        f"Capture ran {behind + interval:.1f}s against a {interval}s "
+                        f"interval; skipping {skipped} slot(s) to stay on the grid"
                     )
+                    next_slot += skipped * interval
+                logger.debug(f"Sleeping until the next slot, {next_slot - now:.1f}s")
+                time.sleep(next_slot - now)
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")

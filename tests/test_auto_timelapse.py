@@ -541,6 +541,109 @@ class TestWhiteBalanceWiring:
         )
 
 
+class TestTheCaptureGrid:
+    """Capture times land on multiples of the interval, not on the process.
+
+    The old arithmetic was `sleep = interval - (now - loop_start)`, clamped at
+    zero. That recovers from a frame that runs late *within* its slot, but an
+    iteration that overruns the whole interval sleeps zero and moves every
+    later frame by the overrun, forever -- the video plays at a constant speed
+    either side of a permanent seam.
+    """
+
+    def test_the_grid_is_absolute_not_relative_to_the_process(self):
+        """Two calls an arbitrary offset apart land on the same multiples, so a
+        restart resumes the previous process's phase instead of inventing one."""
+        assert AdaptiveTimelapse._next_slot(30, 1_000_000_003.7) == 1_000_000_020.0
+        assert AdaptiveTimelapse._next_slot(30, 1_000_000_019.9) == 1_000_000_020.0
+        assert AdaptiveTimelapse._next_slot(30, 1_000_000_020.0) == 1_000_000_050.0
+
+    def test_a_slot_boundary_advances_rather_than_returning_itself(self):
+        """Landing exactly on a boundary must give the *next* slot. Returning
+        the current one makes the loop sleep zero and spin."""
+        assert AdaptiveTimelapse._next_slot(30, 300.0) == 330.0
+
+    def test_an_overrun_costs_its_own_slots_and_no_more(self):
+        """The frame that overran is lost; the ones after it stay on the grid.
+
+        Simulated the way the loop does it: advance by one interval, and when
+        that is already in the past skip whole slots forward. Under the old
+        arithmetic the same overrun shifts the phase by 25s and never recovers.
+        """
+        interval, next_slot = 30, 300.0
+        emitted = []
+        for i, cost in enumerate([5, 5, 55, 5, 5]):  # one frame takes 55s
+            emitted.append(next_slot)
+            now = next_slot + cost
+            next_slot += interval
+            if now >= next_slot:
+                next_slot += (int((now - next_slot) // interval) + 1) * interval
+
+        assert emitted == [300.0, 330.0, 360.0, 420.0, 450.0]
+        gaps = {b - a for a, b in zip(emitted, emitted[1:])}
+        assert gaps <= {30.0, 60.0}, f"a gap off the grid: {sorted(gaps)}"
+
+
+class TestSeedingAcrossARestart:
+    """The database row is a record, not a command, and the two differ.
+
+    `analogue_gain` holds what the sensor reported. The loop's state is in
+    commanded units: ladder.allocate keeps gain at 1.0 until the shutter is at
+    its ceiling, and this sensor answers 1.1228 regardless. In flight that
+    constant is absorbed -- it is a feedback loop and nothing reads it back.
+    Here it is read back as if it were a command, and the first frame after a
+    restart is seeded 12% bright.
+
+    Measured on this camera at the restart on 2026-08-07 08:06:33, one frame
+    wide because the loop corrects it immediately:
+
+        08:06:14   604 us   brightness 119.9
+        08:06:33   657 us   brightness 126.2     <- 604 x 1.1228, on the grid
+        08:06:44   604 us   brightness 120.2
+    """
+
+    def _seeded(self, config_path, row):
+        timelapse = AdaptiveTimelapse(config_path)
+        timelapse._database = MagicMock()
+        timelapse._database.get_last_capture.return_value = row
+        timelapse._seed_from_last_capture()
+        return timelapse.exposure._required
+
+    def test_a_daylight_row_is_seeded_as_the_gain_the_ladder_commanded(self, test_config_file):
+        """604 us at a reported 1.1228 is a commanded 604 us at gain 1.0."""
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 604,
+                "analogue_gain": 1.1228070259094238,
+                "brightness_mean": 119.9,
+                "mode": LightMode.DAY,
+            },
+        )
+        assert required == pytest.approx(
+            0.000604, rel=1e-6
+        ), "seeded the sensor's gain floor as though the ladder had asked for it"
+
+    def test_a_row_at_the_ceiling_keeps_its_gain(self, test_config_file):
+        """The sibling that stops the fix being 'ignore the column'.
+
+        Past the shutter ceiling the ladder really does command gain, and it is
+        the only thing distinguishing a 20-second frame at gain 1 from one at
+        gain 6. Drop it here and every restart after dark begins six times too
+        dark.
+        """
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 20_000_000,
+                "analogue_gain": 3.1,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+            },
+        )
+        assert required == pytest.approx(62.0, rel=1e-6)
+
+
 class TestPolarAwareness:
     """Test polar day/night awareness functionality."""
 
@@ -1003,6 +1106,78 @@ class TestReferenceShotPolicy:
         timelapse._reference_position = None
         timelapse.config["adaptive_timelapse"]["test_shot"]["enabled"] = False
         assert not timelapse._wants_reference_shot()
+
+    def test_a_configured_white_point_makes_the_reading_pointless(self, test_config_file):
+        """_target_colour_gains prefers `fixed_colour_gains` and never looks at
+        the learned reference, so on those cameras the reading is taken, paid
+        for and discarded. The price is a camera teardown and a frame landing
+        three seconds late: 68 of 2879 intervals on 2026-08-06.
+
+        The operator used to have to know to set `test_shot.enabled: false`.
+        """
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None  # the always-fires case
+        assert timelapse._wants_reference_shot(), "the fixture must start from wanting one"
+
+        timelapse.exposure.config["adaptive_timelapse"]["day_mode"]["fixed_colour_gains"] = [
+            2.547,
+            1.579,
+        ]
+        assert not timelapse._wants_reference_shot()
+
+    def test_a_camera_without_a_configured_white_point_still_takes_one(self, test_config_file):
+        """The sibling that stops the test above passing with the feature
+        deleted outright. A camera with no configured white point has no other
+        source of daylight colour: the AWB frame is the only one the ISP meters
+        itself, and without it the controller falls back to a hardcoded
+        (2.5, 1.6) forever.
+        """
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None
+        assert not timelapse.exposure.config["adaptive_timelapse"]["day_mode"].get(
+            "fixed_colour_gains"
+        )
+        assert timelapse._wants_reference_shot()
+
+    def test_wanting_a_reading_tracks_whether_one_would_be_used(self, test_config_file):
+        """The property and the precedence must not drift apart.
+
+        Two controllers on the same light, one shown a reference reading and
+        one not: they may diverge only where learns_day_wb says the reading is
+        used. A third source of daylight colour added to _target_colour_gains
+        without updating the property fails here rather than silently
+        reintroducing the teardowns.
+        """
+        for fixed, should_matter in (([2.547, 1.579], False), (None, True)):
+            shown = AdaptiveTimelapse(test_config_file).exposure
+            hidden = AdaptiveTimelapse(test_config_file).exposure
+            for controller in (shown, hidden):
+                day = controller.config["adaptive_timelapse"]["day_mode"]
+                if fixed:
+                    day["fixed_colour_gains"] = fixed
+                else:
+                    day.pop("fixed_colour_gains", None)
+
+            # One frame first: update_day_wb_reference only learns in DAY, and
+            # a controller that has decided nothing yet has no mode at all.
+            for controller in (shown, hidden):
+                controller.decide()
+            assert shown.last_mode == LightMode.DAY
+
+            shown.update_day_wb_reference({"ColourGains": [2.9, 1.35]})
+            # Several frames, because the cross-fade moves 15% of the way per
+            # frame -- one frame's difference is real but small enough to read
+            # as noise.
+            for _ in range(9):
+                shown.decide()
+                hidden.decide()
+            diverged = shown.decide()["ColourGains"] != hidden.decide()["ColourGains"]
+
+            assert diverged == should_matter, (
+                f"with fixed_colour_gains={fixed!r} the reading "
+                f"{'changed' if diverged else 'did not change'} the output, but "
+                f"learns_day_wb says {shown.learns_day_wb}"
+            )
 
 
 class TestLuxFromTheCapturedFrame:

@@ -175,6 +175,15 @@ class ExposureController:
         """Where the last decision sat, 0 (bright) to 1 (dark)."""
         return self._position
 
+    @property
+    def max_shutter(self) -> float:
+        """The longest exposure this camera is allowed to take.
+
+        Exposed so callers can ask where the ladder starts trading gain without
+        re-reading the config and inventing a second answer.
+        """
+        return self._max_shutter
+
     def diagnostics(self) -> Dict:
         """Everything worth writing into a frame's metadata JSON."""
         data = dict(self._last_decision)
@@ -354,6 +363,31 @@ class ExposureController:
         if night_edge <= day_edge:
             return 0.0
         return max(0.0, min(1.0, (position - day_edge) / (night_edge - day_edge)))
+
+    @property
+    def learns_day_wb(self) -> bool:
+        """Whether a white-balance reference reading would change anything.
+
+        False where `fixed_colour_gains` is configured, because
+        _target_colour_gains prefers it and never consults the learned
+        reference. This lives here, next to that precedence, rather than in the
+        capture loop: two copies of the rule is how the configured value came
+        to be silently overridden once already.
+
+        The loop asks because the reading is expensive in a way that shows up
+        in the finished video. Taking it means tearing the running camera down
+        and opening a second one -- libcamera will not hold two -- and it
+        happens between the top of the loop and the capture, so that frame's
+        timestamp lands about three seconds late and the next one reverts.
+        Measured on 2026-08-06: 68 of the day's 2879 intervals off by two
+        seconds or more from 30, hourly on the dot from
+        REFERENCE_MAX_INTERVAL_FRAMES plus a cluster either side of midnight
+        from REFERENCE_LADDER_STEP. That is a 10% wobble in playback speed
+        roughly once a second of finished video, and on a camera with a
+        configured white point it buys a number that is then discarded.
+        """
+        adaptive = self.config.get("adaptive_timelapse", {})
+        return not adaptive.get("day_mode", {}).get("fixed_colour_gains")
 
     def _target_colour_gains(self, position: float) -> Tuple[float, float]:
         """Cross-fade between the daylight white point and the configured night gains.
