@@ -1,0 +1,32 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Network Watchdog
+Documentation=https://github.com/ekstremedia/raspilapse
+# Deliberately no After=network-online.target: this unit exists to run when the
+# network is *not* online, and ordering it after that target would keep it from
+# starting in exactly the situation it is for.
+
+[Service]
+Type=oneshot
+# Runs as root: it calls nmcli, systemctl restart and, as a last resort, reboot.
+User=root
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=/bin/bash @PROJECT_DIR@/scripts/check_network.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raspilapse-netwatch
+
+# A wedged nmcli would otherwise leave this oneshot in 'activating' forever,
+# and a timer will not re-trigger a unit that never finished -- so the recovery
+# mechanism would die silently, precisely when the network is broken.
+TimeoutStartSec=180
+
+# Escalation state and the shared reboot stamp must outlive a reboot for the
+# counter and the rate limit to mean anything.
+StateDirectory=raspilapse
+Environment="RASPILAPSE_NETWORK_STATE=/var/lib/raspilapse/network_state"
+Environment="RASPILAPSE_LAST_REBOOT=/var/lib/raspilapse/last_reboot"
+Environment="RASPILAPSE_PROJECT_DIR=@PROJECT_DIR@"
+
+# No [Install] section: triggered by raspilapse-netwatch.timer. Without one the
+# service cannot be enabled, which is what install.sh's contract assumes.

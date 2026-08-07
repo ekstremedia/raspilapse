@@ -21,7 +21,15 @@ import yaml
 from raspilapse.config import load_config as _load_config
 from raspilapse.console import Colors, print_info, print_section, print_subsection
 from raspilapse.logging_setup import configure_logging, get_logger
-from raspilapse.video.keogram import create_keogram, create_slitscan
+from raspilapse.video.keogram import create_time_slices
+
+# Encoders that take a bitrate rather than a CRF, and that the Pi's V4L2 stack
+# cannot drive above 1080p. Named once so the two places that care -- the
+# resolution guard and the bitrate branch -- cannot disagree.
+HARDWARE_CODECS = ("h264_v4l2m2m", "h264_omx")
+
+# The Pi 4's hardware H.264 encoder limit.
+HARDWARE_MAX_RESOLUTION = (1920, 1080)
 
 
 def load_config(config_path: str = "config/config.yml") -> dict:
@@ -127,9 +135,9 @@ def create_video(
     fps: int = 25,
     codec: str = "libx264",
     pixel_format: str = "yuv420p",
-    crf: int = 23,
-    preset: str = "ultrafast",
-    threads: int = 2,
+    crf: int = 20,
+    preset: str = "veryfast",
+    threads: int = 3,
     bitrate: str = "10M",
     resolution: Tuple[int, int] = None,
     deflicker: bool = True,
@@ -157,6 +165,27 @@ def create_video(
     # Validate deflicker_size
     if deflicker and deflicker_size < 1:
         raise ValueError(f"deflicker_size must be positive, got {deflicker_size}")
+
+    # The Pi's V4L2 encoder tops out at 1080p. Above that ffmpeg gets as far as
+    # "can't configure encoder" and exits, which -- since nothing sets a
+    # resolution by default -- means simply setting codec.name to h264_v4l2m2m
+    # silently converts the 05:00 job into a nightly failure. Verified on this
+    # hardware: it fails at both 3840x2160 and 2560x1440, succeeds at 1920x1080.
+    if codec in HARDWARE_CODECS:
+        max_w, max_h = HARDWARE_MAX_RESOLUTION
+        if resolution is None or resolution[0] > max_w or resolution[1] > max_h:
+            requested = (
+                "source resolution" if resolution is None else f"{resolution[0]}x{resolution[1]}"
+            )
+            msg = (
+                f"{codec} cannot encode above {max_w}x{max_h}; requested {requested}. "
+                f"Pass --hd to scale to {max_w}x{max_h}, or set "
+                f"video.codec.name: libx264 to keep the source resolution."
+            )
+            print(Colors.error(f"✗ {msg}"))
+            if logger:
+                logger.error(msg)
+            return False
 
     if not image_list:
         msg = "No images to process"
@@ -197,7 +226,7 @@ def create_video(
         ]
 
         # Hardware encoders (h264_v4l2m2m, h264_omx) use bitrate, software (libx264) uses CRF
-        if codec in ["h264_v4l2m2m", "h264_omx"]:
+        if codec in HARDWARE_CODECS:
             cmd.extend(["-b:v", bitrate])
         else:
             # libx264: use preset and threads to control memory usage
@@ -231,7 +260,7 @@ def create_video(
         print_subsection("🎬 Generating Video")
         print_info("Images", f"{Colors.bold(str(len(image_list)))} frames")
         print_info("Frame rate", f"{Colors.bold(str(fps))} fps")
-        if codec in ["h264_v4l2m2m", "h264_omx"]:
+        if codec in HARDWARE_CODECS:
             print_info("Codec", f"{Colors.bold(codec)} (bitrate {bitrate})")
         else:
             print_info(
@@ -388,7 +417,11 @@ Examples:
         "-hw",
         "--hw",
         action="store_true",
-        help="Use hardware H264 encoder (h264_v4l2m2m) instead of libx264",
+        help=(
+            "Use hardware H264 encoder (h264_v4l2m2m) instead of libx264. "
+            "Requires --hd: the Pi's encoder cannot exceed 1920x1080, and "
+            "without it the output stays at the source resolution."
+        ),
     )
 
     args = parser.parse_args()
@@ -524,9 +557,14 @@ Examples:
     fps = args.fps if args.fps else config["video"]["fps"]
     codec = config["video"]["codec"]["name"]
     pixel_format = config["video"]["codec"]["pixel_format"]
-    crf = config["video"]["codec"].get("crf", 23)
-    preset = config["video"]["codec"].get("preset", "ultrafast")
-    threads = config["video"]["codec"].get("threads", 2)
+    # Fallbacks for a config that predates these keys. They were ultrafast/23/2,
+    # chosen when 4K encoding was OOMing; measured on this camera's frames the
+    # new values peak at 1021 MB against the 1399 MB the fast/25/2 config
+    # actually running in production reaches, so this is not a relaxation of
+    # that fix -- it uses less memory than the thing it replaces.
+    crf = config["video"]["codec"].get("crf", 20)
+    preset = config["video"]["codec"].get("preset", "veryfast")
+    threads = config["video"]["codec"].get("threads", 3)
     bitrate = config["video"]["codec"].get("bitrate", "10M")
     deflicker = config["video"].get("deflicker", True)
     deflicker_size = config["video"].get("deflicker_size", 10)
@@ -548,7 +586,7 @@ Examples:
     resolution = (1920, 1080) if args.hd else None
 
     # Build video settings string
-    if codec in ["h264_v4l2m2m", "h264_omx"]:
+    if codec in HARDWARE_CODECS:
         video_settings_str = f"{Colors.bold(str(fps))} fps, {codec} (HW), bitrate {bitrate}"
     else:
         video_settings_str = f"{Colors.bold(str(fps))} fps, {codec}, CRF {crf}"
@@ -643,12 +681,16 @@ Examples:
             logger=logger,
         )
 
-    # Create keogram (unless --no-keogram)
+    # Keogram and slitscan are both a vertical strip taken from every frame;
+    # only which strip and where it lands differs. Generating them separately
+    # decoded the whole day twice. Measured on 300 real 4K frames from this
+    # camera: 60.7s for two passes against 27.6s for one, with both outputs
+    # byte-identical (sha256) to what the split version produced.
     keogram_success = True
-    if not args.no_keogram:
-        print_subsection("🌅 Generating Keogram")
-        logger.info("Starting keogram generation")
+    slitscan_success = True
 
+    keogram_file = None
+    if not args.no_keogram:
         # Generate keogram filename (same as video but with keogram_ prefix and .jpg)
         if args.keogram_only and args.output:
             # Ensure .jpg extension for keogram
@@ -662,43 +704,43 @@ Examples:
                 keogram_filename = f"keogram_{output_file.stem}.jpg"
             keogram_file = video_path / keogram_filename
 
-        keogram_success = create_keogram(
-            images,
-            keogram_file,
-            quality=95,
-            crop_top_percent=7.0,  # Crop overlay bar (2 lines + padding)
-            logger=logger,
-        )
-
-        if keogram_success:
-            logger.info(f"Keogram created: {keogram_file}")
-        else:
-            logger.warning("Keogram generation failed")
-
-    # Create slitscan (if --slitscan)
-    slitscan_success = True
+    slitscan_file = None
     if args.slitscan:
-        print_subsection("🎞️ Generating Slitscan")
-        logger.info("Starting slitscan generation")
-
         # Generate slitscan filename (similar to keogram naming)
         slitscan_filename = output_file.stem.replace("_daily_", "_slitscan_") + ".jpg"
         if "_daily_" not in output_file.stem:
             slitscan_filename = f"slitscan_{output_file.stem}.jpg"
         slitscan_file = video_path / slitscan_filename
 
-        slitscan_success = create_slitscan(
+    if keogram_file or slitscan_file:
+        wanted = [
+            name for name, path in (("Keogram", keogram_file), ("Slitscan", slitscan_file)) if path
+        ]
+        print_subsection(f"\U0001f305 Generating {' and '.join(wanted)}")
+        logger.info(f"Starting {' and '.join(w.lower() for w in wanted)} generation")
+
+        slices = create_time_slices(
             images,
-            slitscan_file,
+            keogram_path=keogram_file,
+            slitscan_path=slitscan_file,
             quality=95,
             crop_top_percent=7.0,  # Crop overlay bar (2 lines + padding)
             logger=logger,
         )
 
-        if slitscan_success:
-            logger.info(f"Slitscan created: {slitscan_file}")
-        else:
-            logger.warning("Slitscan generation failed")
+        if keogram_file:
+            keogram_success = slices.get("keogram", False)
+            if keogram_success:
+                logger.info(f"Keogram created: {keogram_file}")
+            else:
+                logger.warning("Keogram generation failed")
+
+        if slitscan_file:
+            slitscan_success = slices.get("slitscan", False)
+            if slitscan_success:
+                logger.info(f"Slitscan created: {slitscan_file}")
+            else:
+                logger.warning("Slitscan generation failed")
 
     # Report final status
     if args.keogram_only:

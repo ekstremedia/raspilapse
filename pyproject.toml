@@ -76,6 +76,7 @@ raspilapse-daily = "raspilapse.cli.daily:main"
 raspilapse-overlay = "raspilapse.cli.apply_overlay:main"
 raspilapse-db = "raspilapse.cli.db:main"
 raspilapse-retry-uploads = "raspilapse.cli.retry_uploads:main"
+raspilapse-prune-videos = "raspilapse.cli.prune_videos:main"
 
 [tool.setuptools.packages.find]
 include = ["raspilapse*"]

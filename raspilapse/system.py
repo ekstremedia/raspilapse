@@ -145,6 +145,95 @@ class SystemMonitor:
             logger.warning(f"Could not read uptime: {e}")
             return None
 
+    def get_process_rss(self, statm_path: str = "/proc/self/statm") -> Optional[float]:
+        """
+        Get the resident set size of the current process.
+
+        Field 2 of /proc/self/statm is the resident set in pages. One read and
+        a split: psutil is not a dependency of this project, and this runs in
+        the capture loop every thirty seconds where get_cpu_temperature already
+        costs a fork.
+
+        Returns:
+            RSS in MB, or None if unavailable
+        """
+        try:
+            with open(statm_path, "r") as f:
+                resident_pages = int(f.read().split()[1])
+            return resident_pages * os.sysconf("SC_PAGE_SIZE") / (1024**2)
+        except Exception as e:
+            logger.warning(f"Could not read process RSS: {e}")
+            return None
+
+    def get_network_state(
+        self,
+        iface: Optional[str] = None,
+        route_path: str = "/proc/net/route",
+        wireless_path: str = "/proc/net/wireless",
+        sysfs_net: str = "/sys/class/net",
+    ) -> Dict[str, Any]:
+        """
+        Get whether the machine has a default route, and the wifi signal.
+
+        'up' means a default route exists on an interface the kernel reports as
+        up. It deliberately does NOT mean the internet is reachable: this runs
+        inside the capture loop and must never block on a socket or a DNS
+        lookup. Distinguishing "route exists" from "route works" is the
+        network watchdog's job, not the capture loop's.
+
+        Args:
+            iface: Interface to read the signal for. Defaults to whichever
+                interface carries the default route.
+            route_path: Override for testing.
+            wireless_path: Override for testing.
+            sysfs_net: Override for testing.
+
+        Returns:
+            Dict with 'up' (bool or None) and 'signal_dbm' (float or None)
+        """
+        state: Dict[str, Any] = {"up": None, "signal_dbm": None}
+
+        route_iface = None
+        try:
+            best_metric = None
+            with open(route_path, "r") as f:
+                next(f, None)  # header
+                for line in f:
+                    fields = line.split()
+                    # Destination 00000000 is the default route. Docker's
+                    # bridge route is 000011AC, so it filters out here rather
+                    # than needing to be named.
+                    if len(fields) < 7 or fields[1] != "00000000":
+                        continue
+                    metric = int(fields[6])
+                    if best_metric is None or metric < best_metric:
+                        best_metric, route_iface = metric, fields[0]
+
+            if route_iface is None:
+                state["up"] = False
+            else:
+                with open(f"{sysfs_net}/{route_iface}/operstate", "r") as f:
+                    state["up"] = f.read().strip() == "up"
+        except Exception as e:
+            logger.warning(f"Could not read network state: {e}")
+
+        target = iface or route_iface
+        if target:
+            try:
+                with open(wireless_path, "r") as f:
+                    for line in f:
+                        name, _, rest = line.partition(":")
+                        if name.strip() != target:
+                            continue
+                        # status link level noise -- level is the third value,
+                        # written with a trailing period ("-65.").
+                        state["signal_dbm"] = float(rest.split()[2].rstrip("."))
+                        break
+            except Exception as e:
+                logger.debug(f"Could not read wireless signal for {target}: {e}")
+
+        return state
+
     def get_all_metrics(self, disk_path: str = "/") -> Dict[str, Any]:
         """
         Get all system metrics at once.
@@ -161,6 +250,8 @@ class SystemMonitor:
             "memory": self.get_memory_usage(),
             "load": self.get_cpu_load(),
             "uptime": self.get_uptime(),
+            "process_rss": self.get_process_rss(),
+            "network": self.get_network_state(),
         }
 
         logger.debug(f"System metrics collected: {metrics}")

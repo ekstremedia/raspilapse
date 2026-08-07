@@ -893,9 +893,73 @@ class TestSchemaSingleSource:
             }
             version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
 
-        assert version == 5
+        # Not a hardcoded 5: opening a legacy file runs every migration, so
+        # pinning the number here breaks on the next bump for a reason that
+        # has nothing to do with what this test is about, which is that the
+        # indexes are gone.
+        assert version == CaptureDatabase.SCHEMA_VERSION
         assert "idx_captures_lux" not in names
         assert "idx_captures_mode" not in names
+
+    def test_migration_6_adds_the_telemetry_columns_to_an_existing_database(self, tmp_path):
+        path = tmp_path / "legacy_v5.db"
+        # A v5 database, built from the DDL as it stood before the new columns
+        # were added to it -- otherwise CAPTURES_DDL would create them and the
+        # ALTERs would never be exercised.
+        ddl = CAPTURES_DDL
+        for column in (
+            "system_mem_used_mb INTEGER",
+            "system_mem_percent REAL",
+            "system_disk_free_gb REAL",
+            "system_disk_percent REAL",
+            "system_uptime_s INTEGER",
+            "process_rss_mb INTEGER",
+            "network_up INTEGER",
+            "network_signal_dbm INTEGER",
+        ):
+            ddl = ddl.replace(f"        {column},\n", "")
+        assert "network_up" not in ddl
+
+        with sqlite3.connect(path) as conn:
+            conn.execute(ddl)
+            conn.execute(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT)"
+            )
+            conn.execute("INSERT INTO schema_version (version) VALUES (5)")
+            conn.execute(
+                "INSERT INTO captures (timestamp, unix_timestamp, camera_id, image_path,"
+                " system_cpu_temp) VALUES ('2026-08-06T00:00:00', 1786000000.0, 'cam',"
+                " '/old.jpg', 44.5)"
+            )
+            conn.commit()
+
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(path)},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(captures)")}
+            version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+            preserved = conn.execute(
+                "SELECT system_cpu_temp, network_up FROM captures WHERE image_path='/old.jpg'"
+            ).fetchone()
+
+        assert version == 6
+        assert {
+            "system_mem_used_mb",
+            "system_mem_percent",
+            "system_disk_free_gb",
+            "system_disk_percent",
+            "system_uptime_s",
+            "process_rss_mb",
+            "network_up",
+            "network_signal_dbm",
+        } <= columns
+        # The rows that were already there keep their data and get NULL, not 0,
+        # for the columns nobody could have measured at the time.
+        assert tuple(preserved) == (44.5, None)
 
     def test_upload_service_creates_the_v4_index(self, tmp_path):
         # UploadService used to carry its own DDL that predated migration v4,
@@ -913,3 +977,30 @@ class TestSchemaSingleSource:
 
         assert "idx_upload_queue_status_retry" in names
         assert version == CaptureDatabase.SCHEMA_VERSION
+
+
+class TestAsInt:
+    """_as_int's contract is that bad input becomes NULL, never an exception.
+
+    An exception here escapes into store_capture's handler, which drops the
+    whole capture row -- losing that frame's exposure and brightness history
+    over one bad telemetry reading.
+    """
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (12.4, 12),
+            (12.6, 13),
+            (0, 0),
+            (None, None),
+            (float("nan"), None),
+            (float("inf"), None),
+            (float("-inf"), None),
+            ("not a number", None),
+        ],
+    )
+    def test_bad_input_becomes_none_rather_than_raising(self, value, expected):
+        from raspilapse.storage.database import _as_int
+
+        assert _as_int(value) == expected or (expected is None and _as_int(value) is None)

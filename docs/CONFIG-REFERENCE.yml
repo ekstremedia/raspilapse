@@ -131,19 +131,28 @@ video:
     # Pixel format (yuv420p for maximum compatibility)
     pixel_format: "yuv420p"
 
-    # Preset for libx264 (affects speed vs quality vs memory)
-    # ultrafast = fastest, lowest memory, acceptable quality
-    # fast = good balance (recommended)
-    # slow = best quality, highest memory (may OOM on 4K)
-    preset: "fast"
+    # Preset for libx264 (speed vs bits needed for a given quality)
+    # A preset does not set quality -- crf does. A faster preset reaches the
+    # same crf with a bigger file, which on a Pi encoding 4K is the trade you
+    # want: at 3840x2160 the cost is dominated by decode, scale and deflicker
+    # rather than by bitrate, so a slower preset buys very little.
+    # Measured on 60 real 4K frames from this camera:
+    #   fast     crf 25 -> 25.2 Mbit/s, 75 s   (the old setting)
+    #   veryfast crf 20 -> 43.8 Mbit/s, 35 s   SSIM 0.9902 vs 0.9856
+    # i.e. faster AND closer to the source. Disk is what pays, and with
+    # video.retention_days set that is bounded.
+    preset: "veryfast"
 
     # Thread count (lower = less memory, slower encoding)
-    # 2 = safe for Pi with 4GB RAM doing 4K
-    threads: 2
+    # 3 on a 4-core Pi leaves a core for the capture loop; 4 measured no faster
+    # here because the job is decode-bound.
+    threads: 3
 
     # Constant Rate Factor (0-51, lower = better quality)
-    # 18 = visually lossless, 23 = good quality, 25 = good balance, 28 = acceptable
-    crf: 25
+    # 18 = visually lossless, 20 = keeps 4K detail, 23 = good, 28 = acceptable
+    # At 4K, crf 25 quantises away the fine texture 4K exists to carry: the
+    # frame is still 3840x2160 but foliage, water and distant edges flatten.
+    crf: 20
 
   # Frame rate (frames per second)
   # 25 fps = smooth European standard
@@ -156,6 +165,20 @@ video:
   deflicker: true
   # Number of frames to average for deflicker (higher = smoother but may blur fast changes)
   deflicker_size: 10
+
+  # Delete generated videos, keograms and slitscans older than this many days.
+  # 0 keeps everything forever, which is what happened before this key existed:
+  # cleanup_old_images.sh expires the source JPEGs, and nothing expired what is
+  # made from them, so the video directory grew without bound.
+  #
+  # A file is never deleted while the upload queue still holds a row for it in
+  # any state other than 'success' -- including 'failed', because a video that
+  # nobody managed to upload exists nowhere else. Those are logged as retained
+  # rather than silently skipped. Files the queue has never heard of are not
+  # protected, which is how ad-hoc partial-day renders get cleaned up.
+  #
+  # At 4K/crf 20 a day is roughly 500 MB, so 7 days is ~3.4 GB.
+  retention_days: 7
 
   # Default time range for timelapse generation (used when no --start/--end provided)
   # Format: HH:MM

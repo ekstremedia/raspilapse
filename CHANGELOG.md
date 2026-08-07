@@ -8,6 +8,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Cameras that "froze" every week or two were losing their network, not
+  hanging.** Diagnosed on a Pi that had run 9.3 days: capture never missed a
+  frame — exactly 2880 a day, one gap over 60 seconds in ten days, CPU
+  temperature flat at 42-46°C and load flat at 0.34-0.38 throughout, no OOM
+  anywhere. The daily ffmpeg job, the obvious suspect, succeeded every single
+  day and finished two hours before the reboot.
+
+  What actually happened: the access point dropped at 23:31, both BSSIDs timed
+  out within 23 seconds, and NetworkManager read the timeout as a wrong
+  password — `need-auth` → `no secrets: No agents were available` → `failed
+  (reason 'no-secrets')`. That sets an autoconnect *blocked reason* on the
+  profile rather than a retry counter, so `connection.autoconnect-retries=-1`,
+  which was already set, could not clear it. wlan0 sat `inactive` for 8h35m
+  until a human power-cycled the Pi. The only symptoms were the upload and the
+  live image going quiet, which is indistinguishable from a hang unless you
+  look at the card.
+
+  `scripts/check_network.sh` now recovers it, opt-in via
+  `./scripts/install.sh --with-netwatch`. Two checks of grace, then `nmcli dev
+  connect` (the step that clears the block), the priority profile explicitly, a
+  radio cycle, a NetworkManager restart, and only then a reboot — gated on 30
+  minutes of continuous failure, the SSID having been seen on the air, and 6
+  hours since the last watchdog reboot, so an access point that is switched off
+  can never trigger one. `docs/TROUBLESHOOTING.md` gained "The camera looks
+  frozen but is still capturing".
+
+- **The capture watchdog was spamming the journal it would need later.**
+  `find | sort -rn | head -1` left `sort` writing into a closed pipe every run;
+  invisible interactively, but systemd sets `IgnoreSIGPIPE=yes`, so under the
+  service it printed two error lines every five minutes into a journal already
+  at its 200 MB cap. Diagnosing the outage above, `journalctl --list-boots`
+  only reached back two days of a nine-day run. Now one `awk` pass.
+
+- **`video.codec.name: h264_v4l2m2m` silently converted the 05:00 job into a
+  nightly failure.** The Pi's V4L2 encoder stops at 1080p and nothing sets an
+  output resolution by default, so it reached ffmpeg and died with "can't
+  configure encoder". Refused up front with an actionable message instead.
+
+### Added
+- **Memory, disk, uptime, process RSS and network state in `captures`**
+  (schema v6). `SystemMonitor` had collected memory and disk every 30 seconds
+  since it was written; `store_capture` bound the CPU temperature and three
+  load averages and dropped the rest. Ruling out a memory leak during the
+  outage above meant arguing from temperature and load alone. `system_uptime_s`
+  makes every reboot visible in the capture timeline itself, and
+  `network_signal_dbm` is the one that would have predicted the drop rather
+  than merely recording it. Migrating this camera's real 549,288-row database
+  took 111 ms.
+
+- **`video.retention_days`, defaulting to 7.** `cleanup_old_images.sh` has
+  expired source frames for a long time; nothing ever expired the videos made
+  from them, so a bounded input fed an unbounded output — 3.2 GB from twelve
+  days here. Runs as a third step of the existing nightly cleanup timer. Never
+  deletes a file the upload queue still holds in any state other than
+  `success`, including `failed`, because that video exists nowhere else.
+
+- **A shared reboot floor between the two watchdogs.** Both can reboot the
+  machine and a Pi with wedged wifi looks stalled to the other one, so
+  `/var/lib/raspilapse/last_reboot` now stops them cycling. Written with
+  `sync`, because ext4's commit window will otherwise lose it across the very
+  reboot it bounds.
+
+### Changed
+- **The daily video is both faster and closer to the source**: preset `fast` →
+  `veryfast`, crf 25 → 20, threads 2 → 3, still native 4K. Measured on 60 real
+  frames: 25.2 → 43.8 Mbit/s, 75s → 35s, SSIM 0.985634 → 0.990225. A preset
+  does not set quality, crf does, and at 4K the encode is dominated by decode
+  and filtering rather than bitrate — so the old settings were paying for a
+  slower preset and spending the savings nowhere. crf 25 at 4K quantises away
+  the fine texture 4K exists to carry. Peak memory *fell*, 1399 MB → 1021 MB.
+
+- **The keogram and slitscan share one decode pass.** Both are a vertical strip
+  from every frame; they were built by two separate full passes over the day's
+  4K images, 314s + 271s. `create_time_slices` does one, 2.20x faster on 300
+  real frames, with both outputs sha256-identical to what the split version
+  produced. `create_keogram` and `create_slitscan` remain as wrappers.
+
+- `CPUWeight=20` on the daily video unit, since `Nice` alone does not hold back
+  a multi-threaded encode. `MemoryHigh`/`MemoryMax` are set too, but note that
+  Raspberry Pi OS ships the memory cgroup controller disabled — they need
+  `cgroup_enable=memory cgroup_memory=1` in `cmdline.txt` to do anything.
+
+- A `flock` on `data/daily.lock` so a manual `raspilapse-daily` cannot run two
+  ffmpegs alongside the timer's. Contention exits 0, not 1: a duplicate
+  invocation is not a failure.
+
 - **A one-frame colour step at every dusk, and daylight colour that drifted a
   little each day.** Both came from AWB readings reaching the manual gains by
   paths that stopped making sense when white balance became manual on every

@@ -10,6 +10,8 @@ Designed to be run via cron at 5 AM daily.
 """
 
 import argparse
+import errno
+import fcntl
 import os
 import subprocess
 import sys
@@ -139,6 +141,33 @@ Examples:
     # log directory -- resolve against the working directory, so this has to
     # run from the project root wherever the timer invoked it from.
     os.chdir(PROJECT_ROOT)
+
+    # systemd already stops the unit overlapping itself -- `systemctl start`
+    # during a run joins the existing job rather than starting a second
+    # ExecStart. What it cannot see is someone running `python -m
+    # raspilapse.cli.daily` in a shell while the 05:00 timer is mid-encode,
+    # which is two ffmpegs, ~2.8 GB resident and a starved capture loop.
+    #
+    # The lock is held for all of main(), upload included, and released when
+    # the process exits however it exits.
+    lock_path = PROJECT_ROOT / "data" / "daily.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = open(lock_path, "w")  # noqa: SIM115 -- must outlive this scope
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        # Contention is EACCES or EAGAIN depending on the platform; anything
+        # else (ENOLCK on a filesystem without lock support, EIO) means we do
+        # not know whether another run holds it. Reporting those as success
+        # would skip the day's video while systemd showed green.
+        if e.errno not in (errno.EACCES, errno.EAGAIN):
+            print(f"Error: could not acquire {lock_path}: {e}")
+            return 1
+        print("Another daily video run is already in progress; leaving it to finish.")
+        # Deliberately 0, not 1. A second invocation is not a failure, and
+        # exiting non-zero would drop the unit into 'failed' -- which is
+        # exactly the misleading signal this whole change set is about.
+        return 0
 
     # Load configuration
     try:

@@ -321,3 +321,98 @@ class TestIntegration:
 
         uptime_str = SystemMonitor.format_uptime(metrics["uptime"])
         assert uptime_str is not None
+
+
+class TestProcessRss:
+    """RSS of the capture process itself, for spotting a leak from stored data."""
+
+    def test_it_agrees_with_vmrss(self, monitor, tmp_path):
+        statm = tmp_path / "statm"
+        # size resident shared text lib data dt -- resident is field 2.
+        statm.write_text("100000 2560 1000 100 0 5000 0\n")
+        import os
+
+        expected = 2560 * os.sysconf("SC_PAGE_SIZE") / (1024**2)
+        assert monitor.get_process_rss(str(statm)) == pytest.approx(expected)
+
+    def test_a_missing_file_is_not_fatal(self, monitor, tmp_path):
+        assert monitor.get_process_rss(str(tmp_path / "nope")) is None
+
+
+class TestNetworkState:
+    """Whether a default route exists, and how strong the wifi is.
+
+    Deliberately not "is the internet reachable" -- this runs in the capture
+    loop every thirty seconds and must never block on a socket.
+    """
+
+    ROUTE_HEADER = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n"
+
+    def _route(self, tmp_path, body):
+        p = tmp_path / "route"
+        p.write_text(self.ROUTE_HEADER + body)
+        return str(p)
+
+    def _wireless(self, tmp_path, body):
+        p = tmp_path / "wireless"
+        p.write_text("Inter-| sta-|   Quality\n face | tus | link level noise\n" + body)
+        return str(p)
+
+    def test_a_default_route_on_an_up_interface_is_up(self, monitor, tmp_path):
+        (tmp_path / "wlan0").mkdir()
+        (tmp_path / "wlan0" / "operstate").write_text("up\n")
+        state = monitor.get_network_state(
+            route_path=self._route(
+                tmp_path, "wlan0\t00000000\t0100A8C0\t0003\t0\t0\t600\t00000000\n"
+            ),
+            wireless_path=self._wireless(tmp_path, " wlan0: 0000   45.  -65.  -256\n"),
+            sysfs_net=str(tmp_path),
+        )
+        assert state == {"up": True, "signal_dbm": -65.0}
+
+    def test_only_a_docker_bridge_route_is_not_a_default_route(self, monitor, tmp_path):
+        # docker0's route is 000011AC, not 00000000, so it must not count as
+        # the box having a way out.
+        state = monitor.get_network_state(
+            route_path=self._route(
+                tmp_path, "docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\n"
+            ),
+            wireless_path=self._wireless(tmp_path, ""),
+            sysfs_net=str(tmp_path),
+        )
+        assert state["up"] is False
+
+    def test_a_route_on_a_down_interface_is_not_up(self, monitor, tmp_path):
+        (tmp_path / "wlan0").mkdir()
+        (tmp_path / "wlan0" / "operstate").write_text("down\n")
+        state = monitor.get_network_state(
+            route_path=self._route(
+                tmp_path, "wlan0\t00000000\t0100A8C0\t0003\t0\t0\t600\t00000000\n"
+            ),
+            wireless_path=self._wireless(tmp_path, ""),
+            sysfs_net=str(tmp_path),
+        )
+        assert state["up"] is False
+
+    def test_the_lowest_metric_route_wins(self, monitor, tmp_path):
+        (tmp_path / "eth0").mkdir()
+        (tmp_path / "eth0" / "operstate").write_text("up\n")
+        state = monitor.get_network_state(
+            route_path=self._route(
+                tmp_path,
+                "wlan0\t00000000\t0100A8C0\t0003\t0\t0\t600\t00000000\n"
+                "eth0\t00000000\t0100A8C0\t0003\t0\t0\t100\t00000000\n",
+            ),
+            wireless_path=self._wireless(tmp_path, " wlan0: 0000   45.  -65.  -256\n"),
+            sysfs_net=str(tmp_path),
+        )
+        # Signal comes from the routed interface, and ethernet has none.
+        assert state == {"up": True, "signal_dbm": None}
+
+    def test_unreadable_proc_files_give_none_not_an_exception(self, monitor, tmp_path):
+        state = monitor.get_network_state(
+            route_path=str(tmp_path / "nope"),
+            wireless_path=str(tmp_path / "nope"),
+            sysfs_net=str(tmp_path),
+        )
+        assert state == {"up": None, "signal_dbm": None}

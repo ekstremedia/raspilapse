@@ -12,6 +12,7 @@ Tests the daily timelapse runner including:
 
 import importlib.util
 import shutil
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -705,3 +706,68 @@ class TestCompleteWorkflow:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestConcurrencyLock:
+    """Two daily runs at once means two ffmpegs, ~2.8 GB resident and a starved
+    capture loop. systemd stops the unit overlapping itself; it cannot see a
+    human running the module in a shell during the timer's run.
+    """
+
+    def test_a_second_run_backs_off_without_failing(self, tmp_path, monkeypatch):
+        import fcntl
+
+        import raspilapse.video.daily as daily
+
+        monkeypatch.setattr(daily, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "data").mkdir()
+
+        # Hold the lock the way a run in progress would.
+        held = open(tmp_path / "data" / "daily.lock", "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        monkeypatch.setattr(sys, "argv", ["raspilapse-daily"])
+        try:
+            rc = daily.main()
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
+            held.close()
+
+        # 0, not 1: a duplicate invocation is not a failure, and exiting
+        # non-zero would drop the unit into 'failed' -- a misleading signal.
+        assert rc == 0
+
+    def test_the_lock_is_free_when_nothing_is_running(self, tmp_path, monkeypatch):
+        import fcntl
+
+        import raspilapse.video.daily as daily
+
+        monkeypatch.setattr(daily, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "data").mkdir()
+        lock_path = tmp_path / "data" / "daily.lock"
+        lock_path.touch()
+
+        f = open(lock_path, "w")
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # must not raise
+        fcntl.flock(f, fcntl.LOCK_UN)
+        f.close()
+
+    def test_a_real_lock_error_is_a_failure_not_a_duplicate(self, tmp_path, monkeypatch):
+        """Contention is EACCES/EAGAIN. Anything else -- ENOLCK on a filesystem
+        without lock support, EIO -- means we do not know whether another run
+        holds it, and reporting that as success would skip the day's video
+        while systemd showed green."""
+        import errno as errno_mod
+        import fcntl
+
+        import raspilapse.video.daily as daily
+
+        monkeypatch.setattr(daily, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "data").mkdir()
+
+        def no_locks(*args, **kwargs):
+            raise OSError(errno_mod.ENOLCK, "No locks available")
+
+        monkeypatch.setattr(fcntl, "flock", no_locks)
+        monkeypatch.setattr(sys, "argv", ["raspilapse-daily"])
+        assert daily.main() == 1
