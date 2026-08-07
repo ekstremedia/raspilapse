@@ -12,6 +12,7 @@ a wifi outage into a reboot loop.
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,8 @@ def state_of(env):
 
 
 class TestHealthy:
+    """A working link must cost nothing: no nmcli, no state file, no output."""
+
     def test_a_working_link_does_nothing_at_all(self, env):
         env |= {"STUB_ROUTE": ROUTE_OK, "STUB_PING": "0"}
         proc, calls = run(env)
@@ -158,6 +161,8 @@ class TestEscalation:
 
 
 class TestRebootGate:
+    """Three independent gates, because the failure mode is a reboot loop."""
+
     def _offline(self, env):
         env |= {"STUB_ROUTE": "", "STUB_PING": "1"}
         return env
@@ -203,6 +208,8 @@ class TestRebootGate:
 
 
 class TestSafety:
+    """The ways this script could strand a headless camera."""
+
     def test_a_disabled_radio_is_re_enabled_before_anything_else(self, env):
         """`nmcli radio wifi off` is persisted by NM and survives reboots, so a
         run killed mid-cycle would otherwise strand a headless camera."""
@@ -240,3 +247,23 @@ class TestSafety:
         env |= {"STUB_ROUTE": "", "STUB_PING": "1", "STUB_SCAN_FAILS": "1"}
         run(env, state=f"1 {int(time.time()) - 7200} 0")
         assert state_of(env).endswith(" 1")
+
+
+class TestCorruptStamp:
+    """A malformed stamp must not disable recovery in either direction."""
+
+    def test_a_corrupt_reboot_stamp_does_not_block_forever(self, env):
+        """Partly-numeric junk makes bash arithmetic fail outright rather than
+        evaluate low, so the gate would return 1 and block every reboot for
+        good. check_service.sh guards the same way."""
+        env |= {"STUB_ROUTE": "", "STUB_PING": "1"}
+        Path(env["RASPILAPSE_LAST_REBOOT"]).write_text("1abc")
+        _, calls = run(env, state=f"9 {int(time.time()) - 7200} 1")
+        assert "systemctl reboot" in calls
+
+    def test_the_stamp_directory_is_created_if_missing(self, env, tmp_path):
+        env |= {"STUB_ROUTE": "", "STUB_PING": "1"}
+        env["RASPILAPSE_LAST_REBOOT"] = str(tmp_path / "nonexistent" / "last_reboot")
+        _, calls = run(env, state=f"9 {int(time.time()) - 7200} 1")
+        assert "systemctl reboot" in calls
+        assert Path(env["RASPILAPSE_LAST_REBOOT"]).exists()

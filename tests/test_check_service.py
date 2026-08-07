@@ -77,6 +77,8 @@ def run(env, state=None):
 
 
 class TestStallDetection:
+    """The one thing this watchdog looks at: the age of the newest frame."""
+
     def test_a_recent_frame_is_left_alone(self, env):
         frame(env, 30)
         _, calls = run(env)
@@ -96,6 +98,8 @@ class TestStallDetection:
 
 
 class TestRebootGate:
+    """The floor shared with check_network.sh, so the two cannot ping-pong."""
+
     def test_it_reboots_once_the_restarts_have_not_helped(self, env):
         frame(env, 1200)
         _, calls = run(env, state="2")
@@ -125,6 +129,8 @@ class TestRebootGate:
 
 
 class TestNoSpam:
+    """It runs every five minutes into a journal already at its size cap."""
+
     def test_the_healthy_path_is_silent(self, env):
         """It runs every five minutes into a journal at its size cap. The
         `find | sort | head` it used to do emitted two SIGPIPE lines a run."""

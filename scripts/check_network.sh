@@ -177,6 +177,10 @@ reboot_is_allowed() {
     }
     if [ -f "$REBOOT_STAMP" ]; then
         stamp=$(cat "$REBOOT_STAMP" 2>/dev/null || echo 0)
+        # Partly-numeric junk like "1abc" makes the arithmetic below fail
+        # outright rather than evaluate low, so the gate would return 1 and
+        # block every reboot forever. check_service.sh guards this the same way.
+        [[ "$stamp" =~ ^[0-9]+$ ]] || stamp=0
         [ $((now - stamp)) -ge "$MIN_REBOOT_INTERVAL" ] || {
             log "  not rebooting: last watchdog reboot was $(((now - stamp) / 60))m ago"
             return 1
@@ -191,6 +195,7 @@ do_reboot() {
         log "DRY RUN: would reboot"
         return 0
     fi
+    mkdir -p "$(dirname "$REBOOT_STAMP")"
     date +%s >"$REBOOT_STAMP"
     # Without the sync, ext4's commit window can lose the stamp across the very
     # reboot it exists to rate-limit, and the floor silently stops existing.

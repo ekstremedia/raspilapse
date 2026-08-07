@@ -145,7 +145,10 @@ def _as_int(value: Optional[float]) -> Optional[int]:
         return None
     try:
         return int(round(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError is round(inf). Without it the exception escapes into
+        # store_capture's handler, which drops the entire capture row -- losing
+        # the exposure and brightness history over one bad telemetry reading.
         return None
 
 

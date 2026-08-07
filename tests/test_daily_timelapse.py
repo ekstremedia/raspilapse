@@ -751,3 +751,23 @@ class TestConcurrencyLock:
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # must not raise
         fcntl.flock(f, fcntl.LOCK_UN)
         f.close()
+
+    def test_a_real_lock_error_is_a_failure_not_a_duplicate(self, tmp_path, monkeypatch):
+        """Contention is EACCES/EAGAIN. Anything else -- ENOLCK on a filesystem
+        without lock support, EIO -- means we do not know whether another run
+        holds it, and reporting that as success would skip the day's video
+        while systemd showed green."""
+        import errno as errno_mod
+        import fcntl
+
+        import raspilapse.video.daily as daily
+
+        monkeypatch.setattr(daily, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "data").mkdir()
+
+        def no_locks(*args, **kwargs):
+            raise OSError(errno_mod.ENOLCK, "No locks available")
+
+        monkeypatch.setattr(fcntl, "flock", no_locks)
+        monkeypatch.setattr(sys, "argv", ["raspilapse-daily"])
+        assert daily.main() == 1

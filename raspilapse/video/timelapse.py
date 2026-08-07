@@ -179,7 +179,8 @@ def create_video(
             )
             msg = (
                 f"{codec} cannot encode above {max_w}x{max_h}; requested {requested}. "
-                f"Set video.codec.name to libx264, or scale the output down."
+                f"Pass --hd to scale to {max_w}x{max_h}, or set "
+                f"video.codec.name: libx264 to keep the source resolution."
             )
             print(Colors.error(f"✗ {msg}"))
             if logger:
@@ -259,7 +260,7 @@ def create_video(
         print_subsection("🎬 Generating Video")
         print_info("Images", f"{Colors.bold(str(len(image_list)))} frames")
         print_info("Frame rate", f"{Colors.bold(str(fps))} fps")
-        if codec in ["h264_v4l2m2m", "h264_omx"]:
+        if codec in HARDWARE_CODECS:
             print_info("Codec", f"{Colors.bold(codec)} (bitrate {bitrate})")
         else:
             print_info(
@@ -416,7 +417,11 @@ Examples:
         "-hw",
         "--hw",
         action="store_true",
-        help="Use hardware H264 encoder (h264_v4l2m2m) instead of libx264",
+        help=(
+            "Use hardware H264 encoder (h264_v4l2m2m) instead of libx264. "
+            "Requires --hd: the Pi's encoder cannot exceed 1920x1080, and "
+            "without it the output stays at the source resolution."
+        ),
     )
 
     args = parser.parse_args()
@@ -581,7 +586,7 @@ Examples:
     resolution = (1920, 1080) if args.hd else None
 
     # Build video settings string
-    if codec in ["h264_v4l2m2m", "h264_omx"]:
+    if codec in HARDWARE_CODECS:
         video_settings_str = f"{Colors.bold(str(fps))} fps, {codec} (HW), bitrate {bitrate}"
     else:
         video_settings_str = f"{Colors.bold(str(fps))} fps, {codec}, CRF {crf}"

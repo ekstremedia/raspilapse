@@ -131,6 +131,8 @@ class TestResizeRules:
 
 
 class TestUnreadableFrames:
+    """A bad frame costs its own column, never the frames after it."""
+
     def test_a_bad_frame_leaves_a_gap_instead_of_shifting_the_rest(self, tmp_path):
         """The slitscan advances its x position on failure too. Without that,
         every frame after a bad one slides one strip left and the image no
@@ -171,8 +173,54 @@ class TestUnreadableFrames:
 
 
 class TestCropping:
+    """Removing the burnt-in overlay bar from the top of every strip."""
+
     def test_the_overlay_bar_is_cropped_off_the_top(self, tmp_path, frames):
         k = tmp_path / "k.jpg"
         create_time_slices(frames, keogram_path=k, crop_top_percent=10.0)
         with Image.open(k) as img:
             assert img.height == 20 - int(20 * 10 / 100)
+
+
+class TestDegenerateInputs:
+    """Inputs that produce an empty or impossible canvas."""
+
+    def test_every_frame_failing_reports_failure_rather_than_a_black_image(self, tmp_path):
+        """Image.open only reads the header, so a truncated JPEG gets past the
+        first-frame dimension read and fails later inside crop(). If they all
+        fail the canvases stay blank, and saving them would report success and
+        feed a black image into the upload queue."""
+        # Every frame truncated to 70%: enough for Image.open to read the
+        # header (so the first-frame dimension read succeeds and we reach the
+        # loop) and not enough for crop() to decode. Writing garbage instead
+        # would fail the dimension read and exercise a different path entirely
+        # -- which is what an earlier version of this test did, letting it pass
+        # with the guard removed.
+        paths = []
+        for i in range(4):
+            p = frame(tmp_path / f"f{i}.jpg", 40, 20, seed=i * 30)
+            data = p.read_bytes()
+            p.write_bytes(data[: int(len(data) * 0.7)])
+            paths.append(p)
+
+        result = create_time_slices(
+            paths,
+            keogram_path=tmp_path / "k.jpg",
+            slitscan_path=tmp_path / "s.jpg",
+            crop_top_percent=0.0,
+        )
+        assert result == {"keogram": False, "slitscan": False}
+        assert not (tmp_path / "k.jpg").exists()
+        assert not (tmp_path / "s.jpg").exists()
+
+    def test_cropping_everything_away_fails_instead_of_raising(self, tmp_path, frames):
+        # Reachable from the CLI's crop flags. Image.new would raise outside the
+        # per-frame handler and take the run down with a traceback.
+        result = create_time_slices(
+            frames,
+            keogram_path=tmp_path / "k.jpg",
+            crop_top_percent=60.0,
+            crop_bottom_percent=60.0,
+        )
+        assert result == {"keogram": False}
+        assert not (tmp_path / "k.jpg").exists()

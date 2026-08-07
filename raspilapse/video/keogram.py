@@ -184,6 +184,19 @@ def create_time_slices(
         if crop_top_px > 0 or crop_bottom_px > 0:
             logger.info(f"Cropping: top={crop_top_px}px, bottom={crop_bottom_px}px")
 
+    if target_height <= 0:
+        # Reachable from the CLI's crop flags: the two percentages summing to
+        # 100 or more leaves nothing. Image.new would raise here, outside the
+        # per-frame handler, and take the whole run down with a traceback.
+        msg = (
+            f"Cropping leaves no image: {crop_top_percent}% top + "
+            f"{crop_bottom_percent}% bottom of {original_height}px"
+        )
+        print(Colors.error(f"✗ {msg}"))
+        if logger:
+            logger.error(msg)
+        return results
+
     keogram = Image.new("RGB", (num_images, target_height)) if want_keogram else None
     slitscan = Image.new("RGB", (original_width, target_height)) if want_slitscan else None
 
@@ -271,6 +284,17 @@ def create_time_slices(
         if (i + 1) % max(1, num_images // 10) == 0:
             pct = (i + 1) * 100 // num_images
             print(f"  {Colors.CYAN}→{Colors.END} Progress: {pct}% ({i + 1}/{num_images})")
+
+    if processed == 0:
+        # Image.open only reads the header, so a truncated JPEG gets past the
+        # first-frame dimension read and fails later inside crop(). If every
+        # frame fails that way both canvases are still blank, and saving them
+        # would report success and feed a black image into the upload queue.
+        msg = f"No frames could be processed ({skipped} skipped)"
+        print(Colors.error(f"✗ {msg}"))
+        if logger:
+            logger.error(msg)
+        return results
 
     if want_keogram:
         results["keogram"] = _save_slice(

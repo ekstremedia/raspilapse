@@ -10,6 +10,7 @@ Designed to be run via cron at 5 AM daily.
 """
 
 import argparse
+import errno
 import fcntl
 import os
 import subprocess
@@ -154,7 +155,14 @@ Examples:
     lock_file = open(lock_path, "w")  # noqa: SIM115 -- must outlive this scope
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    except OSError as e:
+        # Contention is EACCES or EAGAIN depending on the platform; anything
+        # else (ENOLCK on a filesystem without lock support, EIO) means we do
+        # not know whether another run holds it. Reporting those as success
+        # would skip the day's video while systemd showed green.
+        if e.errno not in (errno.EACCES, errno.EAGAIN):
+            print(f"Error: could not acquire {lock_path}: {e}")
+            return 1
         print("Another daily video run is already in progress; leaving it to finish.")
         # Deliberately 0, not 1. A second invocation is not a failure, and
         # exiting non-zero would drop the unit into 'failed' -- which is

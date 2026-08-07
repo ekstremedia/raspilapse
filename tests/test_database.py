@@ -977,3 +977,30 @@ class TestSchemaSingleSource:
 
         assert "idx_upload_queue_status_retry" in names
         assert version == CaptureDatabase.SCHEMA_VERSION
+
+
+class TestAsInt:
+    """_as_int's contract is that bad input becomes NULL, never an exception.
+
+    An exception here escapes into store_capture's handler, which drops the
+    whole capture row -- losing that frame's exposure and brightness history
+    over one bad telemetry reading.
+    """
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (12.4, 12),
+            (12.6, 13),
+            (0, 0),
+            (None, None),
+            (float("nan"), None),
+            (float("inf"), None),
+            (float("-inf"), None),
+            ("not a number", None),
+        ],
+    )
+    def test_bad_input_becomes_none_rather_than_raising(self, value, expected):
+        from raspilapse.storage.database import _as_int
+
+        assert _as_int(value) == expected or (expected is None and _as_int(value) is None)

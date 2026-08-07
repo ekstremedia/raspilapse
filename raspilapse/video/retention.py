@@ -9,6 +9,7 @@ This lives in Python rather than in the bash cleanup script for one reason: the
 safety rule needs the upload queue, and the queue is SQLite.
 """
 
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -62,7 +63,13 @@ def _protected_paths(db_path: Path) -> Dict[str, str]:
     for video, keogram, slitscan, status, video_date in rows:
         for path in (video, keogram, slitscan):
             if path:
-                protected[str(Path(path).absolute())] = f"{status} upload for {video_date}"
+                # resolve(), not absolute(): absolute() only prepends the cwd,
+                # leaving '..' segments and symlinks in place. The queue path
+                # and the path found by rglob only have to differ textually --
+                # one going through a symlinked directory is enough -- for the
+                # lookup below to miss and delete a video that is still waiting
+                # to upload. /var/www/html is a symlink on some installs.
+                protected[str(Path(path).resolve())] = f"{status} upload for {video_date}"
     return protected
 
 
@@ -85,20 +92,37 @@ def prune_videos(
     if retention_days is None:
         retention_days = video_cfg.get("retention_days", 0)
 
-    result: Dict[str, object] = {"deleted": [], "bytes": 0, "kept_protected": []}
+    # "skipped" carries why nothing happened. Without it every early return
+    # prints the same "Deleted 0 file(s)" and an operator cannot tell a clean
+    # no-op from a run that bailed out of its own safety check.
+    result: Dict[str, object] = {"deleted": [], "bytes": 0, "kept_protected": [], "skipped": None}
 
     if not retention_days:
         logger.debug("[Retention] video.retention_days is 0, nothing to do")
+        result["skipped"] = "retention disabled"
+        return result
+
+    if retention_days < 0:
+        # A negative window puts the cutoff in the future, so every file in the
+        # directory is older than it -- including this morning's render. One
+        # mistyped `--retention-days -7` would take the lot.
+        logger.error(
+            f"[Retention] Refusing to run with retention_days={retention_days}: "
+            "a negative window would delete every file"
+        )
+        result["skipped"] = f"invalid retention_days={retention_days}"
         return result
 
     directory = Path(video_cfg.get("directory", "videos"))
     if not directory.is_dir():
         logger.warning(f"[Retention] Video directory does not exist: {directory}")
+        result["skipped"] = f"no video directory at {directory}"
         return result
 
     try:
         protected = _protected_paths(Path((config.get("database", {}) or {}).get("path", "")))
     except sqlite3.Error:
+        result["skipped"] = "upload queue unreadable"
         return result
 
     cutoff = (datetime.now() - timedelta(days=retention_days)).timestamp()
@@ -113,7 +137,7 @@ def prune_videos(
             if path.stat().st_mtime >= cutoff:
                 continue
 
-            key = str(path.absolute())
+            key = str(path.resolve())
             if key in protected:
                 logger.warning(f"[Retention] Keeping {path.name}: {protected[key]}")
                 result["kept_protected"].append(key)
@@ -177,13 +201,18 @@ def main() -> int:
 
     # Relative paths in the config resolve against the project root, wherever
     # the timer invoked this from.
-    import os
-
     os.chdir(PROJECT_ROOT)
 
     result = prune_videos(
         load_config(args.config), retention_days=args.retention_days, dry_run=args.dry_run
     )
+    if result["skipped"]:
+        # Not a silent zero: "upload queue unreadable" in particular means the
+        # safety check never ran, which is a different thing from there being
+        # nothing to delete.
+        print(f"Skipped: {result['skipped']}")
+        return 0
+
     deleted = result["deleted"]
     print(
         f"{'Would delete' if args.dry_run else 'Deleted'} {len(deleted)} file(s), "

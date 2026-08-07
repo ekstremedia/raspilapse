@@ -300,7 +300,7 @@ This is not hypothetical. On 6 August 2026 this camera's access point dropped at
 23:31, both BSSIDs timed out within 23 seconds, and NetworkManager read the
 timeout as a wrong password:
 
-```
+```text
 NetworkManager: Activation: (wifi) disconnected during association, asking for new key
 NetworkManager: state change: need-auth -> failed (reason 'no-secrets')
 ```
@@ -330,7 +330,7 @@ is genuinely switched off never triggers one, however long it stays off.
 Watch it decide without letting it act:
 
 ```bash
-sudo RASPILAPSE_NETWORK_STATE=/tmp/netstate bash scripts/check_network.sh --dry-run
+sudo env RASPILAPSE_NETWORK_STATE=/tmp/netstate bash scripts/check_network.sh --dry-run
 ```
 
 ---
