@@ -383,9 +383,46 @@ the default route is on anything other than `wlan0`.
 Both watchdogs share one reboot floor (`/var/lib/raspilapse/last_reboot`, 6 hours) so they
 cannot ping-pong.
 
-If the Pi has a blind `0 4 */2 * * sudo reboot` cron, decide what it is still for. With
-both watchdogs installed it is redundant. With only the capture watchdog it remains the
-only thing that recovers a wedged network or kernel.
+### Revisiting a blind reboot cron
+
+Old cameras tend to carry a `sudo reboot` cron from before any of this existed. Once the
+capture watchdog is in, that cron is doing much less than it used to — the watchdog handles
+a stalled camera in about 15 minutes rather than whenever the cron next comes round. Don't
+guess at the interval though; the capture table can answer it.
+
+```bash
+python3 - <<'PY'
+import sqlite3, datetime
+from collections import Counter
+c = sqlite3.connect('data/timelapse.db')
+ts = [r[0] for r in c.execute("select unix_timestamp from captures where unix_timestamp is not null order by unix_timestamp")]
+gaps = [(ts[i-1], ts[i]-ts[i-1]) for i in range(1, len(ts)) if ts[i]-ts[i-1] > 75]
+print(f"{len(gaps)} missed-frame events over {(ts[-1]-ts[0])/86400:.0f} days")
+for h, n in sorted(Counter(datetime.datetime.fromtimestamp(t).hour for t, _ in gaps).items()):
+    print(f"  {h:02d}:00  {n}")
+PY
+```
+
+If the gaps pile up in the hour the cron fires, the reboot is the main thing interrupting
+the camera. On spjutvikacam: 20 events in 209 days, **14 of them the 04:00 reboot itself**
+(11 at 03:00 and 3 at 04:00 — the reboot straddles the hour), leaving about three
+unexplained glitches in seven months once the upgrade's own outage is discounted. Capture had run 93, 72 and 42 days
+straight without an outage over five minutes, and process RSS sat flat at 89 MB — nothing
+was creeping. It went from two days to weekly on that basis.
+
+Two caveats before dropping it entirely. A blind reboot cannot fix a hard wedge anyway —
+cron does not run either — so it was never insurance against the worst case; spjutvikacam
+had a 56-hour outage in February that the two-day cycle sailed straight through. And with
+netwatch unavailable on a dhcpcd Pi, a periodic reboot is the only thing left covering a
+wedged network. Weekly is a reasonable place to land.
+
+Use day-of-week for the new schedule, not `*/N` on day-of-month: `0 4 */7 * *` fires on the
+1st, 8th, 15th, 22nd and 29th and then gaps three days at month end. `0 4 * * 1` is Monday
+04:00, every week, evenly. Keep it clear of the 02:00 cleanup and the 05:00 daily video.
+
+Note that schema v6 records `system_uptime_s`, `process_rss_mb` and `system_mem_percent`
+with every frame, which older installs never captured. After a few weeks of that you can
+settle the leak question properly instead of rebooting on superstition.
 
 ---
 
