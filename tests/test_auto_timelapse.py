@@ -627,6 +627,77 @@ class TestSlotRecovery:
             assert slept and slept[0] > 0
 
 
+class TestTheLoopIsWiredToTheGrid:
+    """The scheduling helpers are unit-tested above; this is the wiring.
+
+    `_next_slot` and `_sleep_until_next_slot` can both be perfect while the
+    loop drops the returned value on the floor, calls the wrong one, or misses
+    a path entirely -- which is exactly how the camera-init branch came to skip
+    the schedule. These run one bounded iteration with the camera mocked and
+    assert the call actually happens.
+    """
+
+    @staticmethod
+    def _run_one(config_file, init_side_effect=None, max_iterations=6):
+        timelapse = AdaptiveTimelapse(config_file)
+        timelapse._database = None
+        timelapse._record = MagicMock()
+        timelapse._read_capture_metadata = MagicMock(return_value=None)
+
+        # test_mode stops the loop via `frame_count >= num_frames`, and
+        # frame_count is incremented inside capture_frame -- so a mock that
+        # only returns a path leaves the loop spinning forever.
+        def capture(*args, **kwargs):
+            timelapse.frame_count += 1
+            return ("frame.jpg", None)
+
+        timelapse.capture_frame = MagicMock(side_effect=capture)
+
+        # A hard stop independent of the loop's own exit condition, so a future
+        # change to that condition fails this test instead of hanging the suite.
+        calls = []
+
+        def advance_stub(current_slot, interval):
+            calls.append(current_slot)
+            if len(calls) >= max_iterations:
+                timelapse.running = False
+            return 999.0
+
+        with (
+            patch("raspilapse.daemon.ImageCapture") as camera,
+            patch("raspilapse.daemon.time.sleep") as sleep,
+            patch.object(
+                AdaptiveTimelapse, "_sleep_until_next_slot", side_effect=advance_stub
+            ) as advance,
+        ):
+            if init_side_effect:
+                camera.return_value.initialize_camera.side_effect = init_side_effect
+            timelapse.run(test_mode=True)
+
+        assert len(calls) < max_iterations, "the loop did not stop on its own"
+        return advance, sleep
+
+    def test_a_normal_frame_ends_on_the_grid(self, test_config_file):
+        advance, sleep = self._run_one(test_config_file)
+        assert advance.called, "the loop finished an iteration without rescheduling"
+        assert sleep.called, "the first frame was not aligned to a slot before starting"
+
+    def test_a_failed_camera_init_also_ends_on_the_grid(self, test_config_file):
+        """The branch that used to `continue` past the scheduling entirely.
+
+        libcamera refusing a camera that is still closing is ordinary here --
+        the camera is opened and closed once per frame -- so an off-grid retry
+        was not a rare path.
+        """
+        advance, _ = self._run_one(
+            test_config_file, init_side_effect=[RuntimeError("device busy"), None]
+        )
+        assert advance.call_count >= 2, (
+            f"init failed once and the loop rescheduled {advance.call_count} time(s); "
+            f"the failure path skipped the grid"
+        )
+
+
 class TestSeedingAcrossARestart:
     """The database row is a record, not a command, and the two differ.
 
