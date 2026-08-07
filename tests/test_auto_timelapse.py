@@ -474,6 +474,25 @@ class TestWhiteBalanceWiring:
             {"ColourGains": [2.2, 1.7]}
         )
 
+    def test_a_reading_the_controller_rejects_does_not_end_the_timelapse(self, test_config_file):
+        """Learning the reference moved into the capture loop, whose only
+        handler is the one that ends the run. A malformed reading should cost
+        the frame's colour and a line in the log, not the timelapse."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.exposure.update_day_wb_reference = MagicMock(
+            side_effect=ValueError("malformed ColourGains")
+        )
+        timelapse.take_test_shot = MagicMock(return_value=("shot.jpg", {"ColourGains": [2.2]}))
+        timelapse.frame_count = 40
+
+        timelapse._take_reference_shot()
+
+        # Recorded anyway, for the same reason the outer handler records it: a
+        # reading that fails every time must not leave _wants_reference_shot
+        # true and tear the camera down once per frame, forever.
+        assert timelapse._reference_frame == 40
+        assert timelapse._reference_position == timelapse.exposure.ladder_position
+
     def test_the_handover_cannot_inject_awb_gains(self, test_config_file):
         """seed_from_metadata assigns state directly, bypassing the wb_speed
         cross-fade. Handing it the AWB reference shot is what produced the
