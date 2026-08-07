@@ -23,6 +23,14 @@ from raspilapse.console import Colors, print_info, print_section, print_subsecti
 from raspilapse.logging_setup import configure_logging, get_logger
 from raspilapse.video.keogram import create_keogram, create_slitscan
 
+# Encoders that take a bitrate rather than a CRF, and that the Pi's V4L2 stack
+# cannot drive above 1080p. Named once so the two places that care -- the
+# resolution guard and the bitrate branch -- cannot disagree.
+HARDWARE_CODECS = ("h264_v4l2m2m", "h264_omx")
+
+# The Pi 4's hardware H.264 encoder limit.
+HARDWARE_MAX_RESOLUTION = (1920, 1080)
+
 
 def load_config(config_path: str = "config/config.yml") -> dict:
     """Load configuration from YAML file."""
@@ -158,6 +166,26 @@ def create_video(
     if deflicker and deflicker_size < 1:
         raise ValueError(f"deflicker_size must be positive, got {deflicker_size}")
 
+    # The Pi's V4L2 encoder tops out at 1080p. Above that ffmpeg gets as far as
+    # "can't configure encoder" and exits, which -- since nothing sets a
+    # resolution by default -- means simply setting codec.name to h264_v4l2m2m
+    # silently converts the 05:00 job into a nightly failure. Verified on this
+    # hardware: it fails at both 3840x2160 and 2560x1440, succeeds at 1920x1080.
+    if codec in HARDWARE_CODECS:
+        max_w, max_h = HARDWARE_MAX_RESOLUTION
+        if resolution is None or resolution[0] > max_w or resolution[1] > max_h:
+            requested = (
+                "source resolution" if resolution is None else f"{resolution[0]}x{resolution[1]}"
+            )
+            msg = (
+                f"{codec} cannot encode above {max_w}x{max_h}; requested {requested}. "
+                f"Set video.codec.name to libx264, or scale the output down."
+            )
+            print(Colors.error(f"✗ {msg}"))
+            if logger:
+                logger.error(msg)
+            return False
+
     if not image_list:
         msg = "No images to process"
         print(Colors.error(f"✗ {msg}"))
@@ -197,7 +225,7 @@ def create_video(
         ]
 
         # Hardware encoders (h264_v4l2m2m, h264_omx) use bitrate, software (libx264) uses CRF
-        if codec in ["h264_v4l2m2m", "h264_omx"]:
+        if codec in HARDWARE_CODECS:
             cmd.extend(["-b:v", bitrate])
         else:
             # libx264: use preset and threads to control memory usage

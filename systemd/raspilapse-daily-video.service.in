@@ -23,6 +23,34 @@ TimeoutStartSec=infinity
 # ...but never at the expense of the capture loop, which runs every 30s.
 Nice=10
 IOSchedulingClass=idle
+IOSchedulingPriority=7
+# Nice alone does not hold back a multi-threaded encode: three x264 threads at
+# nice 10 still crowd out one capture process. CPUWeight is the cgroup-level
+# version of the same intent, and costs nothing while the machine is otherwise
+# idle at 05:00.
+CPUWeight=20
+
+# A backstop, not a fix for anything observed -- measured peak is ~1.4 GB at
+# 4K and nothing here has ever come near OOM. It is here so that a future
+# change (someone setting preset: slow, a filter wedging) degrades slowly
+# instead of taking the capture loop down with it. MemoryHigh throttles and
+# reclaims; MemoryMax is the kill line, well above the real peak.
+#
+# NOTE: Raspberry Pi OS ships with the memory cgroup controller disabled, so on
+# a stock Pi these two are accepted by systemd and then silently do nothing --
+# `cat /proc/cgroups` shows no memory row and `systemctl show -p MemoryMax`
+# reports infinity. To actually arm them, append to /boot/firmware/cmdline.txt
+# (one line, no newlines) and reboot:
+#
+#     cgroup_enable=memory cgroup_memory=1
+#
+# They are left here regardless: they are correct, they cost nothing when
+# inert, and they take effect the moment the controller is enabled. CPUWeight
+# above needs only the cpu controller, which IS enabled by default, so the
+# protection that matters day to day is already live.
+MemoryAccounting=yes
+MemoryHigh=1800M
+MemoryMax=2400M
 
 # No [Install] section on purpose. This service is triggered by
 # raspilapse-daily-video.timer; without [Install] it cannot be enabled at all,

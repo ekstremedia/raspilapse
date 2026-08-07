@@ -334,6 +334,10 @@ class TestCreateVideoCodecHandling:
             preset="ultrafast",
             threads=2,
             bitrate="10M",
+            # The Pi's V4L2 encoder cannot go above this, so a hardware-codec
+            # call without a resolution is rejected before ffmpeg is reached.
+            # Asking for the bitrate branch means asking for a size it can do.
+            resolution=(1920, 1080),
         )
 
         assert mock_run.called
@@ -365,6 +369,10 @@ class TestCreateVideoCodecHandling:
             preset="ultrafast",
             threads=2,
             bitrate="15M",
+            # The Pi's V4L2 encoder cannot go above this, so a hardware-codec
+            # call without a resolution is rejected before ffmpeg is reached.
+            # Asking for the bitrate branch means asking for a size it can do.
+            resolution=(1920, 1080),
         )
 
         assert mock_run.called
@@ -375,6 +383,44 @@ class TestCreateVideoCodecHandling:
         assert "15M" in cmd
         # Should NOT have CRF for hardware encoder
         assert "-crf" not in cmd
+
+    @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_a_hardware_codec_at_source_resolution_is_refused(
+        self, mock_run, temp_images, temp_output
+    ):
+        """The Pi's V4L2 encoder stops at 1080p, and nothing sets a resolution
+        by default -- so setting video.codec.name to h264_v4l2m2m used to turn
+        the 05:00 job into a nightly 'can't configure encoder' failure."""
+        from raspilapse.video.timelapse import create_video
+
+        result = create_video(
+            temp_images, temp_output, codec="h264_v4l2m2m", bitrate="10M", resolution=None
+        )
+
+        assert result is False
+        assert not mock_run.called, "ffmpeg should not be reached"
+
+    @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_a_hardware_codec_above_1080p_is_refused(self, mock_run, temp_images, temp_output):
+        from raspilapse.video.timelapse import create_video
+
+        # Verified on this hardware: 1440p fails the same way 4K does.
+        assert (
+            create_video(temp_images, temp_output, codec="h264_v4l2m2m", resolution=(2560, 1440))
+            is False
+        )
+        assert not mock_run.called
+
+    @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_libx264_is_not_subject_to_the_hardware_limit(self, mock_run, temp_images, temp_output):
+        from raspilapse.video.timelapse import create_video
+
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(temp_images, temp_output, codec="libx264", resolution=None)
+
+        assert mock_run.called
 
     def test_create_video_empty_list(self, temp_output):
         """Test create_video with empty image list."""
