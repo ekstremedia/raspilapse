@@ -17,9 +17,16 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=raspilapse-watchdog
 
+# A find over a wedged filesystem would otherwise leave this oneshot in
+# 'activating' forever, and a timer will not re-trigger a unit that never
+# finished -- so the watchdog would stop watching, silently.
+TimeoutStartSec=180
+
 # Escalation state must outlive a reboot for the counter to mean anything.
 StateDirectory=raspilapse
 Environment="RASPILAPSE_WATCHDOG_STATE=/var/lib/raspilapse/watchdog_state"
+# Shared with raspilapse-netwatch so the two cannot reboot each other in a loop.
+Environment="RASPILAPSE_LAST_REBOOT=/var/lib/raspilapse/last_reboot"
 Environment="RASPILAPSE_PROJECT_DIR=@PROJECT_DIR@"
 
 # No [Install] section: triggered by raspilapse-watchdog.timer. Without one the

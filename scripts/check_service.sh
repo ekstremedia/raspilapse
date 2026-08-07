@@ -20,11 +20,16 @@ set -uo pipefail
 PROJECT_DIR="${RASPILAPSE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 STATE_FILE="${RASPILAPSE_WATCHDOG_STATE:-/var/lib/raspilapse/watchdog_state}"
 CONFIG_FILE="${RASPILAPSE_CONFIG:-$PROJECT_DIR/config/config.yml}"
+# Shared with check_network.sh. Two watchdogs that can each reboot the machine
+# need one floor between them, or a camera that is both stalled and offline
+# gets rebooted by whichever notices first, repeatedly.
+REBOOT_STAMP="${RASPILAPSE_LAST_REBOOT:-/var/lib/raspilapse/last_reboot}"
 
 SERVICE_NAME="raspilapse.service"
 LOG_TAG="raspilapse-watchdog"
 MAX_RESTART_ATTEMPTS=2
 STALL_THRESHOLD_SECONDS=600 # 10 minutes without a capture means stalled
+MIN_REBOOT_INTERVAL=21600   # 6h floor between watchdog reboots
 
 log() { logger -t "$LOG_TAG" -- "$@"; echo "$*"; }
 
@@ -91,7 +96,21 @@ main() {
     log "WARNING: no captures in $((age / 60)) minutes (previous restarts: $count)"
 
     if [ "$count" -ge "$MAX_RESTART_ATTEMPTS" ]; then
+        local now stamp
+        now=$(date +%s)
+        if [ -f "$REBOOT_STAMP" ]; then
+            stamp=$(cat "$REBOOT_STAMP" 2>/dev/null || echo 0)
+            [[ "$stamp" =~ ^[0-9]+$ ]] || stamp=0
+            if [ $((now - stamp)) -lt "$MIN_REBOOT_INTERVAL" ]; then
+                log "WARNING: restarts did not help, but a watchdog reboot was $(((now - stamp) / 60))m ago; waiting"
+                exit 0
+            fi
+        fi
         log "CRITICAL: $count restarts did not help, rebooting"
+        echo "$now" >"$REBOOT_STAMP"
+        # Without the sync, ext4's commit window can lose the stamp across the
+        # very reboot it exists to rate-limit.
+        sync
         reset_state
         systemctl reboot
     else
