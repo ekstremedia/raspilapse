@@ -368,11 +368,25 @@ class ExposureController:
     def learns_day_wb(self) -> bool:
         """Whether a white-balance reference reading would change anything.
 
+        Two ways it would not, and both cost the same to get wrong.
+
         False where `fixed_colour_gains` is configured, because
         _target_colour_gains prefers it and never consults the learned
         reference. This lives here, next to that precedence, rather than in the
         capture loop: two copies of the rule is how the configured value came
         to be silently overridden once already.
+
+        False away from the bright end, because update_day_wb_reference drops
+        every reading taken outside LightMode.DAY -- AWB has nothing to meter
+        in the dark. That guard used to be the only thing enforcing it, on the
+        far side of the teardown, so a camera without configured gains paid the
+        full price of the reading and then threw it away. Dusk is the worst
+        case: the ladder crosses most of its range, REFERENCE_LADDER_STEP fires
+        a couple of dozen times, and every one of those is discarded.
+
+        The mode is the *last* decided one -- the loop asks this before
+        decide() -- which is what makes it a policy rather than a guarantee.
+        The guard in update_day_wb_reference stays either way.
 
         The loop asks because the reading is expensive in a way that shows up
         in the finished video. Taking it means tearing the running camera down
@@ -387,7 +401,13 @@ class ExposureController:
         configured white point it buys a number that is then discarded.
         """
         adaptive = self.config.get("adaptive_timelapse", {})
-        return not adaptive.get("day_mode", {}).get("fixed_colour_gains")
+        if adaptive.get("day_mode", {}).get("fixed_colour_gains"):
+            return False
+        # None on the very first frame, before anything has been decided. That
+        # counts as worth reading: it is the cold start, where the controller
+        # has no daylight white point at all and would otherwise sit on the
+        # hardcoded (2.5, 1.6) until the light happens to reach day.
+        return self._mode in (None, LightMode.DAY)
 
     def _target_colour_gains(self, position: float) -> Tuple[float, float]:
         """Cross-fade between the daylight white point and the configured night gains.

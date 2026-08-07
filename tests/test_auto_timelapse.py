@@ -584,6 +584,49 @@ class TestTheCaptureGrid:
         assert gaps <= {30.0, 60.0}, f"a gap off the grid: {sorted(gaps)}"
 
 
+class TestSlotRecovery:
+    """Every path that ends an iteration goes back onto the grid, including the
+    one that failed to open the camera.
+
+    That path used to `continue` straight past the scheduling, so a retry fired
+    the instant it succeeded rather than on a slot -- and a failure lasting
+    longer than an interval left the schedule behind without skipping the slots
+    it had missed. libcamera refusing a camera that is still closing is an
+    ordinary event here, because the camera is opened and closed once per
+    frame, so this is not a rare path.
+    """
+
+    @staticmethod
+    def _advance(current_slot, interval, now):
+        """_sleep_until_next_slot with the clock and the sleep stubbed out."""
+        slept = []
+        with (
+            patch("raspilapse.daemon.time.time", return_value=now),
+            patch("raspilapse.daemon.time.sleep", side_effect=slept.append),
+        ):
+            returned = AdaptiveTimelapse._sleep_until_next_slot(current_slot, interval)
+        return returned, slept
+
+    def test_an_ordinary_iteration_sleeps_to_the_next_slot(self):
+        returned, slept = self._advance(300.0, 30, now=305.0)
+        assert returned == 330.0
+        assert slept == [25.0]
+
+    def test_a_failure_outlasting_an_interval_skips_the_slots_it_missed(self):
+        """Recovery took 70s of a 30s interval. The next capture belongs on the
+        grid at 390, not 70s late at 330, and not immediately either."""
+        returned, slept = self._advance(300.0, 30, now=370.0)
+        assert returned == 390.0
+        assert slept == [20.0]
+
+    def test_it_never_returns_a_slot_in_the_past(self):
+        """A negative sleep is what an immediate off-grid retry looks like."""
+        for late in (0, 1, 29, 30, 31, 200):
+            returned, slept = self._advance(300.0, 30, now=300.0 + late)
+            assert returned > 300.0 + late, f"{late}s late returned a slot already gone"
+            assert slept and slept[0] > 0
+
+
 class TestSeedingAcrossARestart:
     """The database row is a record, not a command, and the two differ.
 
@@ -623,6 +666,30 @@ class TestSeedingAcrossARestart:
         assert required == pytest.approx(
             0.000604, rel=1e-6
         ), "seeded the sensor's gain floor as though the ladder had asked for it"
+
+    def test_a_quantised_ceiling_still_counts_as_the_ceiling(self, test_config_file):
+        """The column records what the camera delivered, and it under-delivers.
+
+        A commanded 20 s comes back as 19999994 us. This camera's database has
+        62556 gain-controlled rows at that value and not one at exactly
+        20000000, so an equality test against max_shutter rejects every real
+        night frame and seeds the restart at gain 1.0 -- up to six times too
+        dark. That is a worse bug than the daylight one the check exists for,
+        and it is the reason the comparison carries a tolerance.
+        """
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 19_999_994,
+                "analogue_gain": 5.98830413818359,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+            },
+        )
+        assert required == pytest.approx(19.999994 * 5.98830413818359, rel=1e-6), (
+            "dropped a genuinely commanded night gain because the sensor "
+            "delivered a few microseconds under the ceiling"
+        )
 
     def test_a_row_at_the_ceiling_keeps_its_gain(self, test_config_file):
         """The sibling that stops the fix being 'ignore the column'.
@@ -1138,6 +1205,23 @@ class TestReferenceShotPolicy:
             "fixed_colour_gains"
         )
         assert timelapse._wants_reference_shot()
+
+    @pytest.mark.parametrize("mode", [LightMode.TRANSITION, LightMode.NIGHT])
+    def test_no_reading_away_from_the_bright_end(self, test_config_file, mode):
+        """update_day_wb_reference drops everything taken outside DAY -- AWB has
+        nothing to meter in the dark -- and it did so on the far side of the
+        teardown, so the frame was already late by then. Dusk is the worst case:
+        the ladder crosses most of its range and REFERENCE_LADDER_STEP fires a
+        couple of dozen times, every one of them discarded.
+        """
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None  # the otherwise-always-fires case
+
+        timelapse.exposure._mode = mode
+        assert not timelapse._wants_reference_shot()
+
+        timelapse.exposure._mode = LightMode.DAY
+        assert timelapse._wants_reference_shot(), "the day case must still fire"
 
     def test_wanting_a_reading_tracks_whether_one_would_be_used(self, test_config_file):
         """The property and the precedence must not drift apart.

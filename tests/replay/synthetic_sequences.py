@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tests.replay.extract_sequences import OUT_DIR, REPLAY_CONFIG  # noqa: E402
-from tests.replay.harness import dump_frames  # noqa: E402
+from tests.replay.harness import SATURATED, dump_frames  # noqa: E402
 
 DAY_GAINS = [2.5, 1.6]
 
@@ -376,7 +376,14 @@ def build():
         ),
         "config": REPLAY_CONFIG,
         "seed": {"exposure_time": 1.0, "analogue_gain": 1.0, "brightness": 120.0},
-        "frames": [frame(50, min(254.0, 80.0 * 1.09**i), exposure_us=1_000_000) for i in range(60)],
+        # Strictly below SATURATED, and derived from it rather than written out
+        # as 254.0: scene_luminance() returns None at or above that value, so a
+        # cap that ever met it would blank the whole converged tail of this
+        # sequence -- silently, and the golden would record the blanks.
+        "frames": [
+            frame(50, min(SATURATED - 1.0, 80.0 * 1.09**i), exposure_us=1_000_000)
+            for i in range(60)
+        ],
     }
 
     return sequences

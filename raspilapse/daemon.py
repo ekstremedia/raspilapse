@@ -269,7 +269,22 @@ class AdaptiveTimelapse:
             # sensor answered. Deriving the condition from the ceiling rather
             # than a threshold of its own keeps this from disagreeing with the
             # ladder if the ceiling is reconfigured.
-            at_the_ceiling = has_exposure and seed_exposure >= self.exposure.max_shutter
+            #
+            # The comparison needs slack because the column records what the
+            # camera *delivered*, and the camera quantises: a commanded 20 s
+            # comes back as 19999994 us, and this database holds 62556 such
+            # rows against not one at exactly 20000000. An equality test would
+            # therefore reject every real night frame and seed the restart at
+            # gain 1.0 -- up to six times too dark, which is worse than the
+            # daylight bug this is here to fix. The worst under-delivery on
+            # record is 85 us, so 0.1% is 235x the observed margin while still
+            # being far tighter than any ladder step: within it the ladder
+            # cannot have commanded a gain below about 1.001, nowhere near the
+            # 1.1228 floor that makes daylight rows ambiguous.
+            CEILING_TOLERANCE = 0.001
+            at_the_ceiling = has_exposure and seed_exposure >= self.exposure.max_shutter * (
+                1 - CEILING_TOLERANCE
+            )
             seed_gain = analogue_gain if (has_gain and at_the_ceiling) else None
 
             self.exposure.seed_from_capture(
@@ -805,6 +820,33 @@ class AdaptiveTimelapse:
         """
         return math.floor(after / interval) * interval + interval
 
+    @staticmethod
+    def _sleep_until_next_slot(current_slot: float, interval: float) -> float:
+        """Advance one slot, skip any already in the past, and sleep to it.
+
+        Every path that ends an iteration goes through here, including the one
+        that failed to open the camera. That path used to `continue` straight
+        past the scheduling, so the retry fired the moment it succeeded rather
+        than on a slot -- and a failure lasting longer than an interval left
+        the grid behind without skipping the slots it had missed.
+        """
+        next_slot = current_slot + interval
+        now = time.time()
+        if now >= next_slot:
+            behind = now - next_slot
+            skipped = int(behind // interval) + 1
+            # Skip whole slots rather than firing a burst to catch up. Even
+            # spacing is the entire premise of a timelapse, and three captures
+            # 200 ms apart damage it far more than one missing frame does.
+            logger.warning(
+                f"Iteration ran {behind + interval:.1f}s against a {interval}s "
+                f"interval; skipping {skipped} slot(s) to stay on the grid"
+            )
+            next_slot += skipped * interval
+        logger.debug(f"Sleeping until the next slot, {next_slot - now:.1f}s")
+        time.sleep(next_slot - now)
+        return next_slot
+
     def _decide(self) -> Decision:
         """Choose settings for the next frame."""
         # Recorded, not consulted. Sun elevation is an interesting thing to have
@@ -1033,7 +1075,12 @@ class AdaptiveTimelapse:
                         # it would reach the outer handler and stop the daemon.
                         logger.error(f"Camera initialisation failed: {e}", exc_info=True)
                         capture = None
-                        time.sleep(min(interval, 5))
+                        # Back onto the grid rather than a bare sleep. Retrying
+                        # off-grid puts the recovered frame at an arbitrary
+                        # offset, and a failure outlasting an interval used to
+                        # leave the schedule behind without skipping what it
+                        # had missed.
+                        next_slot = self._sleep_until_next_slot(next_slot, interval)
                         continue
 
                 try:
@@ -1061,22 +1108,7 @@ class AdaptiveTimelapse:
                 except Exception as e:
                     logger.error(f"Frame capture failed: {e}", exc_info=True)
 
-                next_slot += interval
-                now = time.time()
-                if now >= next_slot:
-                    behind = now - next_slot
-                    skipped = int(behind // interval) + 1
-                    # Skip whole slots rather than firing a burst to catch up.
-                    # Even spacing is the entire premise of a timelapse, and
-                    # three captures 200 ms apart damage it far more than one
-                    # missing frame does.
-                    logger.warning(
-                        f"Capture ran {behind + interval:.1f}s against a {interval}s "
-                        f"interval; skipping {skipped} slot(s) to stay on the grid"
-                    )
-                    next_slot += skipped * interval
-                logger.debug(f"Sleeping until the next slot, {next_slot - now:.1f}s")
-                time.sleep(next_slot - now)
+                next_slot = self._sleep_until_next_slot(next_slot, interval)
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
