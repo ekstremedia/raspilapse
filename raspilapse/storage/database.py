@@ -108,6 +108,14 @@ CAPTURES_DDL = """
         system_load_1min REAL,
         system_load_5min REAL,
         system_load_15min REAL,
+        system_mem_used_mb INTEGER,
+        system_mem_percent REAL,
+        system_disk_free_gb REAL,
+        system_disk_percent REAL,
+        system_uptime_s INTEGER,
+        process_rss_mb INTEGER,
+        network_up INTEGER,
+        network_signal_dbm INTEGER,
 
         -- Metadata
         created_at TEXT DEFAULT (datetime('now')),
@@ -123,6 +131,22 @@ CAPTURES_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_captures_timestamp ON captures(unix_timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_captures_camera_time ON captures(camera_id, unix_timestamp)",
 )
+
+
+def _as_int(value: Optional[float]) -> Optional[int]:
+    """Round a metric to an int, keeping None as None.
+
+    The v6 columns are INTEGER because the fraction of a megabyte or a decibel
+    is noise at this sample rate. sqlite3 would happily store a float in an
+    INTEGER column -- SQLite columns are only type-affine -- so rounding here
+    is what actually keeps the file small.
+    """
+    if value is None:
+        return None
+    try:
+        return int(round(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def apply_schema(conn: sqlite3.Connection, wal: bool = True) -> bool:
@@ -212,7 +236,7 @@ class CaptureDatabase:
         SCHEMA_VERSION: Current database schema version
     """
 
-    SCHEMA_VERSION = 5  # Bumped for dropping three unused captures indexes
+    SCHEMA_VERSION = 6  # Bumped for the memory, disk, uptime, RSS and network columns
 
     # Migration definitions: version -> (description, SQL statements)
     MIGRATIONS = {
@@ -266,6 +290,38 @@ class CaptureDatabase:
                 "DROP INDEX IF EXISTS idx_captures_lux",
                 "DROP INDEX IF EXISTS idx_captures_brightness",
                 "DROP INDEX IF EXISTS idx_captures_mode",
+            ],
+        ),
+        6: (
+            "Add memory, disk, uptime, process RSS and network columns",
+            [
+                # SystemMonitor has always collected memory and disk every
+                # thirty seconds; store_capture bound the cpu_temp and the
+                # three load averages and dropped the rest on the floor. That
+                # cost real time: diagnosing a nine-day outage meant proving
+                # from CPU temperature and load alone that there was no leak,
+                # because no memory series existed to look at.
+                #
+                # INTEGER wherever the fraction is noise. SQLite varint-encodes
+                # small integers in one or two bytes, so at 2880 rows/day these
+                # eight cost roughly 20 MB over a 180-day window rather than
+                # the 33 MB eight REALs would -- the same arithmetic migration 5
+                # used to justify dropping the indexes.
+                "ALTER TABLE captures ADD COLUMN system_mem_used_mb INTEGER",
+                "ALTER TABLE captures ADD COLUMN system_mem_percent REAL",
+                "ALTER TABLE captures ADD COLUMN system_disk_free_gb REAL",
+                "ALTER TABLE captures ADD COLUMN system_disk_percent REAL",
+                # Makes every reboot visible in the capture timeline itself.
+                # This week's incident had to be reconstructed from `last
+                # reboot` and a 70-second gap in frame timestamps.
+                "ALTER TABLE captures ADD COLUMN system_uptime_s INTEGER",
+                "ALTER TABLE captures ADD COLUMN process_rss_mb INTEGER",
+                # network_up is "a default route exists", not "the internet
+                # works" -- see SystemMonitor.get_network_state. The signal is
+                # the one that would have predicted the wifi drop rather than
+                # merely recording it.
+                "ALTER TABLE captures ADD COLUMN network_up INTEGER",
+                "ALTER TABLE captures ADD COLUMN network_signal_dbm INTEGER",
             ],
         ),
     }
@@ -391,7 +447,8 @@ class CaptureDatabase:
             brightness_metrics: Brightness analysis results dict
             weather_data: Weather data dictionary
             sun_elevation: Sun elevation in degrees
-            system_metrics: System monitoring data (cpu_temp, load)
+            system_metrics: SystemMonitor.get_all_metrics() output. Every key
+                it produces is stored; anything missing lands as NULL.
 
         Returns:
             True if stored successfully, False otherwise
@@ -431,67 +488,80 @@ class CaptureDatabase:
 
             # Extract system metrics (with fallback to empty dict)
             s = system_metrics or {}
-            load = s.get("load", {}) or {}
+            # Each of these is None rather than absent when its collector
+            # fails, so `or {}` is doing real work -- s.get("memory", {})
+            # would hand back the None.
+            load = s.get("load") or {}
+            mem = s.get("memory") or {}
+            disk = s.get("disk") or {}
+            net = s.get("network") or {}
+
+            # Column name -> value, in one place. This used to be a 36-name
+            # list, a hand-typed run of 36 question marks and a 36-element
+            # positional tuple, all maintained separately; adding a column
+            # meant three edits that had to agree, and a misalignment writes
+            # plausible wrong data into the wrong column rather than raising.
+            row = {
+                "timestamp": capture_timestamp,
+                "unix_timestamp": unix_ts,
+                "camera_id": self.config.camera_id,
+                "image_path": image_path,
+                "exposure_time_us": exposure_time,
+                "analogue_gain": analogue_gain,
+                "colour_gains_r": colour_gains[0] if colour_gains else None,
+                "colour_gains_b": colour_gains[1] if colour_gains else None,
+                "colour_temperature": colour_temperature,
+                "digital_gain": digital_gain,
+                "sensor_temperature": sensor_temp,
+                "lux": lux,
+                "mode": mode,
+                "sun_elevation": sun_elevation,
+                "brightness_mean": b.get("mean_brightness"),
+                "brightness_median": b.get("median_brightness"),
+                "brightness_std": b.get("std_brightness"),
+                "brightness_p5": b.get("percentile_5"),
+                "brightness_p25": b.get("percentile_25"),
+                "brightness_p75": b.get("percentile_75"),
+                "brightness_p95": b.get("percentile_95"),
+                "underexposed_pct": b.get("underexposed_percent"),
+                "overexposed_pct": b.get("overexposed_percent"),
+                "weather_temperature": w.get("temperature"),
+                "weather_humidity": w.get("humidity"),
+                "weather_wind_speed": w.get("wind_speed"),
+                "weather_wind_gust": w.get("wind_gust"),
+                "weather_wind_angle": w.get("wind_angle"),
+                "weather_rain": w.get("rain"),
+                "weather_rain_1h": w.get("rain_1h"),
+                "weather_rain_24h": w.get("rain_24h"),
+                "weather_pressure": w.get("pressure"),
+                "system_cpu_temp": s.get("cpu_temp"),
+                "system_load_1min": load.get("1min"),
+                "system_load_5min": load.get("5min"),
+                "system_load_15min": load.get("15min"),
+                "system_mem_used_mb": _as_int(mem.get("used")),
+                "system_mem_percent": mem.get("percent"),
+                "system_disk_free_gb": disk.get("free"),
+                "system_disk_percent": disk.get("percent"),
+                "system_uptime_s": _as_int(s.get("uptime")),
+                "process_rss_mb": _as_int(s.get("process_rss")),
+                # bool is a subclass of int, but None must stay NULL rather
+                # than becoming 0 -- "we did not look" is not "no route".
+                "network_up": None if net.get("up") is None else int(net["up"]),
+                "network_signal_dbm": _as_int(net.get("signal_dbm")),
+            }
 
             with self._get_connection() as conn:
                 if conn is None:
                     return False
 
                 cursor = conn.cursor()
+                # The names are literals from this module, never user input,
+                # so composing the statement here is not an injection surface.
+                columns = ", ".join(row)
+                placeholders = ", ".join("?" * len(row))
                 cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO captures (
-                        timestamp, unix_timestamp, camera_id, image_path,
-                        exposure_time_us, analogue_gain, colour_gains_r, colour_gains_b,
-                        colour_temperature, digital_gain, sensor_temperature,
-                        lux, mode, sun_elevation,
-                        brightness_mean, brightness_median, brightness_std,
-                        brightness_p5, brightness_p25, brightness_p75, brightness_p95,
-                        underexposed_pct, overexposed_pct,
-                        weather_temperature, weather_humidity, weather_wind_speed,
-                        weather_wind_gust, weather_wind_angle, weather_rain,
-                        weather_rain_1h, weather_rain_24h, weather_pressure,
-                        system_cpu_temp, system_load_1min, system_load_5min, system_load_15min
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        capture_timestamp,
-                        unix_ts,
-                        self.config.camera_id,
-                        image_path,
-                        exposure_time,
-                        analogue_gain,
-                        colour_gains[0] if colour_gains else None,
-                        colour_gains[1] if colour_gains else None,
-                        colour_temperature,
-                        digital_gain,
-                        sensor_temp,
-                        lux,
-                        mode,
-                        sun_elevation,
-                        b.get("mean_brightness"),
-                        b.get("median_brightness"),
-                        b.get("std_brightness"),
-                        b.get("percentile_5"),
-                        b.get("percentile_25"),
-                        b.get("percentile_75"),
-                        b.get("percentile_95"),
-                        b.get("underexposed_percent"),
-                        b.get("overexposed_percent"),
-                        w.get("temperature"),
-                        w.get("humidity"),
-                        w.get("wind_speed"),
-                        w.get("wind_gust"),
-                        w.get("wind_angle"),
-                        w.get("rain"),
-                        w.get("rain_1h"),
-                        w.get("rain_24h"),
-                        w.get("pressure"),
-                        s.get("cpu_temp"),
-                        load.get("1min"),
-                        load.get("5min"),
-                        load.get("15min"),
-                    ),
+                    f"INSERT OR REPLACE INTO captures ({columns}) VALUES ({placeholders})",
+                    tuple(row.values()),
                 )
 
                 logger.debug(f"[DB] Stored capture: {capture_timestamp}")
