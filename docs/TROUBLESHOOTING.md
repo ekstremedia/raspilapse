@@ -163,6 +163,19 @@ default, in `scripts/cleanup_old_images.sh`). Database rows live longer —
 lux, brightness and weather history the graphs are drawn from. A row whose
 `image_path` no longer exists is expected, not broken.
 
+The **videos** made from those images have their own window,
+`video.retention_days`. Until that key existed the source frames were bounded
+and the thing they turn into was not, so the video directory grew forever — 3.2
+GB from twelve days on this camera. At 4K/crf 20 a day is roughly 500 MB, so 7
+days settles near 3.4 GB. A file is never deleted while the upload queue still
+holds a row for it in any state other than `success`, including `failed`;
+those are logged as retained rather than silently skipped. Check before
+trusting it:
+
+```bash
+python3 -m raspilapse.cli.prune_videos --dry-run
+```
+
 Reclaiming space after a large prune needs an explicit vacuum, which is slow and
 needs free disk equal to the database size:
 
@@ -261,6 +274,64 @@ so there is an opt-in watchdog:
 It runs as root every 5 minutes, restarts the service if no frame has appeared
 in 10 minutes, and reboots after two failed restarts. Its escalation counter
 lives in `/var/lib/raspilapse/` so it survives a reboot.
+
+---
+
+## The camera looks frozen but is still capturing
+
+Check this **before** assuming the Pi has hung. The symptoms of a dead network
+and a dead Pi are identical from a desk: no new video uploaded, no live image on
+the server, nothing responding. But capture writes to the local card and does
+not care whether the network exists, so the camera can be perfectly healthy and
+completely invisible at the same time.
+
+Ask the card, not the dashboard:
+
+```bash
+ls -t /var/www/html/images/$(date +%Y/%m/%d)/*.jpg | head -3
+sqlite3 data/timelapse.db \
+  "SELECT datetime(unix_timestamp,'unixepoch','localtime') FROM captures
+   ORDER BY unix_timestamp DESC LIMIT 3;"
+```
+
+Recent timestamps mean the camera never stopped and the problem is the network.
+
+This is not hypothetical. On 6 August 2026 this camera's access point dropped at
+23:31, both BSSIDs timed out within 23 seconds, and NetworkManager read the
+timeout as a wrong password:
+
+```
+NetworkManager: Activation: (wifi) disconnected during association, asking for new key
+NetworkManager: state change: need-auth -> failed (reason 'no-secrets')
+```
+
+`failed (reason 'no-secrets')` sets an autoconnect **blocked reason** on the
+profile rather than a retry counter, so `connection.autoconnect-retries=-1` does
+not clear it and neither does anything else in `NetworkManager.conf`. Only an
+agent supplying secrets, an explicit `nmcli con up` / `nmcli dev connect`, a
+change to the profile's secrets, or restarting NetworkManager will. wlan0 sat
+`inactive` for 8h35m until someone power-cycled the Pi — which "fixed" it and
+made a network fault look like a hang. Capture ran the whole time: 2880 frames
+that day, none missed.
+
+To recover automatically instead:
+
+```bash
+./scripts/install.sh --with-netwatch
+```
+
+Runs as root every 2 minutes. Two checks of grace so an access point reboot
+rides out untouched, then `nmcli dev connect`, the priority profile explicitly,
+a radio cycle, a NetworkManager restart, and only then a reboot. The reboot
+needs 30 minutes of continuous failure, your SSID seen on the air at least once
+during it, and 6 hours since the last watchdog reboot — so an access point that
+is genuinely switched off never triggers one, however long it stays off.
+
+Watch it decide without letting it act:
+
+```bash
+sudo RASPILAPSE_NETWORK_STATE=/tmp/netstate bash scripts/check_network.sh --dry-run
+```
 
 ---
 
