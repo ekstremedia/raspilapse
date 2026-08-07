@@ -9,9 +9,11 @@ Type=oneshot
 User=@USER@
 Group=@GROUP@
 WorkingDirectory=@PROJECT_DIR@
-# Type=oneshot runs these in order: expired images off disk, then expired rows
-# out of the database. Both are no-ops when their retention is disabled.
+# Type=oneshot runs these in order: expired images off disk, then the videos
+# made from them, then expired rows out of the database. All three are no-ops
+# when their retention is disabled.
 ExecStart=/bin/bash @PROJECT_DIR@/scripts/cleanup_old_images.sh
+ExecStart=@PYTHON@ -m raspilapse.cli.prune_videos
 ExecStart=@PYTHON@ -m raspilapse.cli.db --prune
 StandardOutput=journal
 StandardError=journal

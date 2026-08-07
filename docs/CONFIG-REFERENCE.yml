@@ -166,6 +166,20 @@ video:
   # Number of frames to average for deflicker (higher = smoother but may blur fast changes)
   deflicker_size: 10
 
+  # Delete generated videos, keograms and slitscans older than this many days.
+  # 0 keeps everything forever, which is what happened before this key existed:
+  # cleanup_old_images.sh expires the source JPEGs, and nothing expired what is
+  # made from them, so the video directory grew without bound.
+  #
+  # A file is never deleted while the upload queue still holds a row for it in
+  # any state other than 'success' -- including 'failed', because a video that
+  # nobody managed to upload exists nowhere else. Those are logged as retained
+  # rather than silently skipped. Files the queue has never heard of are not
+  # protected, which is how ad-hoc partial-day renders get cleaned up.
+  #
+  # At 4K/crf 20 a day is roughly 500 MB, so 7 days is ~3.4 GB.
+  retention_days: 7
+
   # Default time range for timelapse generation (used when no --start/--end provided)
   # Format: HH:MM
   # If end time <= start time, assumes start is from previous day
