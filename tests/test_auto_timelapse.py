@@ -608,6 +608,8 @@ class TestSlotRecovery:
         return returned, slept
 
     def test_an_ordinary_iteration_sleeps_to_the_next_slot(self):
+        """The baseline the two failure cases below are departures from: a
+        frame costing 5s of a 30s interval sleeps the remaining 25."""
         returned, slept = self._advance(300.0, 30, now=305.0)
         assert returned == 330.0
         assert slept == [25.0]
@@ -639,25 +641,38 @@ class TestTheLoopIsWiredToTheGrid:
 
     @staticmethod
     def _run_one(config_file, init_side_effect=None, max_iterations=6):
+        """Run the capture loop once with the camera mocked out.
+
+        Returns the stubbed `_sleep_until_next_slot` and `time.sleep` so the
+        caller can assert on what the loop actually reached.
+        """
         timelapse = AdaptiveTimelapse(config_file)
         timelapse._database = None
         timelapse._record = MagicMock()
         timelapse._read_capture_metadata = MagicMock(return_value=None)
 
-        # test_mode stops the loop via `frame_count >= num_frames`, and
-        # frame_count is incremented inside capture_frame -- so a mock that
-        # only returns a path leaves the loop spinning forever.
         def capture(*args, **kwargs):
+            """Stand in for capture_frame, counter included.
+
+            test_mode stops the loop via `frame_count >= num_frames`, and
+            frame_count is incremented inside capture_frame -- so a mock that
+            only returns a path leaves the loop spinning forever. This cost a
+            hung test run to find.
+            """
             timelapse.frame_count += 1
             return ("frame.jpg", None)
 
         timelapse.capture_frame = MagicMock(side_effect=capture)
 
-        # A hard stop independent of the loop's own exit condition, so a future
-        # change to that condition fails this test instead of hanging the suite.
         calls = []
 
         def advance_stub(current_slot, interval):
+            """Record the reschedule, and stop the loop independently of it.
+
+            The bound is deliberately not the loop's own exit condition: a
+            future change that breaks that condition should fail the assertion
+            below rather than hang the suite.
+            """
             calls.append(current_slot)
             if len(calls) >= max_iterations:
                 timelapse.running = False
@@ -678,6 +693,9 @@ class TestTheLoopIsWiredToTheGrid:
         return advance, sleep
 
     def test_a_normal_frame_ends_on_the_grid(self, test_config_file):
+        """The happy path, and the control for the failure case below: an
+        iteration that captures normally must still reschedule, and the first
+        frame must be aligned before the loop starts at all."""
         advance, sleep = self._run_one(test_config_file)
         assert advance.called, "the loop finished an iteration without rescheduling"
         assert sleep.called, "the first frame was not aligned to a slot before starting"
@@ -717,6 +735,8 @@ class TestSeedingAcrossARestart:
     """
 
     def _seeded(self, config_path, row):
+        """Seed a fresh daemon from one database row, and return what the
+        controller ended up holding as its required exposure."""
         timelapse = AdaptiveTimelapse(config_path)
         timelapse._database = MagicMock()
         timelapse._database.get_last_capture.return_value = row
@@ -1229,6 +1249,8 @@ class TestReferenceShotPolicy:
         assert timelapse._wants_reference_shot()
 
     def test_a_stale_reading_expires_even_in_still_light(self, test_config_file):
+        """The ladder trigger cannot see what it does not move for: a season
+        turning, a dirty lens, a streetlight coming on. Hence the floor."""
         from raspilapse.daemon import REFERENCE_MAX_INTERVAL_FRAMES
 
         timelapse = self._timelapse(test_config_file)
@@ -1240,6 +1262,8 @@ class TestReferenceShotPolicy:
         assert timelapse._wants_reference_shot()
 
     def test_it_can_be_switched_off_entirely(self, test_config_file):
+        """The explicit off switch, which still wins over every other reason to
+        take one -- including the always-fires first frame."""
         timelapse = self._timelapse(test_config_file)
         timelapse._reference_position = None
         timelapse.config["adaptive_timelapse"]["test_shot"]["enabled"] = False
