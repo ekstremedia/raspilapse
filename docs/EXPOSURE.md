@@ -154,12 +154,31 @@ Transition  lux 2.03   WB [1.83, 2.02]  4070 K   manual
 Day         lux 50.28  WB [2.86, 1.48]  7849 K   AWB -- visible jump
 ```
 
-Instead, target colour gains are interpolated toward across the transition, and
-day-mode gains are learned from actual capture metadata (`_day_wb_reference`)
-rather than guessed.
+Instead, every delivered frame is taken with `AwbEnable: 0`, and the gains
+cross-fade along the ladder at `wb_transition_speed` — a fraction of the gap
+per frame, so there is no step to see.
+
+The daylight end of that cross-fade comes from one of two places, in this
+order:
+
+1. `day_mode.fixed_colour_gains`, if set. Fixed means fixed: nothing the camera
+   observes overrides it.
+2. Otherwise a reference the camera learns, from the periodic test shot — the
+   one frame taken with AWB on, and so the only reading of what the scene's
+   white actually is. Readings taken away from the bright end are discarded,
+   because AWB has nothing to go on there.
+
+The reference is never learned from an ordinary frame. Those are taken with AWB
+off, so their `ColourGains` are the ones the controller just chose; learning
+from them makes the reference its own input, and it drifts instead of
+correcting.
 
 AWB is also expensive at night: leaving it on during a 20-second exposure costs
 roughly a 5× slowdown in libcamera.
+
+If you have `fixed_colour_gains` set, the test shot is doing nothing for you and
+`test_shot.enabled: false` skips it — worth having, since it costs a camera
+teardown and restart each time it fires.
 
 ## Recovery
 
@@ -184,7 +203,8 @@ Symptoms and the setting to reach for:
 | Slow to recover after a light change | raise `brightness_damping`, or the ramp speeds |
 | Blown-out skies | enable `highlight_protection` |
 | Mode flipping at dusk | raise `hysteresis_frames` |
-| Colour shifting between frames | check `smooth_wb_in_day_mode` is true |
+| Colour shifting between frames | lower `wb_transition_speed` |
+| Daylight colour drifting over days | set `day_mode.fixed_colour_gains` |
 
 Watch what it is actually doing:
 

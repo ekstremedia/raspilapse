@@ -214,7 +214,7 @@ def replay(sequence: Dict, controller_cls: Optional[Any] = None) -> List[Dict]:
             modes.NIGHT,
         )
         if entering_manual and not controller.transition_seeded:
-            controller.seed_from_metadata(frame.get("test_metadata", {}), last_day_capture_metadata)
+            controller.seed_from_metadata(last_day_capture_metadata)
 
         if mode == modes.DAY and previous_mode != modes.DAY:
             controller.reset_seed_state()
@@ -241,9 +241,18 @@ def replay(sequence: Dict, controller_cls: Optional[Any] = None) -> List[Dict]:
             }
         )
 
+        # The white balance reference is not learned here. This is an ordinary
+        # frame, taken with AWB off, so its ColourGains are the ones the
+        # controller chose -- see update_day_wb_reference. In the daemon the
+        # reference comes from the AWB test shot; a recorded sequence has
+        # `test_metadata` for the frames that had one, and replaying it means
+        # replaying that source and no other.
         capture_metadata = frame.get("capture_metadata")
         if capture_metadata and mode == modes.DAY:
-            controller.update_day_wb_reference(capture_metadata)
             last_day_capture_metadata = capture_metadata
+
+        test_metadata = frame.get("test_metadata")
+        if test_metadata:
+            controller.update_day_wb_reference(test_metadata)
 
     return results

@@ -18,6 +18,7 @@ from raspilapse.camera.ladder import LightMode
 
 MAX_SHUTTER = 20.0
 MAX_GAIN = 6
+WB_SPEED = 0.15  # matches make_config's wb_transition_speed
 
 
 def make_config(**overrides):
@@ -260,6 +261,30 @@ class TestWhiteBalance:
         controller.update_day_wb_reference({"ColourGains": [2.1, 1.9]})
         assert controller._day_wb_reference == (2.1, 1.9)
 
+    def test_configured_gains_beat_the_learned_reference(self, controller):
+        """`fixed_colour_gains` means fixed. The learned reference was allowed
+        to override it for a while, so the configured value was read and then
+        thrown away, and daylight colour wandered from 2.500 to 2.547 over nine
+        days on the camera this was found on."""
+        converge(controller, 500_000.0)
+        controller.update_day_wb_reference({"ColourGains": [2.1, 1.9]})
+
+        settings = converge(controller, 500_000.0)
+        assert settings["ColourGains"][0] == pytest.approx(2.5, rel=0.01)
+        assert settings["ColourGains"][1] == pytest.approx(1.6, rel=0.01)
+
+    def test_the_reference_is_the_fallback_without_configured_gains(self):
+        """It is still what a camera that has not configured a white point
+        cross-fades away from at dusk."""
+        config = make_config(day_mode={})
+        controller = ExposureController(config)
+        converge(controller, 500_000.0)
+        controller.update_day_wb_reference({"ColourGains": [2.1, 1.9]})
+
+        settings = converge(controller, 500_000.0)
+        assert settings["ColourGains"][0] == pytest.approx(2.1, rel=0.01)
+        assert settings["ColourGains"][1] == pytest.approx(1.9, rel=0.01)
+
     def test_it_only_learns_at_the_bright_end(self, controller):
         converge(controller, 0.5)
         controller.update_day_wb_reference({"ColourGains": [2.1, 1.9]})
@@ -297,19 +322,31 @@ class TestSeeding:
         assert product(controller.decide()) == pytest.approx(COLD_START_EXPOSURE_S)
 
     def test_the_handover_seeds_from_metadata(self, controller):
-        """The metering shot is the only frame taken with AWB on."""
-        controller.seed_from_metadata(
-            {"ColourGains": [2.2, 1.7]},
-            {"ExposureTime": 500_000, "AnalogueGain": 2.0},
-        )
+        """The last daylight frame is where the climb into the dark starts."""
+        controller.seed_from_metadata({"ExposureTime": 500_000, "AnalogueGain": 2.0})
         assert controller.transition_seeded
-        assert controller._last_colour_gains == (2.2, 1.7)
         assert product(controller.decide()) == pytest.approx(1.0, rel=0.01)
 
     def test_the_handover_can_be_reset(self, controller):
-        controller.seed_from_metadata({"ColourGains": [2.2, 1.7]}, {})
+        controller.seed_from_metadata({})
         controller.reset_seed_state()
         assert not controller.transition_seeded
+
+    def test_the_handover_does_not_touch_the_colour(self, controller):
+        """The seed used to assign colour directly, which is a step by
+        definition: it bypasses the wb_speed cross-fade that exists to stop
+        exactly that. Seven of them are visible in this camera's own database,
+        one per dusk, each a single frame jumping ~0.3 in gain and sliding back
+        over the following ten."""
+        converge(controller, 500_000.0)
+        before = controller._last_colour_gains
+
+        controller.seed_from_metadata({"ExposureTime": 500_000, "AnalogueGain": 2.0})
+        assert controller._last_colour_gains == before, "the seed moved the colour"
+
+        after = controller.decide()["ColourGains"]
+        assert abs(after[0] - before[0]) <= 0.5 * WB_SPEED
+        assert abs(after[1] - before[1]) <= 0.5 * WB_SPEED
 
 
 class TestCosmeticLux:

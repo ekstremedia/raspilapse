@@ -87,8 +87,8 @@ class Decision:
     settings: Dict[str, Any]
     # Read the instant decide() returns. The handover seeding that runs a few
     # lines later overwrites the controller's shutter, gain and ladder position
-    # from the reference shot's metadata, so asking for diagnostics after it
-    # describes the seed rather than the frame that was about to be taken.
+    # from the last daylight frame's metadata, so asking for diagnostics after
+    # it describes the seed rather than the frame that was about to be taken.
     diagnostics: Dict[str, Any]
 
 
@@ -114,9 +114,9 @@ class AdaptiveTimelapse:
         self._previous_mode: str = None  # Track mode changes for seeding detection
         self._last_day_capture_metadata: Dict = None  # Metadata from last day mode capture
 
-        # The most recent white-balance reading, and where on the ladder it was
-        # taken. See _wants_reference_shot.
-        self._reference_metadata: Optional[Dict] = None
+        # Where on the ladder the last white-balance reading was taken, and
+        # when. The reading itself goes straight to the controller. See
+        # _wants_reference_shot.
         self._reference_position: Optional[float] = None
         self._reference_frame: int = 0
         self._last_raw_lux: Optional[float] = None
@@ -696,6 +696,13 @@ class AdaptiveTimelapse:
         transition the ladder travels most of its range and this fires perhaps
         twenty times; through a stable afternoon, not at all until the refresh
         interval comes round.
+
+        Nothing the reference shot reads reaches a delivered frame directly.
+        The controller keeps it as the daylight white point for a camera that
+        has not configured `fixed_colour_gains`, and cross-fades towards it at
+        wb_transition_speed like any other target. Where the gains are
+        configured, this whole path is dead weight and `test_shot.enabled: false`
+        turns it off.
         """
         reference = self.config["adaptive_timelapse"]["test_shot"]
         if not reference.get("enabled", True):
@@ -726,7 +733,18 @@ class AdaptiveTimelapse:
             self._reference_frame = self.frame_count
             return
 
-        self._reference_metadata = metadata
+        # This is the AWB frame, so this is the only place the daylight
+        # reference can honestly be learned. The controller ignores readings
+        # taken away from the bright end, where AWB has nothing to go on.
+        #
+        # Guarded because this runs inside the capture loop, whose only
+        # handler is the one that ends it. A malformed reading is worth a line
+        # in the log, not the end of the timelapse.
+        try:
+            self.exposure.update_day_wb_reference(metadata)
+        except Exception as e:
+            logger.debug(f"Could not apply WB reference: {e}")
+
         self._reference_position = self.exposure.ladder_position
         self._reference_frame = self.frame_count
         logger.debug(
@@ -763,18 +781,19 @@ class AdaptiveTimelapse:
     def _seed_across_mode_change(self, mode: str) -> None:
         """Hand exposure state across the day/night boundary.
 
-        Leaving the bright end means leaving the only frames the ISP metered
-        itself, so the controller is primed from the most recent reference shot
-        to make the first fully manual frame match the last automatic one.
+        The last daylight frame is the starting point for the climb into the
+        dark, so the controller is primed from it rather than continuing from
+        whatever the ladder happened to hold.
+
+        It used to prime colour from the AWB reference shot here as well. That
+        is gone: see seed_from_metadata.
         """
         entering_manual = self._previous_mode == LightMode.DAY and mode in (
             LightMode.TRANSITION,
             LightMode.NIGHT,
         )
         if entering_manual and not self.exposure.transition_seeded:
-            self.exposure.seed_from_metadata(
-                self._reference_metadata or {}, self._last_day_capture_metadata
-            )
+            self.exposure.seed_from_metadata(self._last_day_capture_metadata)
 
         if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
             self.exposure.reset_seed_state()
@@ -874,14 +893,13 @@ class AdaptiveTimelapse:
 
         capture_metadata = self._read_capture_metadata(metadata_path)
 
-        # Daylight is where the camera learns what neutral looks like, and that
-        # reference is what the night handover interpolates away from.
+        # Kept for the exposure handover, which needs the last real daylight
+        # frame. The white balance reference is not learned here: this frame
+        # was taken with AWB off, so its ColourGains are the ones the
+        # controller chose, not a reading of the scene. See
+        # _take_reference_shot.
         if capture_metadata is not None and decision.mode == LightMode.DAY:
-            try:
-                self.exposure.update_day_wb_reference(capture_metadata)
-                self._last_day_capture_metadata = capture_metadata
-            except Exception as e:
-                logger.debug(f"Could not apply WB reference: {e}")
+            self._last_day_capture_metadata = capture_metadata
 
         if self._database is None:
             return

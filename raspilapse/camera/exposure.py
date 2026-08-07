@@ -324,8 +324,15 @@ class ExposureController:
     def update_day_wb_reference(self, metadata: Dict):
         """Learn what neutral looks like, from a frame the ISP metered itself.
 
-        Only worth doing at the bright end, where AWB has enough signal. The
-        result is what the dark end interpolates away from.
+        Only worth doing at the bright end, where AWB has enough signal, and
+        only useful to a camera with no `fixed_colour_gains` -- see
+        _target_colour_gains, where the configured value wins.
+
+        The metadata has to come from the AWB reference shot. Feeding it an
+        ordinary capture instead reads back the manual gains the controller
+        just applied, which makes the reference its own input: it holds
+        whatever it last was, and any step in colour is adopted permanently
+        rather than corrected.
         """
         if self._mode != LightMode.DAY:
             return
@@ -337,15 +344,20 @@ class ExposureController:
             f"[WB] Daylight reference: R={gains[0]:.2f} B={gains[1]:.2f}",
         )
 
-    def seed_from_metadata(self, metadata: Dict, capture_metadata: Dict = None):
-        """Carry exposure and colour across the point where AWB is switched off.
+    def seed_from_metadata(self, capture_metadata: Dict = None):
+        """Carry the exposure across the day-to-night boundary.
 
-        The metering shot is the only frame taken with AWB enabled, so its
-        ColourGains are the only reading of what the scene's white actually is.
-        Seeding from them makes the first manual frame match the last automatic
-        one instead of stepping.
+        Exposure only. This used to seed colour too, from the AWB reference
+        shot, on the reasoning that the handover was where the camera stopped
+        using AWB and the first manual frame had to match the last automatic
+        one. That stopped being true when white balance became manual on every
+        frame: there is no automatic frame to match any more, and assigning
+        _last_colour_gains here bypassed the wb_speed cross-fade, so it was the
+        seed itself that produced the one-frame colour step it was meant to
+        prevent. Colour now crosses the boundary the way it crosses everywhere
+        else -- a fraction of the way per frame.
         """
-        source = capture_metadata or metadata or {}
+        source = capture_metadata or {}
 
         exposure_us = source.get("ExposureTime")
         gain = source.get("AnalogueGain")
@@ -356,18 +368,8 @@ class ExposureController:
             self._gain = gain
             self._position = ladder.position(self._required, self._max_shutter, self._max_gain)
 
-        gains = (metadata or {}).get("ColourGains") or source.get("ColourGains")
-        if gains and len(gains) >= 2:
-            self._last_colour_gains = (float(gains[0]), float(gains[1]))
-            self._seed_wb = self._last_colour_gains
-            if self._day_wb_reference is None:
-                self._day_wb_reference = self._last_colour_gains
-
         self._seeded = True
-        logger.info(
-            f"[Handover] Seeded from metadata: exposure={self._shutter}, "
-            f"gain={self._gain}, WB={self._last_colour_gains}"
-        )
+        logger.info(f"[Handover] Seeded from metadata: exposure={self._shutter}, gain={self._gain}")
 
     def _wb_position(self, position: float) -> float:
         """Where in the day-to-night colour cross-fade this ladder position sits.
@@ -391,13 +393,19 @@ class ExposureController:
         return max(0.0, min(1.0, (position - day_edge) / (night_edge - day_edge)))
 
     def _target_colour_gains(self, position: float) -> Tuple[float, float]:
-        """Cross-fade between the daylight reference and the configured night gains."""
+        """Cross-fade between the daylight white point and the configured night gains.
+
+        `fixed_colour_gains` wins over the learned reference, and the learned
+        reference is the fallback for a camera that has not configured one.
+        That order was inverted for a while: the config value was read and then
+        unconditionally overwritten, so a configured white point silently did
+        nothing and the daylight colour wandered instead of staying put.
+        """
         adaptive = self.config.get("adaptive_timelapse", {})
-        day = adaptive.get("day_mode", {}).get("fixed_colour_gains") or [2.5, 1.6]
         night = adaptive.get("night_mode", {}).get("colour_gains") or [1.83, 2.02]
 
-        if self._day_wb_reference is not None:
-            day = list(self._day_wb_reference)
+        fixed = adaptive.get("day_mode", {}).get("fixed_colour_gains")
+        day = list(fixed) if fixed else list(self._day_wb_reference or (2.5, 1.6))
 
         into = self._wb_position(position)
         return (

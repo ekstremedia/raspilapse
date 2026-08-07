@@ -1,5 +1,6 @@
 """Tests for auto_timelapse module."""
 
+import json
 import os
 import re
 import tempfile
@@ -426,6 +427,86 @@ class TestTimelapseCaptureFlow:
         timelapse.capture_frame(mock_capture, "day")
 
         assert timelapse.frame_count == 3
+
+
+class TestWhiteBalanceWiring:
+    """Which frame each white-balance input is allowed to come from.
+
+    The controller cannot check this for itself -- every value it is handed is
+    a plausible pair of gains -- so it has to be checked here, where the wiring
+    is. Both defects below shipped, and both were visible in the timelapse:
+    a one-frame colour step at dusk, and daylight colour that crept a little
+    every day instead of holding at the configured white point.
+    """
+
+    def test_the_daylight_reference_is_not_learned_from_an_ordinary_frame(self, test_config_file):
+        """An ordinary frame is taken with AWB off, so its ColourGains are the
+        ones the controller just chose. Learning from those makes the reference
+        its own input: it holds wherever it was pushed, and never corrects."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._database = None
+        timelapse.exposure.update_day_wb_reference = MagicMock()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"ColourGains": [2.9, 1.4], "ExposureTime": 10000}, f)
+            metadata_path = f.name
+
+        try:
+            decision = MagicMock()
+            decision.mode = LightMode.DAY
+            timelapse._record(decision, "frame.jpg", metadata_path, None)
+        finally:
+            os.unlink(metadata_path)
+
+        timelapse.exposure.update_day_wb_reference.assert_not_called()
+        # Still kept: the exposure handover starts from the last daylight frame.
+        assert timelapse._last_day_capture_metadata["ColourGains"] == [2.9, 1.4]
+
+    def test_the_reference_shot_is_where_it_is_learned(self, test_config_file):
+        """The one frame taken with AWB on is the only honest source."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.exposure.update_day_wb_reference = MagicMock()
+        timelapse.take_test_shot = MagicMock(return_value=("shot.jpg", {"ColourGains": [2.2, 1.7]}))
+
+        timelapse._take_reference_shot()
+
+        timelapse.exposure.update_day_wb_reference.assert_called_once_with(
+            {"ColourGains": [2.2, 1.7]}
+        )
+
+    def test_a_reading_the_controller_rejects_does_not_end_the_timelapse(self, test_config_file):
+        """Learning the reference moved into the capture loop, whose only
+        handler is the one that ends the run. A malformed reading should cost
+        the frame's colour and a line in the log, not the timelapse."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.exposure.update_day_wb_reference = MagicMock(
+            side_effect=ValueError("malformed ColourGains")
+        )
+        timelapse.take_test_shot = MagicMock(return_value=("shot.jpg", {"ColourGains": [2.2]}))
+        timelapse.frame_count = 40
+
+        timelapse._take_reference_shot()
+
+        # Recorded anyway, for the same reason the outer handler records it: a
+        # reading that fails every time must not leave _wants_reference_shot
+        # true and tear the camera down once per frame, forever.
+        assert timelapse._reference_frame == 40
+        assert timelapse._reference_position == timelapse.exposure.ladder_position
+
+    def test_the_handover_cannot_inject_awb_gains(self, test_config_file):
+        """seed_from_metadata assigns state directly, bypassing the wb_speed
+        cross-fade. Handing it the AWB reference shot is what produced the
+        one-frame step; it now takes the daylight frame and no colour at all."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._previous_mode = LightMode.DAY
+        timelapse._last_day_capture_metadata = {"ExposureTime": 500_000, "AnalogueGain": 2.0}
+        timelapse.exposure.seed_from_metadata = MagicMock()
+
+        timelapse._seed_across_mode_change(LightMode.TRANSITION)
+
+        timelapse.exposure.seed_from_metadata.assert_called_once_with(
+            {"ExposureTime": 500_000, "AnalogueGain": 2.0}
+        )
 
 
 class TestPolarAwareness:
