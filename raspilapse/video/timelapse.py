@@ -211,14 +211,25 @@ def create_video(
             "-stats",  # Show encoding progress
             "-loglevel",
             "info",  # Show informational messages
+            # `-r` belongs *before* `-i`, where it sets the rate the input is
+            # read at. After `-i` it is an output option, and against a concat
+            # input that makes it a constant-rate conversion: the demuxer
+            # inherits image2's implicit 25 fps and ffmpeg duplicates or drops
+            # frames to reach whatever `-r` asks for. Measured on this machine,
+            # 50 source images at `-r 30`: 60 encoded frames after `-i`, 50
+            # before it. At the configured 25 the two rates agree and it is a
+            # no-op, which is the only reason this went unnoticed.
+            #
+            # Not `-framerate`: the concat demuxer has no such option and
+            # ffmpeg 5.1.9 exits with "Option framerate not found".
+            "-r",
+            str(fps),
             "-f",
             "concat",
             "-safe",
             "0",
             "-i",
             list_file,
-            "-r",
-            str(fps),
             "-vcodec",
             codec,
             "-pix_fmt",
