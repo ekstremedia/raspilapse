@@ -18,6 +18,18 @@ The mode name survives as a label on the output -- the database column, the
 overlay, the graph scripts -- derived from the settings rather than deciding
 them.
 
+There is no handover across that label either, and there deliberately is not
+one. `seed_from_metadata` used to reseed the loop at the day-to-transition
+crossing from the last daylight frame's *camera* metadata. Its colour half was
+removed first, for bypassing the wb_speed cross-fade it was meant to feed; its
+exposure half was removed for the same class of reason. The metadata reports
+what the sensor *did*, and this sensor's analogue gain floor is 1.1228 while
+the ladder commands 1.0 -- so reseeding multiplied `_required` by 1.12 at every
+dusk, a 0.17-stop step measured on nine consecutive nights. Nothing needed
+seeding: `_required` already holds the last commanded value, which is the
+correct continuation. A boundary that no decision consults cannot need state
+carried across it.
+
 This module deliberately knows nothing about the camera, the clock, or where
 on Earth it is running.
 """
@@ -85,13 +97,6 @@ class ExposureController:
         self._smoothed_lux: Optional[float] = None
         self._lux_smoothing = transition.get("lux_smoothing_factor", 0.3)
 
-        # Handover state for the day-to-night boundary, where the camera stops
-        # using AWB and has to be told what neutral looked like.
-        self._seeded = False
-        self._seed_exposure: Optional[float] = None
-        self._seed_gain: Optional[float] = None
-        self._seed_wb: Optional[Tuple[float, float]] = None
-
         # What decide() decided, for the metadata diagnostics -- so the
         # calculation never runs twice per frame.
         self._last_decision: Dict = {}
@@ -136,10 +141,8 @@ class ExposureController:
         """
         if exposure_time is not None:
             self._shutter = exposure_time
-            self._seed_exposure = exposure_time
         if analogue_gain is not None:
             self._gain = analogue_gain
-            self._seed_gain = analogue_gain
         if exposure_time is not None:
             # The ladder's state is the product. A row with an exposure but no
             # gain is still worth having; assume the gain floor.
@@ -147,17 +150,12 @@ class ExposureController:
             self._position = ladder.position(self._required, self._max_shutter, self._max_gain)
         if colour_gains is not None:
             self._last_colour_gains = tuple(colour_gains)
-            self._seed_wb = tuple(colour_gains)
         if brightness is not None:
             self.meter.seed_brightness(brightness)
         if lux is not None:
             self._smoothed_lux = lux
         if mode is not None:
             self._mode = mode
-
-    def reset_seed_state(self) -> None:
-        """Forget the handover seed, on returning to the bright end."""
-        self._seeded = False
 
     # Read-only views for the capture loop and the metadata diagnostics.
     @property
@@ -171,14 +169,6 @@ class ExposureController:
     @property
     def last_brightness(self) -> Optional[float]:
         return self.meter.brightness
-
-    @property
-    def transition_seeded(self) -> bool:
-        return self._seeded
-
-    @property
-    def seed_exposure(self) -> Optional[float]:
-        return self._seed_exposure
 
     @property
     def ladder_position(self) -> float:
@@ -343,33 +333,6 @@ class ExposureController:
         logger.debug(
             f"[WB] Daylight reference: R={gains[0]:.2f} B={gains[1]:.2f}",
         )
-
-    def seed_from_metadata(self, capture_metadata: Dict = None):
-        """Carry the exposure across the day-to-night boundary.
-
-        Exposure only. This used to seed colour too, from the AWB reference
-        shot, on the reasoning that the handover was where the camera stopped
-        using AWB and the first manual frame had to match the last automatic
-        one. That stopped being true when white balance became manual on every
-        frame: there is no automatic frame to match any more, and assigning
-        _last_colour_gains here bypassed the wb_speed cross-fade, so it was the
-        seed itself that produced the one-frame colour step it was meant to
-        prevent. Colour now crosses the boundary the way it crosses everywhere
-        else -- a fraction of the way per frame.
-        """
-        source = capture_metadata or {}
-
-        exposure_us = source.get("ExposureTime")
-        gain = source.get("AnalogueGain")
-        if exposure_us:
-            shutter = exposure_us / 1_000_000
-            self._required = shutter * (gain or 1.0)
-            self._shutter = shutter
-            self._gain = gain
-            self._position = ladder.position(self._required, self._max_shutter, self._max_gain)
-
-        self._seeded = True
-        logger.info(f"[Handover] Seeded from metadata: exposure={self._shutter}, gain={self._gain}")
 
     def _wb_position(self, position: float) -> float:
         """Where in the day-to-night colour cross-fade this ladder position sits.

@@ -85,10 +85,13 @@ class Decision:
     raw_lux: Optional[float]
     ladder_position: Optional[float]
     settings: Dict[str, Any]
-    # Read the instant decide() returns. The handover seeding that runs a few
-    # lines later overwrites the controller's shutter, gain and ladder position
-    # from the last daylight frame's metadata, so asking for diagnostics after
-    # it describes the seed rather than the frame that was about to be taken.
+    # Read the instant decide() returns, so they describe the frame that was
+    # about to be taken. That used to be load-bearing: the handover seeding ran
+    # a few lines later and overwrote the controller's shutter, gain and ladder
+    # position from the last daylight frame's metadata, so diagnostics read
+    # afterwards described the seed instead. The seeding is gone -- see
+    # exposure.py's module docstring -- and nothing may reintroduce a writer
+    # between decide() and here.
     diagnostics: Dict[str, Any]
 
 
@@ -110,9 +113,6 @@ class AdaptiveTimelapse:
 
         # All exposure decisions and their state live here.
         self.exposure = ExposureController(self.config)
-
-        self._previous_mode: str = None  # Track mode changes for seeding detection
-        self._last_day_capture_metadata: Dict = None  # Metadata from last day mode capture
 
         # Where on the ladder the last white-balance reading was taken, and
         # when. The reading itself goes straight to the controller. See
@@ -762,8 +762,13 @@ class AdaptiveTimelapse:
         settings = self.exposure.decide()
         mode = self.exposure.last_mode
 
-        # Captured here, before _seed_across_mode_change can overwrite the
-        # state they describe. See the note on Decision.diagnostics.
+        # Read straight after decide(), so the diagnostics describe the frame
+        # they were recorded with. That used to be an ordering constraint
+        # rather than a fact: _seed_across_mode_change ran between these two
+        # and overwrote the shutter, gain and ladder position the diagnostics
+        # report, so every handover frame recorded the seed instead of its own
+        # exposure. The seeding is gone (see exposure.py's module docstring),
+        # so there is nothing left to race -- but keep the read here anyway.
         decision = Decision(
             mode=mode,
             lux=self.exposure.smoothed_lux,
@@ -773,31 +778,7 @@ class AdaptiveTimelapse:
             diagnostics=self.exposure.diagnostics(),
         )
 
-        self._seed_across_mode_change(mode)
-        self._previous_mode = mode
-
         return decision
-
-    def _seed_across_mode_change(self, mode: str) -> None:
-        """Hand exposure state across the day/night boundary.
-
-        The last daylight frame is the starting point for the climb into the
-        dark, so the controller is primed from it rather than continuing from
-        whatever the ladder happened to hold.
-
-        It used to prime colour from the AWB reference shot here as well. That
-        is gone: see seed_from_metadata.
-        """
-        entering_manual = self._previous_mode == LightMode.DAY and mode in (
-            LightMode.TRANSITION,
-            LightMode.NIGHT,
-        )
-        if entering_manual and not self.exposure.transition_seeded:
-            self.exposure.seed_from_metadata(self._last_day_capture_metadata)
-
-        if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
-            self.exposure.reset_seed_state()
-            logger.info("[Handover] Back at the bright end - seed state reset")
 
     def _measure_lux(self, brightness: Optional[float], settings: Dict) -> Optional[float]:
         """Estimate ambient light from the frame that was just taken.
@@ -892,14 +873,6 @@ class AdaptiveTimelapse:
             )
 
         capture_metadata = self._read_capture_metadata(metadata_path)
-
-        # Kept for the exposure handover, which needs the last real daylight
-        # frame. The white balance reference is not learned here: this frame
-        # was taken with AWB off, so its ColourGains are the ones the
-        # controller chose, not a reading of the scene. See
-        # _take_reference_shot.
-        if capture_metadata is not None and decision.mode == LightMode.DAY:
-            self._last_day_capture_metadata = capture_metadata
 
         if self._database is None:
             return

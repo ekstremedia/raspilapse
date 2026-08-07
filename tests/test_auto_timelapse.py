@@ -459,8 +459,6 @@ class TestWhiteBalanceWiring:
             os.unlink(metadata_path)
 
         timelapse.exposure.update_day_wb_reference.assert_not_called()
-        # Still kept: the exposure handover starts from the last daylight frame.
-        assert timelapse._last_day_capture_metadata["ColourGains"] == [2.9, 1.4]
 
     def test_the_reference_shot_is_where_it_is_learned(self, test_config_file):
         """The one frame taken with AWB on is the only honest source."""
@@ -493,19 +491,53 @@ class TestWhiteBalanceWiring:
         assert timelapse._reference_frame == 40
         assert timelapse._reference_position == timelapse.exposure.ladder_position
 
-    def test_the_handover_cannot_inject_awb_gains(self, test_config_file):
-        """seed_from_metadata assigns state directly, bypassing the wb_speed
-        cross-fade. Handing it the AWB reference shot is what produced the
-        one-frame step; it now takes the daylight frame and no colour at all."""
+    def test_deciding_leaves_the_controller_holding_what_it_decided(self, test_config_file):
+        """Nothing may rewrite the loop's state after decide() has run.
+
+        This is the test that fails if the day-to-transition seeding comes
+        back, in any spelling. _seed_across_mode_change ran immediately after
+        decide() and overwrote _required from the last daylight frame's camera
+        metadata -- whose AnalogueGain is the sensor's 1.1228 floor while the
+        ladder had commanded 1.0. The settings handed to the camera therefore
+        described one exposure and the controller's state described another
+        1.12x larger, and the next frame started from the wrong one. Nine
+        consecutive dusks in this camera's database show the resulting step:
+        200 043 -> 224 519 us, +8 to +11 points of mean brightness.
+
+        Asserting the equality rather than the absence catches a reseed however
+        it is written -- including one that does not go through a function
+        named `seed_*`.
+        """
         timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._previous_mode = LightMode.DAY
-        timelapse._last_day_capture_metadata = {"ExposureTime": 500_000, "AnalogueGain": 2.0}
-        timelapse.exposure.seed_from_metadata = MagicMock()
+        timelapse._database = None
 
-        timelapse._seed_across_mode_change(LightMode.TRANSITION)
+        # Walk down through the knee so a crossing actually happens, and check
+        # the invariant on every frame rather than only the one that flips.
+        knee = timelapse.exposure._max_shutter * 0.01
+        seen = set()
+        for _ in range(60):
+            decision = timelapse._decide()
+            seen.add(decision.mode)
 
-        timelapse.exposure.seed_from_metadata.assert_called_once_with(
-            {"ExposureTime": 500_000, "AnalogueGain": 2.0}
+            settings = decision.settings
+            delivered = (settings["ExposureTime"] / 1e6) * settings["AnalogueGain"]
+            # abs=1e-5 is the floor, not slack: ExposureTime is int(shutter *
+            # 1e6), so the delivered product is quantised to a microsecond
+            # times the gain -- at most 6e-6 here. The step this guards against
+            # is 0.0246 in the same units, 2400x larger.
+            assert timelapse.exposure._required == pytest.approx(delivered, rel=1e-4, abs=1e-5), (
+                f"the controller holds {timelapse.exposure._required} but handed the "
+                f"camera {delivered} -- something rewrote the state after decide()"
+            )
+
+            brightness = max(0.0, min(255.0, (120.0 / knee) * delivered))
+            timelapse.exposure.observe_frame(
+                {"mean_brightness": brightness, "std_brightness": 50.0}
+            )
+
+        assert {LightMode.DAY, LightMode.TRANSITION} <= seen, (
+            f"never crossed the day/transition knee, so the invariant was "
+            f"never tested where it used to break (saw {sorted(seen)})"
         )
 
 

@@ -338,6 +338,47 @@ def build():
         ],
     }
 
+    # --- the critical overexposure threshold -----------------------------
+    # This branch used to be covered by accident. The day-to-transition
+    # seeding overwrote the loop's state from the last daylight frame's camera
+    # metadata, and in the recorded night sequences that metadata describes a
+    # 12-second exposure at gain 6 while the replay was still climbing through
+    # 226 ms -- so the first transition frame teleported to the ceiling and
+    # came back at brightness 204. That overshoot crossed 170 on its way down,
+    # and it is what killed the `critical = 170` mutation. Removing the seeding
+    # removed the overshoot, and the mutation survived: nothing else in the
+    # corpus lands a frame in (169, 170], which is the only band where the two
+    # thresholds disagree. dawn_transition steps straight over it, 168.66 to
+    # 170.57.
+    #
+    # Reaching the band is not enough on its own. speed() returns
+    # max(smooth, recovery), and smooth is 1.0 at the bright end -- so where
+    # this kind of overexposure normally lives, both _fast_down (0.2) and
+    # _critical_down (0.7) lose to it and the severity cannot be observed. The
+    # frame has to be overexposed *and* far enough down the ladder that smooth
+    # sits between the two rates. Position 0.638 gives smooth 0.41, which 0.7
+    # beats and 0.2 does not.
+    #
+    # Holding both at once needs the scene to brighten at the rate the loop
+    # corrects: 9% a frame leaves the loop permanently chasing, lagging by a
+    # constant, and that constant is what parks a frame at 169.7 while the
+    # exposure is still around a second. A steady scene converges onto the
+    # target and never comes near 170; a step change crosses the band between
+    # frames without landing in it.
+    sequences["synthetic_overexposure_critical_edge"] = {
+        "description": (
+            "a dim scene brightening 9% a frame from a seeded one-second "
+            "exposure, so the loop lags by a fixed amount and parks a frame in "
+            "the (169, 170] band -- the only place `critical = 170` and "
+            "`critical = 169` disagree -- while the ladder position is still "
+            "0.638, low enough on the ladder that the critical rampdown rate "
+            "beats the smooth one and the choice between them is visible"
+        ),
+        "config": REPLAY_CONFIG,
+        "seed": {"exposure_time": 1.0, "analogue_gain": 1.0, "brightness": 120.0},
+        "frames": [frame(50, min(254.0, 80.0 * 1.09**i), exposure_us=1_000_000) for i in range(60)],
+    }
+
     return sequences
 
 
