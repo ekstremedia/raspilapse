@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The rest of the dusk step, and the reason the timelapse felt choppy.
+
+1.5.0 removed the *colour* half of the day-to-transition seeding. The exposure
+half was still there, and so was a second copy of the same mistake at every
+restart. Separately, the camera was being torn down and reopened 68 times a
+day to compute a white balance reading it then discarded — and each of those
+landed a frame three seconds late.
+
+### Fixed
+- **The exposure stepped 12% at every dusk.** `seed_from_metadata` reseeded the
+  loop from the last daylight frame's *camera* metadata at the day-to-transition
+  crossing. Metadata reports what the sensor did, not what was commanded, and
+  the sensor's analogue gain floor is 1.1228 where the ladder asks for 1.0.
+  Measured on nine consecutive nights: `200043 → 224519 µs` in one frame, mean
+  brightness +8 to +11 points. The ladder is continuous and nothing consults the
+  mode label, so no state needed carrying across the boundary at all — the
+  seeding is gone. This re-records the golden replay files; see the commit for
+  the before/after comparison and why it clears the bar `tests/replay/README.md`
+  sets for that.
+- **The same 12% step at every service restart.** `_seed_from_last_capture`
+  passed the database's `analogue_gain` column into the loop's state, and that
+  column holds the achieved gain, not the commanded one. Measured at the restart
+  on 2026-08-07 08:06:33: `604 → 657 µs`, brightness 119.9 → 126.2, corrected
+  one frame later. The column is now trusted only where the ladder genuinely
+  commands gain — at the shutter ceiling.
+- **The white balance reference shot ran on cameras that discard its answer.**
+  Where `fixed_colour_gains` is configured, `_target_colour_gains` prefers it
+  and never consults the learned reference — so the reading cost a camera
+  teardown and a late frame for nothing. The docstring already said so and told
+  the operator to set `test_shot.enabled: false` by hand. The controller now
+  answers that itself via `learns_day_wb`. Measured on 2026-08-06: 68 of the
+  day's 2879 intervals off by ≥2 s from 30, hourly on the dot plus a cluster
+  either side of midnight — a 10% wobble in playback speed about once a second
+  of finished video, worst at dawn and dusk. Cameras without a configured white
+  point are unaffected.
+- **An overrunning frame shifted every later frame, permanently.** The loop
+  slept `interval - elapsed` clamped at zero, so it kept whatever phase an
+  expensive frame left it on. Capture times now land on multiples of the
+  interval since the epoch: an overrun costs its own slots and no more, a
+  restart resumes the previous phase, and the per-frame creep from excluding
+  the wake-up from `elapsed` is gone.
+- **`-r` was set after `-i` in the ffmpeg command**, making it an output-side
+  constant-rate conversion rather than a declaration of the input rate. With
+  `video.fps: 25` it matched the concat demuxer's implicit rate and did nothing;
+  at 30 it duplicated frames — 50 source images became 60. Harmless until
+  somebody changed `video.fps`.
+
+### Added
+- `synthetic_overexposure_critical_edge` replay sequence. Removing the dusk
+  seeding removed the violent overshoot that used to be the only thing reaching
+  the critical-overexposure branch, and `mutation_check.py` caught the loss.
+
 ## [1.5.0] - 2026-08-07
 
 Two failures that had been misread for months, and the instrumentation to stop
