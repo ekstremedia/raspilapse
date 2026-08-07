@@ -30,11 +30,13 @@ IOSchedulingPriority=7
 # idle at 05:00.
 CPUWeight=20
 
-# A backstop, not a fix for anything observed -- measured peak is ~1.4 GB at
-# 4K and nothing here has ever come near OOM. It is here so that a future
-# change (someone setting preset: slow, a filter wedging) degrades slowly
-# instead of taking the capture loop down with it. MemoryHigh throttles and
-# reclaims; MemoryMax is the kill line, well above the real peak.
+# A backstop, not a fix for anything observed. Measured on this camera's 4K
+# frames: 1021 MB at the current veryfast/crf20/3-thread settings, against
+# 1399 MB for the fast/crf25/2-thread config that preceded them. Nothing has
+# ever come near OOM. This is here so a future change (someone setting
+# preset: slow, a filter wedging) degrades slowly instead of taking the
+# capture loop down with it. MemoryHigh throttles and reclaims; MemoryMax is
+# the kill line, well clear of the real peak.
 #
 # NOTE: Raspberry Pi OS ships with the memory cgroup controller disabled, so on
 # a stock Pi these two are accepted by systemd and then silently do nothing --
