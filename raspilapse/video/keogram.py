@@ -52,6 +52,246 @@ def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:
     return images
 
 
+def _save_slice(
+    canvas: "Image.Image",
+    output_path: Path,
+    quality: int,
+    label: str,
+    processed: int,
+    skipped: int,
+    resized: int,
+    logger: Optional[logging.Logger] = None,
+    extra: Optional[List[tuple]] = None,
+) -> bool:
+    """Write one finished canvas and report on it."""
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(str(output_path), "JPEG", quality=quality, optimize=True)
+
+        size_kb = output_path.stat().st_size / 1024
+        print(f"\n  {Colors.success('✓')} {label} saved: {Colors.bold(str(output_path))}")
+        print_info("Size", f"{size_kb:.1f} KB")
+        print_info("Dimensions", f"{canvas.width} x {canvas.height} pixels")
+        print_info("Processed", f"{processed} images")
+        for name, value in extra or []:
+            print_info(name, value)
+        if skipped > 0:
+            print(f"  {Colors.warning('⚠')} Skipped: {skipped} images")
+        if resized > 0:
+            print(f"  {Colors.warning('⚠')} Resized: {resized} images (different resolution)")
+
+        if logger:
+            logger.info(
+                f"{label} created: {output_path} "
+                f"({canvas.width}x{canvas.height}, {size_kb:.1f} KB)"
+            )
+        return True
+
+    except Exception as e:
+        msg = f"Failed to save {label.lower()}: {e}"
+        print(Colors.error(f"✗ {msg}"))
+        if logger:
+            logger.error(msg)
+        return False
+
+
+def create_time_slices(
+    image_paths: List[Path],
+    keogram_path: Optional[Path] = None,
+    slitscan_path: Optional[Path] = None,
+    quality: int = 95,
+    crop_top_percent: float = 7.0,
+    crop_bottom_percent: float = 0.0,
+    logger: Optional[logging.Logger] = None,
+) -> dict:
+    """
+    Build a keogram and/or a slitscan, decoding each source frame once.
+
+    Both outputs are a vertical strip taken from every frame; the only
+    difference is which strip and where it lands. Generating them separately
+    meant reading and JPEG-decoding the whole day twice -- on this camera, 2880
+    4K frames at ~123 ms a decode, so about five minutes of the daily job spent
+    decoding images it had already decoded a moment earlier.
+
+    The two resize rules are deliberately kept apart rather than unified. A
+    keogram matches height and preserves aspect ratio; a slitscan forces both
+    dimensions. They only diverge when a frame's dimensions differ from the
+    first frame's, which does not happen while the camera resolution is fixed
+    -- but unifying them would silently change keogram pixels on the day
+    somebody changes it.
+
+    Args:
+        image_paths: Image paths, sorted chronologically
+        keogram_path: Where to write the keogram, or None to skip it
+        slitscan_path: Where to write the slitscan, or None to skip it
+        quality: JPEG quality (1-100)
+        crop_top_percent: Percentage of height to crop from the top (overlay bar)
+        crop_bottom_percent: Percentage of height to crop from the bottom
+        logger: Optional logger
+
+    Returns:
+        Dict with a bool under 'keogram' and/or 'slitscan' for each output
+        that was requested.
+    """
+    want_keogram = keogram_path is not None
+    want_slitscan = slitscan_path is not None
+    results = {}
+    if want_keogram:
+        results["keogram"] = False
+    if want_slitscan:
+        results["slitscan"] = False
+
+    if not want_keogram and not want_slitscan:
+        return results
+
+    if not image_paths:
+        msg = "No images to process"
+        print(Colors.error(f"✗ {msg}"))
+        if logger:
+            logger.error(msg)
+        return results
+
+    num_images = len(image_paths)
+    print(f"  Processing {Colors.bold(str(num_images))} images...")
+
+    # Get dimensions from first image
+    try:
+        with Image.open(image_paths[0]) as first_img:
+            original_height = first_img.height
+            original_width = first_img.width
+    except Exception as e:
+        msg = f"Failed to read first image: {e}"
+        print(Colors.error(f"✗ {msg}"))
+        if logger:
+            logger.error(msg)
+        return results
+
+    # Calculate crop amounts
+    crop_top_px = int(original_height * crop_top_percent / 100)
+    crop_bottom_px = int(original_height * crop_bottom_percent / 100)
+    target_height = original_height - crop_top_px - crop_bottom_px
+
+    if crop_top_px > 0 or crop_bottom_px > 0:
+        print(f"  Cropping: top={crop_top_px}px, bottom={crop_bottom_px}px (overlay removal)")
+
+    if logger:
+        logger.info(f"Source image dimensions: {original_width}x{original_height}")
+        if want_keogram:
+            logger.info(f"Target dimensions: width={num_images}, height={target_height}")
+        if want_slitscan:
+            logger.info(f"Slitscan dimensions: {original_width}x{target_height}")
+            logger.info(f"Number of frames: {num_images}")
+        if crop_top_px > 0 or crop_bottom_px > 0:
+            logger.info(f"Cropping: top={crop_top_px}px, bottom={crop_bottom_px}px")
+
+    keogram = Image.new("RGB", (num_images, target_height)) if want_keogram else None
+    slitscan = Image.new("RGB", (original_width, target_height)) if want_slitscan else None
+
+    # How much of the output width each frame owns. Rarely a whole number --
+    # at 3840px over 2880 frames it is 1.333 -- so strips alternate between one
+    # and two pixels wide and the position has to be tracked as a float.
+    columns_per_frame = original_width / num_images
+    if want_slitscan and logger:
+        logger.info(f"Columns per frame: {columns_per_frame:.2f}")
+
+    processed = 0
+    skipped = 0
+    keogram_resized = 0
+    slitscan_resized = 0
+    current_x = 0.0
+
+    for i, img_path in enumerate(image_paths):
+        try:
+            with Image.open(img_path) as img:
+                img_width, img_height = img.size
+
+                if want_keogram:
+                    # Keogram: match height, preserve aspect ratio.
+                    frame, frame_width, frame_height = img, img_width, img_height
+                    if img_height != original_height:
+                        scale = original_height / img_height
+                        frame_width = int(img_width * scale)
+                        frame_height = original_height
+                        frame = img.resize((frame_width, frame_height), Image.Resampling.LANCZOS)
+                        keogram_resized += 1
+                        if logger and keogram_resized == 1:
+                            logger.warning(
+                                f"Image {img_path.name} has different height "
+                                f"({img_height} vs {original_height}), resizing"
+                            )
+
+                    center_x = frame_width // 2
+                    strip = frame.crop(
+                        (center_x, crop_top_px, center_x + 1, frame_height - crop_bottom_px)
+                    )
+                    keogram.paste(strip, (i, 0))
+
+                if want_slitscan:
+                    # Slitscan: force both dimensions.
+                    frame, frame_height = img, img_height
+                    if img_width != original_width or img_height != original_height:
+                        source_dims = (img_width, img_height)
+                        frame = img.resize(
+                            (original_width, original_height), Image.Resampling.LANCZOS
+                        )
+                        frame_height = original_height
+                        slitscan_resized += 1
+                        if logger and slitscan_resized == 1:
+                            logger.warning(
+                                f"Image {img_path.name} has different dimensions "
+                                f"({source_dims} vs {original_width}x{original_height}), resizing"
+                            )
+
+                    start_x = int(current_x)
+                    next_x = current_x + columns_per_frame
+                    end_x = int(next_x)
+                    if end_x <= start_x:
+                        end_x = start_x + 1
+                    if end_x > original_width:
+                        end_x = original_width
+
+                    strip = frame.crop((start_x, crop_top_px, end_x, frame_height - crop_bottom_px))
+                    slitscan.paste(strip, (start_x, 0))
+                    current_x = next_x
+
+                processed += 1
+
+        except Exception as e:
+            skipped += 1
+            if logger:
+                logger.warning(f"Failed to process {img_path.name}: {e}")
+            # Advance regardless of which outputs are enabled. A frame owns its
+            # slice of the output width whether or not it could be read, so a
+            # skipped frame leaves a gap rather than shifting every frame after
+            # it one strip to the left.
+            current_x += columns_per_frame
+            continue
+
+        # Progress update every 10%
+        if (i + 1) % max(1, num_images // 10) == 0:
+            pct = (i + 1) * 100 // num_images
+            print(f"  {Colors.CYAN}→{Colors.END} Progress: {pct}% ({i + 1}/{num_images})")
+
+    if want_keogram:
+        results["keogram"] = _save_slice(
+            keogram, keogram_path, quality, "Keogram", processed, skipped, keogram_resized, logger
+        )
+    if want_slitscan:
+        results["slitscan"] = _save_slice(
+            slitscan,
+            slitscan_path,
+            quality,
+            "Slitscan",
+            processed,
+            skipped,
+            slitscan_resized,
+            logger,
+            extra=[("Columns/frame", f"{columns_per_frame:.2f}")],
+        )
+
+    return results
+
+
 def create_keogram(
     image_paths: List[Path],
     output_path: Path,
@@ -66,6 +306,10 @@ def create_keogram(
     Takes the center vertical column (1 pixel wide) from each image and
     stitches them together horizontally to show the passage of time.
 
+    Thin wrapper over create_time_slices, which is where the work is. Use that
+    directly when you want a slitscan as well, so the frames are decoded once
+    instead of twice.
+
     Args:
         image_paths: List of image paths (must be sorted chronologically)
         output_path: Path for the output keogram image
@@ -77,125 +321,14 @@ def create_keogram(
     Returns:
         True if successful, False otherwise
     """
-    if not image_paths:
-        msg = "No images to process"
-        print(Colors.error(f"✗ {msg}"))
-        if logger:
-            logger.error(msg)
-        return False
-
-    num_images = len(image_paths)
-    print(f"  Processing {Colors.bold(str(num_images))} images...")
-
-    # Get dimensions from first image
-    try:
-        with Image.open(image_paths[0]) as first_img:
-            original_height = first_img.height
-            first_width = first_img.width
-    except Exception as e:
-        msg = f"Failed to read first image: {e}"
-        print(Colors.error(f"✗ {msg}"))
-        if logger:
-            logger.error(msg)
-        return False
-
-    # Calculate crop amounts
-    crop_top_px = int(original_height * crop_top_percent / 100)
-    crop_bottom_px = int(original_height * crop_bottom_percent / 100)
-    target_height = original_height - crop_top_px - crop_bottom_px
-
-    if crop_top_px > 0 or crop_bottom_px > 0:
-        print(f"  Cropping: top={crop_top_px}px, bottom={crop_bottom_px}px (overlay removal)")
-
-    if logger:
-        logger.info(f"Target dimensions: width={num_images}, height={target_height}")
-        logger.info(f"Source image dimensions: {first_width}x{original_height}")
-        if crop_top_px > 0 or crop_bottom_px > 0:
-            logger.info(f"Cropping: top={crop_top_px}px, bottom={crop_bottom_px}px")
-
-    # Create the keogram canvas
-    # Width = number of images (1 pixel per image)
-    # Height = height of source images
-    keogram = Image.new("RGB", (num_images, target_height))
-
-    # Process each image
-    processed = 0
-    skipped = 0
-    resized = 0
-
-    for i, img_path in enumerate(image_paths):
-        try:
-            with Image.open(img_path) as img:
-                img_width, img_height = img.size
-
-                # Handle resolution changes - resize if height differs from original
-                if img_height != original_height:
-                    # Save original dimensions for logging before we overwrite them
-                    source_height = img_height
-                    # Resize to match original height while preserving aspect ratio
-                    scale = original_height / img_height
-                    new_width = int(img_width * scale)
-                    img = img.resize((new_width, original_height), Image.Resampling.LANCZOS)
-                    img_width = new_width
-                    img_height = original_height
-                    resized += 1
-                    if logger and resized == 1:
-                        logger.warning(
-                            f"Image {img_path.name} has different height "
-                            f"({source_height} vs {original_height}), resizing"
-                        )
-
-                # Extract center vertical column (1 pixel wide), with crop applied
-                center_x = img_width // 2
-                # Crop box: (left, top, right, bottom)
-                strip = img.crop((center_x, crop_top_px, center_x + 1, img_height - crop_bottom_px))
-
-                # Paste into keogram at position i
-                keogram.paste(strip, (i, 0))
-                processed += 1
-
-        except Exception as e:
-            skipped += 1
-            if logger:
-                logger.warning(f"Failed to process {img_path.name}: {e}")
-            continue
-
-        # Progress update every 10%
-        if (i + 1) % max(1, num_images // 10) == 0:
-            pct = (i + 1) * 100 // num_images
-            print(f"  {Colors.CYAN}→{Colors.END} Progress: {pct}% ({i + 1}/{num_images})")
-
-    # Save the keogram
-    try:
-        # Ensure output directory exists
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        keogram.save(str(output_path), "JPEG", quality=quality, optimize=True)
-
-        size_kb = output_path.stat().st_size / 1024
-        print(f"\n  {Colors.success('✓')} Keogram saved: {Colors.bold(str(output_path))}")
-        print_info("Size", f"{size_kb:.1f} KB")
-        print_info("Dimensions", f"{num_images} x {target_height} pixels")
-        print_info("Processed", f"{processed} images")
-        if skipped > 0:
-            print(f"  {Colors.warning('⚠')} Skipped: {skipped} images")
-        if resized > 0:
-            print(f"  {Colors.warning('⚠')} Resized: {resized} images (different resolution)")
-
-        if logger:
-            logger.info(
-                f"Keogram created: {output_path} "
-                f"({num_images}x{target_height}, {size_kb:.1f} KB)"
-            )
-
-        return True
-
-    except Exception as e:
-        msg = f"Failed to save keogram: {e}"
-        print(Colors.error(f"✗ {msg}"))
-        if logger:
-            logger.error(msg)
-        return False
+    return create_time_slices(
+        image_paths,
+        keogram_path=output_path,
+        quality=quality,
+        crop_top_percent=crop_top_percent,
+        crop_bottom_percent=crop_bottom_percent,
+        logger=logger,
+    ).get("keogram", False)
 
 
 def create_slitscan(
@@ -221,6 +354,10 @@ def create_slitscan(
 
     The result shows the actual scene, but time progresses from left to right.
 
+    Thin wrapper over create_time_slices, which is where the work is. Use that
+    directly when you want a keogram as well, so the frames are decoded once
+    instead of twice.
+
     Args:
         image_paths: List of image paths (must be sorted chronologically)
         output_path: Path for the output slitscan image
@@ -232,146 +369,14 @@ def create_slitscan(
     Returns:
         True if successful, False otherwise
     """
-    if not image_paths:
-        msg = "No images to process"
-        print(Colors.error(f"✗ {msg}"))
-        if logger:
-            logger.error(msg)
-        return False
-
-    num_images = len(image_paths)
-    print(f"  Processing {Colors.bold(str(num_images))} images...")
-
-    # Get dimensions from first image
-    try:
-        with Image.open(image_paths[0]) as first_img:
-            original_height = first_img.height
-            original_width = first_img.width
-    except Exception as e:
-        msg = f"Failed to read first image: {e}"
-        print(Colors.error(f"✗ {msg}"))
-        if logger:
-            logger.error(msg)
-        return False
-
-    # Calculate crop amounts
-    crop_top_px = int(original_height * crop_top_percent / 100)
-    crop_bottom_px = int(original_height * crop_bottom_percent / 100)
-    target_height = original_height - crop_top_px - crop_bottom_px
-
-    if crop_top_px > 0 or crop_bottom_px > 0:
-        print(f"  Cropping: top={crop_top_px}px, bottom={crop_bottom_px}px (overlay removal)")
-
-    if logger:
-        logger.info(f"Slitscan dimensions: {original_width}x{target_height}")
-        logger.info(f"Source image dimensions: {original_width}x{original_height}")
-        logger.info(f"Number of frames: {num_images}")
-        if crop_top_px > 0 or crop_bottom_px > 0:
-            logger.info(f"Cropping: top={crop_top_px}px, bottom={crop_bottom_px}px")
-
-    # Create the slitscan canvas (same width as original images)
-    slitscan = Image.new("RGB", (original_width, target_height))
-
-    # Calculate how many columns each frame contributes
-    # and track position using floating point for accuracy
-    columns_per_frame = original_width / num_images
-
-    if logger:
-        logger.info(f"Columns per frame: {columns_per_frame:.2f}")
-
-    # Process each image
-    processed = 0
-    skipped = 0
-    resized = 0
-    current_x = 0.0
-
-    for i, img_path in enumerate(image_paths):
-        try:
-            with Image.open(img_path) as img:
-                img_width, img_height = img.size
-
-                # Handle resolution changes - resize if dimensions differ
-                if img_width != original_width or img_height != original_height:
-                    source_dims = (img_width, img_height)
-                    img = img.resize((original_width, original_height), Image.Resampling.LANCZOS)
-                    img_width, img_height = original_width, original_height
-                    resized += 1
-                    if logger and resized == 1:
-                        logger.warning(
-                            f"Image {img_path.name} has different dimensions "
-                            f"({source_dims} vs {original_width}x{original_height}), resizing"
-                        )
-
-                # Calculate the x position in the source image for this frame
-                # Each frame's strip comes from the corresponding position in the source
-                start_x = int(current_x)
-                next_x = current_x + columns_per_frame
-                end_x = int(next_x)
-
-                # Ensure we have at least 1 pixel width
-                if end_x <= start_x:
-                    end_x = start_x + 1
-
-                # Ensure we don't exceed image bounds
-                if end_x > original_width:
-                    end_x = original_width
-
-                # Extract the vertical strip from the source position (with crop applied)
-                # The key insight: we take strip from position X in source,
-                # and place it at position X in output
-                strip = img.crop((start_x, crop_top_px, end_x, img_height - crop_bottom_px))
-
-                # Paste into slitscan at the same x position
-                slitscan.paste(strip, (start_x, 0))
-                processed += 1
-
-                current_x = next_x
-
-        except Exception as e:
-            skipped += 1
-            if logger:
-                logger.warning(f"Failed to process {img_path.name}: {e}")
-            # Still advance position even on failure
-            current_x += columns_per_frame
-            continue
-
-        # Progress update every 10%
-        if (i + 1) % max(1, num_images // 10) == 0:
-            pct = (i + 1) * 100 // num_images
-            print(f"  {Colors.CYAN}→{Colors.END} Progress: {pct}% ({i + 1}/{num_images})")
-
-    # Save the slitscan
-    try:
-        # Ensure output directory exists
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        slitscan.save(str(output_path), "JPEG", quality=quality, optimize=True)
-
-        size_kb = output_path.stat().st_size / 1024
-        print(f"\n  {Colors.success('✓')} Slitscan saved: {Colors.bold(str(output_path))}")
-        print_info("Size", f"{size_kb:.1f} KB")
-        print_info("Dimensions", f"{original_width} x {target_height} pixels")
-        print_info("Processed", f"{processed} images")
-        print_info("Columns/frame", f"{columns_per_frame:.2f}")
-        if skipped > 0:
-            print(f"  {Colors.warning('⚠')} Skipped: {skipped} images")
-        if resized > 0:
-            print(f"  {Colors.warning('⚠')} Resized: {resized} images (different resolution)")
-
-        if logger:
-            logger.info(
-                f"Slitscan created: {output_path} "
-                f"({original_width}x{target_height}, {size_kb:.1f} KB)"
-            )
-
-        return True
-
-    except Exception as e:
-        msg = f"Failed to save slitscan: {e}"
-        print(Colors.error(f"✗ {msg}"))
-        if logger:
-            logger.error(msg)
-        return False
+    return create_time_slices(
+        image_paths,
+        slitscan_path=output_path,
+        quality=quality,
+        crop_top_percent=crop_top_percent,
+        crop_bottom_percent=crop_bottom_percent,
+        logger=logger,
+    ).get("slitscan", False)
 
 
 def main():
