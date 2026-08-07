@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-07
+
+Two failures that had been misread for months, and the instrumentation to stop
+the next one being guesswork.
+
+Cameras appeared to freeze every week or two; they were losing their network
+while capturing perfectly. And every dusk put a one-frame colour step in the
+timelapse while daylight colour drifted a little each day, from AWB readings
+reaching manual gains by paths that stopped making sense when white balance
+became manual on every frame.
+
+Alongside those: the daily 4K video is 2.5x faster and closer to the source at
+the same time, the videos it produces are finally expired instead of
+accumulating forever, and the capture table records the memory, disk, uptime
+and network state it had been collecting and discarding since it was written.
+
 ### Fixed
 - **Cameras that "froze" every week or two were losing their network, not
   hanging.** Diagnosed on a Pi that had run 9.3 days: capture never missed a

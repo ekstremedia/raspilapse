@@ -1,6 +1,6 @@
 """Version information for Raspilapse."""
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 __author__ = "Terje Nesthus"
 __email__ = "terje@ekstremedia.no"
 __license__ = "MIT"
@@ -8,7 +8,9 @@ __description__ = "Continuous adaptive timelapse capture for the Raspberry Pi ca
 __url__ = "https://github.com/ekstremedia/raspilapse"
 
 # Version history:
+# 1.5.0 - Network watchdog, capture telemetry, video retention, faster 4K encode
 # 1.4.0 - Removed the ML exposure system, single installer, logging and database overhaul
+#         (tagged only at 1.5.0; 1.4.0 shipped as code but was never released)
 # 1.1.0 - Documentation audit, production cleanup, removed legacy migration code
 # 1.0.9 - Database graph generator with Gaussian smoothing and temperature gradients
 # 1.0.8 - Fixed EV safety clamp, ML-based adaptive exposure, SQLite database storage

@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
 title: "Raspilapse: Raspberry Pi Camera Timelapse Library"
-version: 1.4.0
-date-released: '2026-07-26'
+version: 1.5.0
+date-released: '2026-08-07'
 url: "https://github.com/ekstremedia/raspilapse"
 repository-code: "https://github.com/ekstremedia/raspilapse"
 license: MIT
