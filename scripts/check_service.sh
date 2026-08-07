@@ -47,9 +47,17 @@ except Exception:
 last_capture_age() {
     local dir newest
     dir=$(image_dir)
-    newest=$(find "$dir" -name '*.jpg' -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+    # Taking the max in one pass rather than `sort -rn | head -1`. head exits
+    # after the first line, so sort was left writing into a closed pipe on
+    # every run, and set -o pipefail surfaced that as "sort: write error" --
+    # two lines every five minutes, into a journal that is already at its size
+    # cap and therefore evicting the history you need when something does go
+    # wrong. It also drops a full sort of ~20,000 paths, and awk truncating the
+    # fraction means the caller no longer has to strip it.
+    newest=$(find "$dir" -name '*.jpg' -type f -printf '%T@\n' 2>/dev/null |
+        awk 'BEGIN { m = 0 } $1 > m { m = $1 } END { if (m > 0) printf "%d\n", m }')
     if [ -n "$newest" ]; then
-        echo $(( $(date +%s) - ${newest%.*} ))
+        echo $(( $(date +%s) - newest ))
     else
         echo 999999
     fi
