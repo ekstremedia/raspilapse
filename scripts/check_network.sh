@@ -214,7 +214,14 @@ main() {
         log "wifi radio was disabled, re-enabling"
         nmcli radio wifi on
     fi
-    rfkill unblock wifi 2>/dev/null || true
+    # Conditional, because rfkill writes a syslog line on every invocation even
+    # when there was nothing to unblock. Called unconditionally on a 2-minute
+    # timer that is ~720 lines a day into a journal already at its size cap --
+    # the same spam this branch just removed from check_service.sh.
+    if rfkill list wifi 2>/dev/null | grep -qi "blocked: yes"; then
+        log "wifi is rfkill-blocked, unblocking"
+        rfkill unblock wifi 2>/dev/null || true
+    fi
 
     local count first seen now
     read -r count first seen <<<"$(read_state)"

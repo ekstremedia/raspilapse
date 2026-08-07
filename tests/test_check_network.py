@@ -50,7 +50,13 @@ exit "${STUB_PING:-1}"
 echo "systemctl $*" >>"$CALLS"
 exit 0
 """,
-    "rfkill": "#!/bin/bash\nexit 0\n",
+    "rfkill": r"""#!/bin/bash
+echo "rfkill $*" >>"$CALLS"
+case "$1" in
+    list) printf '1: phy0: Wireless LAN\n\tSoft blocked: %s\n\tHard blocked: no\n' "${STUB_RFKILL:-no}" ;;
+esac
+exit 0
+""",
     "logger": "#!/bin/bash\nexit 0\n",
     "sleep": "#!/bin/bash\nexit 0\n",
 }
@@ -267,3 +273,19 @@ class TestCorruptStamp:
         _, calls = run(env, state=f"9 {int(time.time()) - 7200} 1")
         assert "systemctl reboot" in calls
         assert Path(env["RASPILAPSE_LAST_REBOOT"]).exists()
+
+
+class TestRfkill:
+    """rfkill logs to syslog on every invocation, even a no-op one."""
+
+    def test_an_unblocked_radio_is_left_alone(self, env):
+        """Calling unblock unconditionally on a 2-minute timer is ~720 syslog
+        lines a day for nothing, into a journal already at its size cap."""
+        env |= {"STUB_ROUTE": ROUTE_OK, "STUB_PING": "0"}
+        _, calls = run(env)
+        assert "rfkill unblock" not in calls
+
+    def test_a_blocked_radio_is_unblocked(self, env):
+        env |= {"STUB_ROUTE": ROUTE_OK, "STUB_PING": "0", "STUB_RFKILL": "yes"}
+        _, calls = run(env)
+        assert "rfkill unblock wifi" in calls
