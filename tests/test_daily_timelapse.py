@@ -716,6 +716,7 @@ class TestConcurrencyLock:
 
     def test_a_second_run_backs_off_without_failing(self, tmp_path, monkeypatch):
         import fcntl
+
         import raspilapse.video.daily as daily
 
         monkeypatch.setattr(daily, "PROJECT_ROOT", tmp_path)
@@ -738,6 +739,7 @@ class TestConcurrencyLock:
 
     def test_the_lock_is_free_when_nothing_is_running(self, tmp_path, monkeypatch):
         import fcntl
+
         import raspilapse.video.daily as daily
 
         monkeypatch.setattr(daily, "PROJECT_ROOT", tmp_path)

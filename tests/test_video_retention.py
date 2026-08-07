@@ -7,7 +7,6 @@ of these are about what is *kept*.
 import os
 import sqlite3
 import time
-from pathlib import Path
 
 import pytest
 
