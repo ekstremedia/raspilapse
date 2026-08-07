@@ -12,6 +12,7 @@
 #   ./scripts/install.sh                       install capture, cleanup, daily-video, upload-retry
 #   ./scripts/install.sh --only capture,cleanup
 #   ./scripts/install.sh --with-watchdog       also install the stall watchdog (runs as root)
+#   ./scripts/install.sh --with-netwatch       also install the network watchdog (runs as root)
 #   ./scripts/install.sh --check               check dependencies and config, install nothing
 #   ./scripts/install.sh --dry-run             print the rendered units and exit
 #   ./scripts/install.sh --uninstall           remove everything this script installs
@@ -39,6 +40,7 @@ declare -A COMPONENT_UNITS=(
     [daily-video]="raspilapse-daily-video.service raspilapse-daily-video.timer"
     [upload-retry]="raspilapse-upload-retry.service raspilapse-upload-retry.timer"
     [watchdog]="raspilapse-watchdog.service raspilapse-watchdog.timer"
+    [netwatch]="raspilapse-netwatch.service raspilapse-netwatch.timer"
 )
 # Units to `systemctl enable`. Timers are enabled; the services they trigger
 # are not, and daily-video/upload-retry/watchdog services have no [Install]
@@ -49,6 +51,7 @@ declare -A ENABLE_UNITS=(
     [daily-video]="raspilapse-daily-video.timer"
     [upload-retry]="raspilapse-upload-retry.timer"
     [watchdog]="raspilapse-watchdog.timer"
+    [netwatch]="raspilapse-netwatch.timer"
 )
 
 # python3-picamera2 depends on python3-numpy and python3-pil, so naming those
@@ -76,16 +79,19 @@ declare -A PY_OPTIONAL=(
 
 components=()
 with_watchdog=0
+with_netwatch=0
 mode=install
 
-# 2..18 is the header comment; line 19 is `set -euo pipefail`, which has no
-# leading # and would otherwise be printed as part of the help text.
-usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+# 2..19 is the header comment; line 20 is `set -euo pipefail`, which has no
+# leading # and would otherwise be printed as part of the help text. Adding a
+# usage line above means moving this range with it.
+usage() { sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --only) IFS=',' read -ra components <<<"${2:?--only needs a comma-separated list}"; shift 2 ;;
         --with-watchdog) with_watchdog=1; shift ;;
+        --with-netwatch) with_netwatch=1; shift ;;
         --check)     mode=check;     shift ;;
         --dry-run)   mode=dry-run;   shift ;;
         --uninstall) mode=uninstall; shift ;;
@@ -96,10 +102,11 @@ done
 
 [ ${#components[@]} -eq 0 ] && components=("${ALL_COMPONENTS[@]}")
 [ "$with_watchdog" -eq 1 ] && components+=(watchdog)
+[ "$with_netwatch" -eq 1 ] && components+=(netwatch)
 
 for c in "${components[@]}"; do
     if [ -z "${COMPONENT_UNITS[$c]:-}" ]; then
-        err "Unknown component '$c'. Valid: ${ALL_COMPONENTS[*]} watchdog"
+        err "Unknown component '$c'. Valid: ${ALL_COMPONENTS[*]} watchdog netwatch"
         exit 2
     fi
 done
@@ -273,6 +280,18 @@ do_install() {
     sudo systemctl restart systemd-journald
     ok "Capped the journal at 200 MB"
 
+    # Only with the network watchdog: on a camera that is not having wifi
+    # trouble there is no reason to touch NetworkManager's configuration.
+    if [[ " ${components[*]} " == *" netwatch "* ]]; then
+        sudo mkdir -p /etc/NetworkManager/conf.d
+        sudo install -m 644 "$PROJECT_DIR/systemd/nm-raspilapse.conf" \
+            /etc/NetworkManager/conf.d/99-raspilapse.conf
+        # Deliberately not restarting NetworkManager here: that would drop the
+        # SSH session of whoever is running the installer. It applies on the
+        # next activation, which is soon enough for a power-save setting.
+        ok "Installed NetworkManager drop-in (applies on next reconnect)"
+    fi
+
     sudo systemctl daemon-reload
 
     for c in "${components[@]}"; do
@@ -305,6 +324,7 @@ do_uninstall() {
     done
 
     sudo rm -f /etc/systemd/journald.conf.d/journald-raspilapse.conf
+    sudo rm -f /etc/NetworkManager/conf.d/99-raspilapse.conf
     sudo systemctl daemon-reload
     sudo systemctl reset-failed 'raspilapse-*' 2>/dev/null || true
 
