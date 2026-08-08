@@ -10,24 +10,41 @@ safety rule needs the upload queue, and the queue is SQLite.
 """
 
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
+from raspilapse.config import get_db_path
 from raspilapse.logging_setup import get_logger
 
 logger = get_logger("video_retention")
 
-# What a day's render leaves behind. Anchored patterns rather than a bare *.jpg
-# so nothing unrelated that happens to live in the video directory is caught.
-VIDEO_PATTERNS = ("*.mp4", "keogram_*.jpg", "slitscan_*.jpg")
+# The day a file covers, read from its name: every generated name leads with
+# {project}_{YYYY-MM-DD}, and keograms/slitscans carry the same stem.
+_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+def _video_patterns(project_name: str) -> tuple:
+    """What a day's render leaves behind, anchored to this camera's project.
+
+    Anchored on the project name -- not a bare *.mp4 -- so an mp4 someone
+    parked in the web root, or a second camera writing into the same tree,
+    is never swept up on age alone.
+    """
+    return (
+        f"{project_name}_*.mp4",
+        f"keogram_{project_name}_*.jpg",
+        f"slitscan_{project_name}_*.jpg",
+    )
+
 
 # A row in any other state may still be uploaded, so its files stay put.
 UPLOADED_STATUS = "success"
 
 
-def _protected_paths(db_path: Path) -> Dict[str, str]:
+def _protected_paths(db_path: Path, upload_configured: bool = False) -> Dict[str, str]:
     """Absolute paths that must not be deleted, mapped to why.
 
     Anything the upload queue still knows about in a state other than
@@ -43,6 +60,13 @@ def _protected_paths(db_path: Path) -> Dict[str, str]:
     """
     protected: Dict[str, str] = {}
     if not db_path.exists():
+        if upload_configured:
+            # With uploads in play, a missing file where the queue should be
+            # is indistinguishable from a mispointed database.path -- and
+            # answering "nothing is protected" to that deletes the only copy
+            # of every day that never uploaded. Refuse, like the unreadable
+            # case below. Without uploads there is nothing to protect.
+            raise sqlite3.OperationalError(f"upload queue database not found at {db_path}")
         return protected
 
     try:
@@ -119,22 +143,35 @@ def prune_videos(
         result["skipped"] = f"no video directory at {directory}"
         return result
 
+    upload_cfg = config.get("video_upload") or {}
+    upload_configured = bool(upload_cfg) and upload_cfg.get("enabled", True)
     try:
-        protected = _protected_paths(Path((config.get("database", {}) or {}).get("path", "")))
+        # get_db_path resolves a relative database.path against the project
+        # root, so this no longer depends on the caller's cwd.
+        protected = _protected_paths(Path(get_db_path(config)), upload_configured)
     except sqlite3.Error:
         result["skipped"] = "upload queue unreadable"
         return result
 
-    cutoff = (datetime.now() - timedelta(days=retention_days)).timestamp()
+    now = datetime.now()
+    cutoff_ts = (now - timedelta(days=retention_days)).timestamp()
+    cutoff_date = (now - timedelta(days=retention_days)).date()
+    project_name = (config.get("output", {}) or {}).get("project_name", "timelapse")
     deleted: List[str] = []
+    deleted_parents = set()
     freed = 0
 
-    for pattern in VIDEO_PATTERNS:
+    for pattern in _video_patterns(project_name):
         for path in sorted(directory.rglob(pattern)):
-            # Never follow a symlink out of the video directory.
-            if path.is_symlink() or not path.is_file():
-                continue
-            if path.stat().st_mtime >= cutoff:
+            try:
+                # Never follow a symlink out of the video directory.
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if not _past_retention(path, cutoff_date, cutoff_ts):
+                    continue
+                size = path.stat().st_size
+            except OSError:
+                # Vanished mid-prune; the next run settles it.
                 continue
 
             key = str(path.resolve())
@@ -143,7 +180,6 @@ def prune_videos(
                 result["kept_protected"].append(key)
                 continue
 
-            size = path.stat().st_size
             if dry_run:
                 logger.info(f"[Retention] Would delete {path} ({size / 1048576:.1f} MB)")
             else:
@@ -154,10 +190,11 @@ def prune_videos(
                     continue
                 logger.info(f"[Retention] Deleted {path} ({size / 1048576:.1f} MB)")
             deleted.append(key)
+            deleted_parents.add(path.parent)
             freed += size
 
-    if not dry_run:
-        _remove_empty_dirs(directory)
+    if not dry_run and deleted_parents:
+        _remove_empty_dirs(directory, deleted_parents)
 
     result["deleted"] = deleted
     result["bytes"] = freed
@@ -169,15 +206,48 @@ def prune_videos(
     return result
 
 
-def _remove_empty_dirs(root: Path) -> None:
-    """Drop the YYYY/MM directories a prune has emptied, as the image cleanup does."""
-    for path in sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
-        if path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
+def _past_retention(path: Path, cutoff_date, cutoff_ts: float) -> bool:
+    """Whether a file has aged out of the window.
+
+    By the date in its name when there is one: the filename carries the day
+    the file covers, while mtime does not survive clock steps (no RTC --
+    fake-hwclock plus a late NTP sync can stamp a fresh render with a
+    month-old time) and resets whenever an old day is re-rendered. Names
+    without a parsable date fall back to mtime.
+    """
+    m = _DATE_RE.search(path.name)
+    if m:
+        try:
+            covered = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+            return covered < cutoff_date
+        except ValueError:
+            pass
+    return path.stat().st_mtime < cutoff_ts
+
+
+def _remove_empty_dirs(root: Path, parents: Iterable[Path]) -> None:
+    """Drop the YYYY/MM directories this prune emptied -- and only those.
+
+    Walking everything under the root removed empty directories the prune had
+    nothing to do with, in a tree other things share. Instead climb from the
+    parents of the files actually deleted, stopping at the first non-empty
+    directory or at the video root.
+    """
+    root = root.resolve()
+    for parent in sorted(set(parents), key=lambda p: len(p.parts), reverse=True):
+        current = parent
+        while True:
             try:
-                path.rmdir()
-                logger.debug(f"[Retention] Removed empty directory {path}")
+                resolved = current.resolve()
+                if resolved == root or root not in resolved.parents:
+                    break
+                if current.is_symlink() or not current.is_dir() or any(current.iterdir()):
+                    break
+                current.rmdir()
+                logger.debug(f"[Retention] Removed empty directory {current}")
             except OSError:
-                pass
+                break
+            current = current.parent
 
 
 def main() -> int:

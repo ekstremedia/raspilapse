@@ -12,10 +12,20 @@ be tested without an image, a font or a camera.
 
 import locale
 import logging
+import threading
 from datetime import datetime
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
+
+# Locales that already failed to load, so the warning fires once per locale
+# rather than once per frame -- 2,880 journal lines a day at a 30 s interval.
+_warned_locales: set = set()
+
+# setlocale() mutates process-global state and is not thread-safe; serialize
+# the read-set-format-restore cycle so concurrent callers cannot interleave
+# and restore each other's locale.
+_locale_lock = threading.Lock()
 
 
 def exposure_time(exposure_us: int) -> str:
@@ -25,24 +35,21 @@ def exposure_time(exposure_us: int) -> str:
         exposure_us: Exposure time in microseconds.
 
     Returns:
-        e.g. " 500µs", "  5.0ms", "1/ 500s", " 15.0s".
+        e.g. " 500µs", "  5.0ms", " 15.0s".
     """
     if exposure_us < 1000:
         # Microseconds: XXXXµs (6 chars)
         return f"{exposure_us:4d}µs"
-    elif exposure_us < 1_000_000:
-        ms = exposure_us / 1000
-        # Milliseconds: XXX.Xms (7 chars)
-        return f"{ms:5.1f}ms"
-    else:
-        seconds = exposure_us / 1_000_000
-        if seconds < 1:
-            # Fraction format: 1/XXXX (7 chars)
-            fraction = int(1 / seconds)
-            return f"1/{fraction:4d}s"
-        else:
-            # Seconds: XX.Xs (6 chars, right-aligned)
-            return f"{seconds:5.1f}s"
+    seconds = exposure_us / 1_000_000
+    if seconds < 0.99995:
+        # Milliseconds: XXX.Xms (7 chars). The threshold keeps 999999µs from
+        # rounding into "1000.0ms" -- an 8-character jump at the one-second
+        # boundary, which the ladder crosses twice a day. (A 1/XXXXs fraction
+        # branch used to sit below the seconds check, where seconds < 1 was
+        # unreachable -- no exposure ever rendered as a fraction.)
+        return f"{seconds * 1000:5.1f}ms"
+    # Seconds: XX.Xs (6 chars, right-aligned)
+    return f"{seconds:5.1f}s"
 
 
 def iso(gain: float) -> str:
@@ -109,18 +116,27 @@ def localized_datetime(dt: datetime, datetime_config: Dict) -> str:
         return f"{dt.strftime(date_format)} {dt.strftime(time_format)}"
 
     try:
-        locale.setlocale(locale.LC_TIME, locale_str)
-
-        # %A full weekday, %B full month -- both are what the locale is for.
-        if show_seconds:
-            formatted = dt.strftime("%A. %d %B %Y %H:%M:%S").lower()
-        else:
-            formatted = dt.strftime("%A. %d %B %Y %H:%M").lower()
-
-        locale.setlocale(locale.LC_TIME, "")
-        return formatted
+        # Capture what is in effect and put exactly that back. The old restore
+        # was setlocale(LC_TIME, ""), which reads the *environment* -- not a
+        # restore at all. setlocale is process-global, so leaving it changed
+        # leaks into every other strftime in the daemon.
+        with _locale_lock:
+            previous = locale.setlocale(locale.LC_TIME)
+            try:
+                locale.setlocale(locale.LC_TIME, locale_str)
+                # %A full weekday, %B full month -- what the locale is for.
+                if show_seconds:
+                    return dt.strftime("%A. %d %B %Y %H:%M:%S").lower()
+                return dt.strftime("%A. %d %B %Y %H:%M").lower()
+            finally:
+                locale.setlocale(locale.LC_TIME, previous)
     except Exception as e:
-        logger.warning(f"Could not set locale {locale_str}: {e}")
+        if locale_str not in _warned_locales:
+            _warned_locales.add(locale_str)
+            logger.warning(
+                f"Could not set locale {locale_str}: {e} (further warnings suppressed; "
+                f"generate it with locale-gen or set overlay.datetime.localized: false)"
+            )
         if show_seconds:
             return dt.strftime("%Y-%m-%d %H:%M:%S")
         return dt.strftime("%Y-%m-%d %H:%M")

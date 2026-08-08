@@ -73,6 +73,7 @@ class WeatherData:
 
     @property
     def _entry(self) -> _CacheEntry:
+        """This endpoint's slot in the process-wide cache, created on demand."""
         endpoint = self.weather_config.get("endpoint") or ""
         return _CACHE.setdefault(endpoint, _CacheEntry())
 
@@ -80,18 +81,22 @@ class WeatherData:
     # keep working now that the storage moved to module level.
     @property
     def _cached_data(self) -> Optional[Dict]:
+        """The endpoint's last successfully fetched payload, if any."""
         return self._entry.data
 
     @_cached_data.setter
     def _cached_data(self, value: Optional[Dict]) -> None:
+        """Store a payload in the shared per-endpoint cache."""
         self._entry.data = value
 
     @property
     def _cache_time(self) -> Optional[datetime]:
+        """When the cached payload was fetched, if ever."""
         return self._entry.fetched_at
 
     @_cache_time.setter
     def _cache_time(self, value: Optional[datetime]) -> None:
+        """Record the fetch time in the shared per-endpoint cache."""
         self._entry.fetched_at = value
 
     def get_weather_data(self) -> Optional[Dict]:
@@ -389,7 +394,9 @@ class WeatherData:
     def _format_temperature(self, temp: Optional[float]) -> str:
         """Format temperature value with fixed width."""
         if temp is None:
-            return "  N/A"
+            # Same 7 characters as a populated value, so the bar keeps its
+            # width when a module drops out.
+            return "    N/A"
         # Fixed width: -XX.X°C (7 chars total, right-aligned number)
         return f"{temp:5.1f}°C"
 
@@ -403,7 +410,8 @@ class WeatherData:
     def _format_wind(self, speed: Optional[int], gust: Optional[int]) -> str:
         """Format wind speed with gust, fixed width."""
         if speed is None:
-            return "  N/A"
+            # 8 characters, matching "XX.X m/s".
+            return "     N/A"
 
         # Convert km/h to m/s for more common metric
         speed_ms = speed / 3.6
@@ -420,7 +428,8 @@ class WeatherData:
     def _format_wind_speed(self, speed: Optional[int]) -> str:
         """Format wind speed value with fixed width."""
         if speed is None:
-            return "  N/A"
+            # 8 characters, matching "XX.X m/s".
+            return "     N/A"
         speed_ms = speed / 3.6
         # Fixed width: XX.X m/s
         return f"{speed_ms:4.1f} m/s"
@@ -439,13 +448,15 @@ class WeatherData:
     def _format_rain(self, rain: Optional[float]) -> str:
         """Format rain value with fixed width."""
         if rain is None:
-            return "  N/A"
+            # 7 characters, matching "XX.X mm".
+            return "    N/A"
         # Fixed width: XX.X mm
         return f"{rain:4.1f} mm"
 
     def _format_pressure(self, pressure: Optional[float]) -> str:
         """Format pressure value with fixed width."""
         if pressure is None:
-            return "  N/A"
+            # 8 characters, matching "XXXX hPa".
+            return "     N/A"
         # Fixed width: XXXX hPa (4 digits)
         return f"{pressure:4.0f} hPa"

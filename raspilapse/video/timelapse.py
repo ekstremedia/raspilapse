@@ -115,8 +115,10 @@ def find_images_in_range(
                             int(parts[-1]),  # second
                         )
 
-                        # Check if within time range
-                        if start_datetime <= img_datetime <= end_datetime:
+                        # Half-open range: a frame taken exactly at the end
+                        # instant (05:00:00, on a 30 s grid) belongs to the
+                        # next window, not to both videos and both keograms.
+                        if start_datetime <= img_datetime < end_datetime:
                             images.append(img_path)
                 except (ValueError, IndexError):
                     # Skip files that don't match expected format
@@ -198,8 +200,10 @@ def create_video(
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         list_file = f.name
         for img_path in image_list:
-            # ffmpeg concat demuxer format: file 'path'
-            f.write(f"file '{img_path.absolute()}'\n")
+            # ffmpeg concat demuxer format: file 'path'. A single quote inside
+            # a quoted path must be written '\'' or the list truncates there.
+            escaped = str(img_path.absolute()).replace("'", "'\\''")
+            f.write(f"file '{escaped}'\n")
 
     if logger:
         logger.info(f"Created image list file: {list_file}")
@@ -294,9 +298,18 @@ def create_video(
         print(f"{Colors.YELLOW}   (This may take a few minutes for large timelapses){Colors.END}")
         print()  # Add blank line before ffmpeg output
 
-        # Run ffmpeg with real-time output
-        # stderr is where ffmpeg writes its progress info
-        result = subprocess.run(cmd, capture_output=False, text=True)
+        # Run ffmpeg with real-time output; stderr is where it writes progress.
+        # The timeout is ~7x the measured 25-minute 4K day: past that ffmpeg is
+        # wedged, and an unbounded wait here sits inside a Type=oneshot unit
+        # whose timer merges into the stuck job -- no video ever again, nothing
+        # marked failed.
+        try:
+            result = subprocess.run(cmd, capture_output=False, timeout=3 * 3600)
+        except subprocess.TimeoutExpired:
+            print(Colors.error("✗ ffmpeg exceeded 3 hours and was killed"))
+            if logger:
+                logger.error("ffmpeg exceeded 3 hours; killed")
+            return False
 
         print()  # Add blank line after ffmpeg output
         if result.returncode == 0:
@@ -364,11 +377,12 @@ Examples:
 
     parser.add_argument(
         "--start",
-        help="Start time in HH:MM format (e.g., 07:00). Default: from config or 00:00.",
+        help="Start time in HH:MM format (e.g., 07:00). "
+        "Default: video.default_start_time (05:00).",
     )
     parser.add_argument(
         "--end",
-        help="End time in HH:MM format (e.g., 15:00). Default: from config or current time.",
+        help="End time in HH:MM format (e.g., 15:00). " "Default: video.default_end_time (05:00).",
     )
     parser.add_argument(
         "--start-date",
@@ -619,13 +633,15 @@ Examples:
         return 1
 
     if not images:
-        # Exit 2 means "nothing to do", not "something broke". Callers (notably
-        # daily_timelapse.py) treat it as success so an empty day does not leave
+        # Exit 10 means "nothing to do", not "something broke". Callers
+        # (notably daily.py) treat it as success so an empty day does not leave
         # a systemd unit in the failed state. Exit 1 stays reserved for errors.
+        # This used to be 2 -- which argparse also uses for usage errors, so a
+        # broken invocation reported nightly "no images" success forever.
         msg = f"No images found between {start_datetime} and {end_datetime} - nothing to render"
         print(Colors.warning(f"⚠ {msg}"))
         logger.warning(msg)
-        return 2
+        return 10
 
     print(f"  {Colors.success('✓')} Found {Colors.bold(str(len(images)))} images")
     logger.info(f"Found {len(images)} images")
@@ -710,18 +726,14 @@ Examples:
                 custom_output = custom_output.with_suffix(".jpg")
             keogram_file = video_path / custom_output.name
         else:
-            keogram_filename = output_file.stem.replace("_daily_", "_keogram_") + ".jpg"
-            if "_daily_" not in output_file.stem:
-                keogram_filename = f"keogram_{output_file.stem}.jpg"
-            keogram_file = video_path / keogram_filename
+            # Always the keogram_ prefix: it is the shape daily.py's upload
+            # globs and retention's patterns recognise. (An old _daily_ rename
+            # branch produced names neither of them matched.)
+            keogram_file = video_path / f"keogram_{output_file.stem}.jpg"
 
     slitscan_file = None
     if args.slitscan:
-        # Generate slitscan filename (similar to keogram naming)
-        slitscan_filename = output_file.stem.replace("_daily_", "_slitscan_") + ".jpg"
-        if "_daily_" not in output_file.stem:
-            slitscan_filename = f"slitscan_{output_file.stem}.jpg"
-        slitscan_file = video_path / slitscan_filename
+        slitscan_file = video_path / f"slitscan_{output_file.stem}.jpg"
 
     if keogram_file or slitscan_file:
         wanted = [

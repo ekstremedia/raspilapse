@@ -19,8 +19,8 @@ it to configure for your latitude.
 
 - Raspberry Pi with a CSI camera port
 - Camera Module V2, V3 or HQ
-- Raspberry Pi OS Bookworm (Bullseye works; it ships Python 3.9)
-- Roughly 6 GB of disk per day at 4K/30s, before cleanup
+- Raspberry Pi OS Bookworm or Trixie (Bullseye works; it ships Python 3.9)
+- Roughly 6-8 GB of disk per day at 4K/30s, before cleanup
 
 ## Install
 
@@ -34,8 +34,8 @@ cp config/config.example.yml config/config.yml
 nano config/config.yml     # at minimum: location, output.project_name, output.directory
 ```
 
-That is the whole install. `python3-picamera2` brings numpy and Pillow with
-it, so listing those separately only made the command look longer.
+That is the whole install — `python3-picamera2` brings numpy and Pillow with
+it.
 
 Optional, each for one feature, and each skippable — the feature degrades and
 nothing else notices:
@@ -68,17 +68,17 @@ Then install the systemd units:
 sudo systemctl start raspilapse
 ```
 
-That gives you four units:
+That gives you four components — one service and three timers:
 
 | Unit | What it does | When |
 |------|--------------|------|
 | `raspilapse.service` | Continuous capture | always |
 | `raspilapse-daily-video.timer` | Yesterday's video, keogram, slitscan | 05:00 |
-| `raspilapse-cleanup.timer` | Delete expired images and database rows | 02:00 |
+| `raspilapse-cleanup.timer` | Delete expired images, videos and database rows | 02:00 |
 | `raspilapse-upload-retry.timer` | Retry failed uploads | every 30 min |
 
-`systemctl list-timers 'raspilapse-*'` is the authority on the schedule — no
-document restates it, because that is how four files came to disagree about it.
+`systemctl list-timers 'raspilapse-*'` is the authority on the schedule; the
+times above are a summary, and `list-timers` wins where they disagree.
 
 Managing them:
 
@@ -100,6 +100,7 @@ Other installer options:
 ```bash
 ./scripts/install.sh --only capture,cleanup   # a subset
 ./scripts/install.sh --with-watchdog          # restart on stalled capture (runs as root)
+./scripts/install.sh --with-netwatch          # recover a dropped network; can reboot (runs as root)
 ./scripts/install.sh --dry-run                # print the units, install nothing
 ./scripts/install.sh --uninstall
 ```
@@ -107,9 +108,9 @@ Other installer options:
 ## Configuration
 
 Copy `config/config.example.yml` to `config/config.yml`, which is gitignored
-because it holds your API keys. The example is deliberately short — about sixty
-lines — because everything it leaves out has a default in
-`raspilapse/config.py`. Your config only has to say what you want to change.
+because it holds your API keys. The example is deliberately short, because
+everything it leaves out has a default in `raspilapse/config.py`. Your config
+only has to say what you want to change.
 
 `docs/CONFIG-REFERENCE.yml` is the full schema, every setting annotated. A test
 fails if it drifts from what the code actually reads, and another fails if the
@@ -122,7 +123,7 @@ The settings most worth understanding:
 | `location.latitude` / `longitude` | Recorded with each frame and plotted by the graph scripts. Nothing decides from it. |
 | `output.directory` | Where frames land. Needs to exist and be writable. |
 | `adaptive_timelapse.interval` | Seconds between frames. 30 is a good default. |
-| `adaptive_timelapse.transition_mode.target_brightness` | What the exposure loop aims for, 0-255. Raise for brighter frames. |
+| `adaptive_timelapse.brightness_target.base` | What the exposure loop aims for, 0-255 (an overcast boost is added on top). Raise for brighter frames. |
 | `adaptive_timelapse.night_mode.max_exposure_time` | The dark end of the ladder. 20s suits aurora; lower it if you want shorter nights. |
 | `logging.level` | `INFO` while setting up, `WARNING` for 24/7. |
 
@@ -139,9 +140,7 @@ gain     = required / shutter              # gain covers what is left
 A longer shutter costs time; more gain costs noise, so the order is forced.
 That single rule replaced three modes selected by comparing an uncalibrated lux
 figure against absolute thresholds, which had to be retuned per camera and per
-site and were overridden at high latitude by sun elevation. There is nothing
-in the loop that knows where it is: it works from measured brightness, so it
-behaves the same at 68°N in January as on the equator.
+site and were overridden at high latitude by sun elevation.
 
 | Where on the ladder | Shutter | Gain |
 |---------------------|---------|------|
@@ -205,7 +204,9 @@ raspilapse/
   daemon.py           capture loop, scheduling, lifecycle
   camera/
     capture.py        Picamera2 wrapper
-    exposure.py       all exposure decisions and their state
+    exposure.py       the feedback loop and its state
+    ladder.py         shutter/gain allocation
+    metering.py       brightness measurement and the target
   overlay/
     render.py         burned-in overlay
     layout.py         text placement and measurement
@@ -214,6 +215,7 @@ raspilapse/
     timelapse.py      ffmpeg video assembly
     keogram.py        keogram and slitscan
     daily.py          daily video + upload
+    retention.py      video expiry
   storage/
     database.py       SQLite storage + maintenance
     upload.py         upload service and retry queue
@@ -235,6 +237,8 @@ config/               config.example.yml, a short starter file
 | [docs/TIMELAPSE_VIDEO.md](docs/TIMELAPSE_VIDEO.md) | Video, keogram, slitscan |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | When something is wrong, plus web serving and disk maths |
 | [config/README.md](config/README.md) | Working with config files |
+| [newcam.md](newcam.md) | Setting up a new camera Pi from scratch |
+| [UpgradeOldRaspilapse.md](UpgradeOldRaspilapse.md) | Upgrading a pre-1.5.0 install |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup |
 | [tests/replay/README.md](tests/replay/README.md) | How exposure changes are proved safe |
@@ -248,7 +252,9 @@ tail -f logs/auto_timelapse.log   # what is it doing?
 rpicam-still -o /tmp/test.jpg     # is the camera alive at all?
 ```
 
-Camera not detected: check the ribbon cable, then `sudo raspi-config`.
+Camera not detected: check the ribbon cable, then `rpicam-still --list-cameras`
+— Bookworm and later autodetect CSI cameras, so there is nothing to enable in
+raspi-config.
 Permission denied on the camera: `sudo usermod -aG video $USER`, then log out
 and back in. Import errors for picamera2: install it with apt, never pip.
 

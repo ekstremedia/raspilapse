@@ -67,8 +67,9 @@ JSON with a `modules` array, either at the root or nested under `data`:
 ```
 
 Recognised module types: **Outdoor Module** (temperature, humidity), **Wind
-Gauge**, **Rain Gauge**, and **Indoor Module** (pressure, as a fallback).
-Anything missing simply does not appear in the overlay.
+Gauge**, **Rain Gauge**, and **Indoor Module** (the only source of pressure).
+A missing module renders its fields as `N/A` rather than dropping them, so the
+bar keeps its width.
 
 Raspilapse does not talk to Netatmo directly — it expects a URL you control
 that returns this shape. Netatmo's own API needs OAuth, which is why the
@@ -83,7 +84,8 @@ timelapse than one that is a few minutes stale.
 `-` appears only when nothing has *ever* been fetched successfully — a fresh
 install, or a wrong endpoint.
 
-Failures back off. The first waits `cache_duration`, the next twice that, and
+Failures back off. The first waits `cache_duration` (or 30 s if that is
+shorter), the next twice that, and
 so on up to `max_backoff_seconds`. Without that, a DNS outage meant one request
 and one error line per capture indefinitely; a single outage once produced
 72,536 identical lines in one log file. The error is logged once and then

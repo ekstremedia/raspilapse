@@ -115,10 +115,15 @@ class UploadService:
         try:
             conn = sqlite3.connect(self.db_path, timeout=10.0)
             conn.row_factory = sqlite3.Row
-            yield conn
         except sqlite3.Error as e:
             self.logger.warning(f"[Upload] Database connection error: {e}")
-            yield None
+            conn = None
+
+        # Yield outside the connect guard: an sqlite3.Error from the caller's
+        # body used to re-enter the except and yield a second time, which
+        # contextlib turns into "generator didn't stop after throw()".
+        try:
+            yield conn
         finally:
             if conn:
                 try:

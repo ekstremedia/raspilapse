@@ -237,13 +237,17 @@ class TestErrorHandling:
 
     @patch("raspilapse.video.timelapse.find_images_in_range")
     def test_no_images_found(self, mock_find_images, mock_config_file):
-        """No images is 'nothing to do' (exit 2), not an error (exit 1)."""
+        """No images is 'nothing to do' (exit 10), not an error (exit 1).
+
+        10 rather than 2: argparse exits 2 on usage errors, and while the two
+        shared a code a broken invocation reported nightly success forever.
+        """
         mock_find_images.return_value = []
 
         with patch("sys.argv", ["make_timelapse.py", "-c", mock_config_file]):
             result = main()
 
-        assert result == 2
+        assert result == 10
 
     @patch("raspilapse.video.timelapse.find_images_in_range")
     @patch("raspilapse.video.timelapse.create_video")

@@ -392,10 +392,17 @@ class CaptureDatabase:
             # card the fsync savings matter. Not persistent, unlike the
             # journal_mode set in _initialize_database, so set it per connection.
             conn.execute("PRAGMA synchronous=NORMAL")
-            yield conn
         except sqlite3.Error as e:
             logger.warning(f"[DB] Connection error: {e}")
-            yield None
+            conn = None
+
+        # The yield sits outside the connect guard on purpose: an
+        # sqlite3.Error raised in the caller's body used to be thrown in at
+        # the yield, caught by that except, and answered with a second yield
+        # -- which contextlib reports as "generator didn't stop after
+        # throw()", burying the real error (usually "database is locked").
+        try:
+            yield conn
         finally:
             if conn:
                 try:
@@ -816,40 +823,45 @@ class CaptureDatabase:
                 cursor = conn.cursor()
                 cutoff = f"-{days} days"
 
-                cursor.execute(
-                    "SELECT COUNT(*) FROM captures WHERE unix_timestamp < "
-                    "strftime('%s', 'now', ?)",
-                    (cutoff,),
-                )
-                result["captures"] = cursor.fetchone()[0]
-
-                # Terminal queue rows are only kept as history; three months is
-                # plenty to answer "did last quarter's uploads go through".
-                cursor.execute(
-                    "SELECT COUNT(*) FROM upload_queue "
-                    "WHERE status IN ('success', 'cancelled') "
-                    "AND completed_at IS NOT NULL "
-                    "AND completed_at < datetime('now', '-90 days')"
-                )
-                result["upload_queue"] = cursor.fetchone()[0]
-
                 if dry_run:
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM captures WHERE unix_timestamp < "
+                        "strftime('%s', 'now', ?)",
+                        (cutoff,),
+                    )
+                    result["captures"] = cursor.fetchone()[0]
+
+                    # Terminal queue rows are only kept as history; three
+                    # months is plenty to answer "did last quarter's uploads
+                    # go through".
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM upload_queue "
+                        "WHERE status IN ('success', 'cancelled') "
+                        "AND completed_at IS NOT NULL "
+                        "AND completed_at < datetime('now', '-90 days')"
+                    )
+                    result["upload_queue"] = cursor.fetchone()[0]
                     logger.info(
                         f"[DB] Would prune {result['captures']} capture(s) older than "
                         f"{days} days and {result['upload_queue']} completed upload(s)"
                     )
                     return result
 
+                # Report what was actually deleted, not what a pre-count said
+                # would be: a DELETE that failed after the counts used to
+                # print "Pruned N" having pruned nothing.
                 cursor.execute(
                     "DELETE FROM captures WHERE unix_timestamp < strftime('%s', 'now', ?)",
                     (cutoff,),
                 )
+                result["captures"] = max(cursor.rowcount, 0)
                 cursor.execute(
                     "DELETE FROM upload_queue "
                     "WHERE status IN ('success', 'cancelled') "
                     "AND completed_at IS NOT NULL "
                     "AND completed_at < datetime('now', '-90 days')"
                 )
+                result["upload_queue"] = max(cursor.rowcount, 0)
 
                 # Fold the WAL back into the main file, otherwise a large
                 # delete leaves a -wal that never shrinks.

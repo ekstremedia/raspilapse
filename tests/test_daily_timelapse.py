@@ -37,6 +37,20 @@ def temp_dir():
     shutil.rmtree(temp_path)
 
 
+@pytest.fixture(autouse=True)
+def _private_daily_lock(tmp_path, monkeypatch):
+    """Every test gets its own lock directory.
+
+    flock is per open-file-description, so a main() whose lock file outlives
+    the call (gc timing decides) blocks every later main() in the same pytest
+    process with 'already in progress' -- and the repo's real data/ directory
+    is not the suite's to write into anyway.
+    """
+    import raspilapse.video.daily as daily_module
+
+    monkeypatch.setattr(daily_module, "PROJECT_ROOT", tmp_path)
+
+
 @pytest.fixture
 def sample_config(temp_dir):
     """Create a sample configuration file."""
@@ -442,7 +456,7 @@ class TestMainCLI:
         assert result == 1
 
     def test_main_no_images_exits_zero(self, sample_config, temp_dir, monkeypatch, capsys):
-        """Exit code 2 from make_timelapse means 'no images', which is not a failure."""
+        """Exit code 10 from the renderer means 'no images', which is not a failure."""
         video_dir = Path(sample_config).parent / "videos"
         video_dir.mkdir(parents=True, exist_ok=True)
 
@@ -458,7 +472,7 @@ class TestMainCLI:
         )
 
         with patch("raspilapse.video.daily.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=2)  # nothing to render
+            mock_run.return_value = MagicMock(returncode=10)  # nothing to render
 
             with patch("raspilapse.video.daily.UploadService") as mock_upload:
                 result = main()
@@ -468,6 +482,34 @@ class TestMainCLI:
 
         assert result == 0
         assert "No images for 2025-12-24" in capsys.readouterr().out
+
+    def test_main_wedged_renderer_is_killed_and_fails(
+        self, sample_config, temp_dir, monkeypatch, capsys
+    ):
+        """A renderer that exceeds its 4h cap is killed and reported as a
+        failure -- the unbounded wait used to leave the oneshot unit
+        'activating' forever, with the next timer merging into the stuck job."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "daily_timelapse.py",
+                "--config",
+                str(sample_config),
+                "--date",
+                "2025-12-24",
+            ],
+        )
+
+        with patch("raspilapse.video.daily.subprocess.run") as mock_run:
+            mock_run.side_effect = _subprocess.TimeoutExpired(cmd="renderer", timeout=4 * 3600)
+            with patch("raspilapse.video.daily.UploadService") as mock_upload:
+                result = main()
+            mock_upload.assert_not_called()
+
+        assert result == 1
+        assert "exceeded 4 hours" in capsys.readouterr().out
 
     def test_main_upload_disabled_in_config(self, temp_dir, monkeypatch, capsys):
         """Test main when upload is disabled in config."""

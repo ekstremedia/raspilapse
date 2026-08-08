@@ -282,6 +282,20 @@ class TestImageCapture:
         assert mock_picamera2.close.called
         assert capture.picam2 is None
 
+    def test_a_failed_initialize_releases_the_camera(self, mock_picamera2, test_config_file):
+        """A half-opened Picamera2 left behind pins the device in picamera2's
+        global registry, and the retry then fails with "Camera in use" even
+        though the previous open never completed."""
+        config = CameraConfig(test_config_file)
+        capture = ImageCapture(config)
+        mock_picamera2.configure.side_effect = RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            capture.initialize_camera()
+
+        assert capture.picam2 is None
+        mock_picamera2.close.assert_called_once()
+
 
 class TestDateOrganization:
     """Test date-organized folder structure."""

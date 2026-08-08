@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -628,6 +629,31 @@ class TestSlotRecovery:
             assert returned > 300.0 + late, f"{late}s late returned a slot already gone"
             assert slept and slept[0] > 0
 
+    def test_a_backward_clock_step_reanchors_instead_of_sleeping_it_out(self):
+        """No RTC: fake-hwclock plus a late NTP sync can move `now` *behind*
+        the anchor. Sleeping next_slot - now would sleep out the whole step --
+        hours of no frames with nothing marked failed -- so the grid
+        re-anchors on the new clock instead."""
+        returned, slept = self._advance(300.0, 30, now=100.0)
+        assert returned == 120.0, "the grid did not re-anchor on the stepped-back clock"
+        assert slept == [20.0]
+
+    def test_a_should_continue_that_goes_false_stops_the_sleep(self):
+        """SIGTERM sets running=False mid-sleep; the sliced sleep must notice
+        within one slice rather than waiting out the rest of the slot
+        (PEP 475 resumes a plain sleep after a handled signal)."""
+        answers = iter([True, False])
+        slept = []
+        with (
+            patch("raspilapse.daemon.time.time", return_value=305.0),
+            patch("raspilapse.daemon.time.sleep", side_effect=slept.append),
+        ):
+            returned = AdaptiveTimelapse._sleep_until_next_slot(
+                300.0, 30, should_continue=lambda: next(answers)
+            )
+        assert returned == 330.0
+        assert slept == [1.0], "the sleep did not run in interruptible slices"
+
 
 class TestTheLoopIsWiredToTheGrid:
     """The scheduling helpers are unit-tested above; this is the wiring.
@@ -650,14 +676,17 @@ class TestTheLoopIsWiredToTheGrid:
         timelapse._database = None
         timelapse._record = MagicMock()
         timelapse._read_capture_metadata = MagicMock(return_value=None)
+        # Two frames, then the loop's own limit ends it. Not test_mode: --test
+        # now skips the pre-loop grid alignment on purpose, and that alignment
+        # is half of what this harness asserts.
+        timelapse.config["adaptive_timelapse"]["num_frames"] = 2
 
         def capture(*args, **kwargs):
             """Stand in for capture_frame, counter included.
 
-            test_mode stops the loop via `frame_count >= num_frames`, and
-            frame_count is incremented inside capture_frame -- so a mock that
-            only returns a path leaves the loop spinning forever. This cost a
-            hung test run to find.
+            The frame limit reads frame_count, and frame_count is incremented
+            inside capture_frame -- so a mock that only returns a path leaves
+            the loop spinning forever. This cost a hung test run to find.
             """
             timelapse.frame_count += 1
             return ("frame.jpg", None)
@@ -666,7 +695,7 @@ class TestTheLoopIsWiredToTheGrid:
 
         calls = []
 
-        def advance_stub(current_slot, interval):
+        def advance_stub(current_slot, interval, should_continue=None):
             """Record the reschedule, and stop the loop independently of it.
 
             The bound is deliberately not the loop's own exit condition: a
@@ -686,8 +715,13 @@ class TestTheLoopIsWiredToTheGrid:
             ) as advance,
         ):
             if init_side_effect:
-                camera.return_value.initialize_camera.side_effect = init_side_effect
-            timelapse.run(test_mode=True)
+                # Pad with successes: the camera is re-opened every frame, so
+                # a two-frame run needs more init calls than the failure
+                # script itself lists.
+                camera.return_value.initialize_camera.side_effect = (
+                    list(init_side_effect) + [None] * max_iterations
+                )
+            timelapse.run()
 
         assert len(calls) < max_iterations, "the loop did not stop on its own"
         return advance, sleep
@@ -695,10 +729,15 @@ class TestTheLoopIsWiredToTheGrid:
     def test_a_normal_frame_ends_on_the_grid(self, test_config_file):
         """The happy path, and the control for the failure case below: an
         iteration that captures normally must still reschedule, and the first
-        frame must be aligned before the loop starts at all."""
-        advance, sleep = self._run_one(test_config_file)
-        assert advance.called, "the loop finished an iteration without rescheduling"
-        assert sleep.called, "the first frame was not aligned to a slot before starting"
+        frame must be aligned before the loop starts at all. Both waits go
+        through the scheduler now (the pre-loop alignment used to be a bare
+        time.sleep, which SIGTERM could not interrupt), so both show up as
+        scheduler calls: one before the first frame, one after each frame."""
+        advance, _ = self._run_one(test_config_file)
+        assert advance.call_count >= 2, (
+            f"scheduler reached {advance.call_count} time(s); expected the "
+            f"pre-loop alignment plus at least one per-frame reschedule"
+        )
 
     def test_a_failed_camera_init_also_ends_on_the_grid(self, test_config_file):
         """The branch that used to `continue` past the scheduling entirely.
@@ -714,6 +753,37 @@ class TestTheLoopIsWiredToTheGrid:
             f"init failed once and the loop rescheduled {advance.call_count} time(s); "
             f"the failure path skipped the grid"
         )
+
+    def test_a_camera_that_stays_wedged_ends_the_process(self, test_config_file):
+        """Every failed Picamera2() open leaks a pipe fd inside picamera2;
+        retrying forever walks the daemon into RLIMIT_NOFILE after ~8 hours
+        while systemd shows it healthy. Five consecutive failures must end
+        the loop -- Restart=always hands back a clean fd table -- and no
+        frame may be captured on the way."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._database = None
+        timelapse._record = MagicMock()
+        timelapse._read_capture_metadata = MagicMock(return_value=None)
+        timelapse.capture_frame = MagicMock()
+
+        calls = []
+
+        def advance_stub(current_slot, interval, should_continue=None):
+            calls.append(current_slot)
+            if len(calls) >= 12:
+                timelapse.running = False
+            return 999.0
+
+        with (
+            patch("raspilapse.daemon.ImageCapture") as camera,
+            patch("raspilapse.daemon.time.sleep"),
+            patch.object(AdaptiveTimelapse, "_sleep_until_next_slot", side_effect=advance_stub),
+        ):
+            camera.return_value.initialize_camera.side_effect = RuntimeError("device busy")
+            timelapse.run()
+
+        assert len(calls) < 12, "the loop retried past five consecutive camera failures"
+        timelapse.capture_frame.assert_not_called()
 
 
 class TestSeedingAcrossARestart:
@@ -752,6 +822,7 @@ class TestSeedingAcrossARestart:
                 "analogue_gain": 1.1228070259094238,
                 "brightness_mean": 119.9,
                 "mode": LightMode.DAY,
+                "unix_timestamp": time.time(),
             },
         )
         assert required == pytest.approx(
@@ -775,6 +846,7 @@ class TestSeedingAcrossARestart:
                 "analogue_gain": 5.98830413818359,
                 "brightness_mean": 120.0,
                 "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time(),
             },
         )
         assert required == pytest.approx(19.999994 * 5.98830413818359, rel=1e-6), (
@@ -797,9 +869,43 @@ class TestSeedingAcrossARestart:
                 "analogue_gain": 3.1,
                 "brightness_mean": 120.0,
                 "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time(),
             },
         )
         assert required == pytest.approx(62.0, rel=1e-6)
+
+    def test_a_sensor_floor_gain_at_the_ceiling_is_not_trusted(self, test_config_file):
+        """At the ceiling, a reported gain at the sensor's 1.1228 floor is
+        ambiguous -- the ladder may have commanded anything in [1.0, 1.1228)
+        -- and seeding the floor re-imports the same 12% step the dusk-seeding
+        removal fixed. Below 1.2, gain 1.0 is the safer read."""
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 20_000_000,
+                "analogue_gain": 1.1228070259094238,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time(),
+            },
+        )
+        assert required == pytest.approx(20.0, rel=1e-6)
+
+    def test_a_stale_row_is_not_seeded_at_all(self, test_config_file):
+        """A night row seeded into a bright morning costs ~24 pure-white
+        frames -- worse than the cold start it was meant to prevent. Past 20
+        intervals the seed is skipped."""
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 20_000_000,
+                "analogue_gain": 5.9,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time() - 12 * 3600,
+            },
+        )
+        assert required is None, "a 12-hour-old row was seeded as though fresh"
 
 
 class TestPolarAwareness:

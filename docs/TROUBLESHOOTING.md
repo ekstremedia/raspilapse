@@ -67,8 +67,8 @@ sudo chmod -R 775 /var/www/html/images
 
 ## Images look wrong
 
-**Too dark or too bright overall.** Raise or lower `reference_lux`, or
-`adaptive_timelapse.transition_mode.target_brightness`. See
+**Too dark or too bright overall.** Raise or lower
+`adaptive_timelapse.brightness_target.base` (default 120). See
 [EXPOSURE.md](EXPOSURE.md).
 
 **Brightness oscillating between frames.** Lower `brightness_damping`. If you
@@ -76,7 +76,9 @@ have just enabled `highlight_protection`, set `enabled: false` to confirm
 whether that is the cause — it reverts to the previous behaviour with no code
 change.
 
-**Blown-out skies.** Enable `adaptive_timelapse.highlight_protection`.
+**Blown-out skies.** Highlight protection is on by default; lower
+`adaptive_timelapse.highlight_protection.min_scale` for more of it, or check
+it was not disabled.
 
 **Colour shifting frame to frame.** Every frame is taken with manual white
 balance, so this is not AWB running — it is the cross-fade moving. Lower
@@ -98,9 +100,6 @@ is nothing to seed from and the first frame or two will settle in. Check for:
 ```
 [Startup] Seeded from last capture: exposure=...
 ```
-
-**Mode flipping between day and night at dusk.** Raise
-`transition_mode.hysteresis_frames`.
 
 Look at what actually happened:
 

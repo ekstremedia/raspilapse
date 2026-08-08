@@ -17,8 +17,12 @@ SyslogIdentifier=raspilapse-daily-video
 Environment="PYTHONUNBUFFERED=1"
 RemainAfterExit=no
 
-# Encoding a day of 4K frames takes ~25 minutes; let it finish.
-TimeoutStartSec=infinity
+# Encoding a day of 4K frames takes ~25 minutes; 4h is ~10x that. Not
+# infinity: a Type=oneshot start that never returns never *fails* either --
+# the next morning's timer merges into the still-"activating" job, so one
+# wedged ffmpeg silently ends daily videos forever. (The renderer also caps
+# its own ffmpeg at 3h; this is the backstop.)
+TimeoutStartSec=4h
 
 # ...but never at the expense of the capture loop, which runs every 30s.
 Nice=10

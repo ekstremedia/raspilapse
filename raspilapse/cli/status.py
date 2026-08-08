@@ -240,8 +240,11 @@ class StatusDisplay:
 
         if enabled:
             print(f"  {Colors.GREEN}✓ Enabled{Colors.RESET}")
+            # Fallbacks mirror render.py's defaults -- this display had its
+            # own ("bottom-left", "default") and reported settings the
+            # renderer was not using.
             print(
-                f"  {Colors.BRIGHT_BLUE}Position:{Colors.RESET}    {overlay.get('position', 'bottom-left')}"
+                f"  {Colors.BRIGHT_BLUE}Position:{Colors.RESET}    {overlay.get('position', 'top-bar')}"
             )
             print(
                 f"  {Colors.BRIGHT_BLUE}Camera Name:{Colors.RESET} {overlay.get('camera_name', 'N/A')}"
@@ -250,8 +253,9 @@ class StatusDisplay:
             # Font info
             font = overlay.get("font", {})
             print(
-                f"  {Colors.BRIGHT_BLUE}Font:{Colors.RESET}        {font.get('family', 'default')} "
-                f"{Colors.DIM}(size: {font.get('size_ratio', 0.02):.3f}){Colors.RESET}"
+                f"  {Colors.BRIGHT_BLUE}Font:{Colors.RESET}        "
+                f"{font.get('family', 'DejaVuSans-Bold.ttf')} "
+                f"{Colors.DIM}(size: {font.get('size_ratio', 0.025):.3f}){Colors.RESET}"
             )
 
             # Background

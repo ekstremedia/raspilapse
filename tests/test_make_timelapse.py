@@ -124,15 +124,16 @@ class TestFindImagesInRange:
             temp_image_dir, "test", start, end, organize_by_date=True, date_format="%Y/%m/%d"
         )
 
-        # Should find 8 images (excluding the ones outside range)
-        assert len(images) == 8
+        # 7 images: the range is half-open, so the frame exactly at the end
+        # instant (08:00:00) belongs to the next window, not to both.
+        assert len(images) == 7
 
         # Check they're sorted
         assert images == sorted(images)
 
         # Check first and last
         assert "20_00_00" in images[0].name
-        assert "08_00_00" in images[-1].name
+        assert "04_00_00" in images[-1].name
 
     def test_find_images_no_results(self, temp_image_dir):
         """Test finding images when none exist in range."""
@@ -162,8 +163,9 @@ class TestFindImagesInRange:
             temp_image_dir, "test", start, end, organize_by_date=True, date_format="%Y/%m/%d"
         )
 
-        # Should find 4 images (20:00, 20:30, 21:00, 22:00, 23:00)
-        assert len(images) == 5
+        # 4 images: 20:00, 20:30, 21:00, 22:00. The 23:00 frame sits exactly
+        # on the (exclusive) end of the window.
+        assert len(images) == 4
         assert all("2025_11_05" in img.name for img in images)
 
 
@@ -313,6 +315,20 @@ class TestCreateVideoCodecHandling:
         assert cmd.index("-r") < cmd.index("-i"), "-r after -i is an output-side conversion"
         assert cmd[cmd.index("-r") + 1] == "30"
         assert "-framerate" not in cmd, "the concat demuxer has no -framerate option"
+
+    @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_a_wedged_ffmpeg_is_killed_and_reported(self, mock_run, temp_images, temp_output):
+        """Past the 3h cap ffmpeg is wedged, not slow -- the measured 4K day
+        is ~25 minutes. An unbounded wait here sat inside a Type=oneshot unit
+        whose next timer merged into the stuck job: no video ever again,
+        nothing marked failed."""
+        import subprocess as _subprocess
+
+        from raspilapse.video.timelapse import create_video
+
+        mock_run.side_effect = _subprocess.TimeoutExpired(cmd="ffmpeg", timeout=3 * 3600)
+
+        assert create_video(temp_images, temp_output, fps=25, codec="libx264") is False
 
     @patch("raspilapse.video.timelapse.subprocess.run")
     def test_libx264_uses_crf_preset_threads(self, mock_run, temp_images, temp_output):
