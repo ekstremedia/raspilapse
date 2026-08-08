@@ -3,61 +3,42 @@
 How Raspilapse decides what the camera should do, from noon to midnight and
 back, without visible steps between frames.
 
-All of it lives in `raspilapse/camera/exposure.py`. `ExposureController` owns every piece of
-per-frame state; `auto_timelapse.py` feeds it measurements and asks it for
-settings.
+The moving parts: `raspilapse/camera/exposure.py` holds the feedback loop and
+its state, `ladder.py` splits a wanted exposure into shutter and gain,
+`metering.py` measures what the last frame looked like and sets the target to
+aim at. The capture daemon (`raspilapse/daemon.py`) feeds measurements in and
+asks for settings.
 
 ## The cycle
 
 Once per interval (default 30 s):
 
-1. **Test shot** — a frame at fixed settings (0.1 s, gain 1.0), purely to
-   measure light. Overwritten each time in `metadata/`; not part of the
-   timelapse.
-2. **Lux** — estimated from that frame's mean brightness together with its
-   exposure and gain, then smoothed with an exponential moving average so a
-   passing cloud doesn't shift the mode.
-3. **Mode** — `night`, `transition` or `day`, from smoothed lux, sun elevation
-   and the brightness of the previous frame.
-4. **Settings** — exposure, gain and colour gains for this mode.
-5. **Capture** — the real frame, with overlay, metadata and a database row.
-6. **Observe** — the frame's own brightness feeds the next cycle.
+1. **Decide** — from the last frame's measured brightness, compute the
+   required exposure and split it into shutter, gain and colour gains.
+2. **Capture** — open the camera with those settings and take the real frame,
+   with overlay, metadata and a database row.
+3. **Measure** — mean brightness, contrast and highlight percentiles, read
+   from the camera's own low-res stream. No disk round-trip, and the overlay
+   is not in the measurement.
+4. **Observe** — that measurement is the whole input to the next cycle.
 
-Step 6 is the whole control loop. `observe_frame()` is the only thing that
-writes the controller's inputs.
+Step 4 is the control loop. `observe_frame()` is the only thing that writes
+the controller's inputs. A white-balance reference shot fires occasionally on
+cameras that need one (see White balance); it is not part of the cycle.
 
-## Mode selection
+## The loop and the ladder
 
 ```
-lux < night_threshold                    -> night
-lux > day_threshold                      -> day
-between                                  -> transition
+required = last * (target / measured) ** damping
+shutter  = min(required, ceiling)          # the shutter fills first
+gain     = required / shutter              # gain covers what is left
 ```
 
-Two overrides sit on top:
-
-**Civil twilight.** Above 68°N the sun can stay below the horizon for weeks, or
-never set at all. If sun elevation is above `civil_twilight_threshold` (-6° by
-default) the mode is forced to day regardless of lux — otherwise a dim polar
-noon reads as night and gets a 20-second exposure.
-
-**Brightness disagreement.** If the lux reading says night but the last frame
-came back brighter than 160, or says day but the frame was darker than 80,
-brightness wins. Lux is inferred; brightness is measured.
-
-**Hysteresis.** A mode change must persist for `hysteresis_frames` cycles
-before it takes effect, so a lux value hovering on a threshold cannot flip the
-camera back and forth.
-
-## The exposure loop
-
-```
-ratio        = target_brightness / measured_brightness
-new_exposure = current_exposure * ratio ** brightness_damping
-```
-
-That is the entire controller. No lookup table, no per-camera calibration
-beyond `reference_lux`, no model to train.
+That is the entire controller. No lookup table, no per-camera calibration, no
+model to train. A longer shutter costs nothing but time; gain costs noise, so
+the order is forced: the shutter runs to its ceiling
+(`night_mode.max_exposure_time`, default 20 s) before gain rises toward its
+own limit (`night_mode.analogue_gain`, default 6).
 
 With `brightness_damping: 0.5` and a frame at 75 against a target of 120:
 
@@ -71,53 +52,44 @@ With `brightness_damping: 0.5` and a frame at 75 against a target of 120:
 Converged in four frames. The ratio is clamped to 0.25–4.0 so no single frame
 can make a wild correction from a bad measurement.
 
-Higher damping converges faster and overshoots more:
-
 | `brightness_damping` | Character |
 |---|---|
 | 0.5 | conservative — recommended |
 | 0.7 | balanced |
 | 0.8 | aggressive |
 
-### Shutter first, then gain
+**There are no modes.** `night`, `transition` and `day` survive only as
+labels, derived from the settings themselves — shutter at 80% of its ceiling
+or any gain above 1.0 is `night`, shutter at or below 1% of the ceiling is
+`day` — and written into the metadata, the database and the overlay. No
+exposure decision consults them. The three modes this replaced were selected
+by comparing an uncalibrated lux figure against absolute thresholds that had
+to be retuned per camera and per site, then overridden by sun elevation at
+high latitude. The ladder is defined by the camera's own limits, so it means
+the same thing at 68°N in January as on the equator.
 
-Gain adds noise, so the shutter does the work. Gain only rises once the
-exposure is within 20% of `night_mode.max_exposure_time`, and then only as far
-as needed:
+## The target
 
-```
-if target_exposure >= night_max * 0.8:
-    gain = min(night_gain, target_exposure / (night_max * 0.8))
-    exposure = night_max * 0.8
-else:
-    gain = 1.0
-```
+The loop aims at `adaptive_timelapse.brightness_target.base` (default 120,
+0–255), with two adjustments:
 
-### Startup seeding
-
-On a cold start the ISP has no history, and the first test shot frequently
-comes back saturated — which produces a wrong lux, which produces a blown first
-frame. So on startup the controller is seeded from the last good capture in the
-database: exposure, gain, colour gains, brightness, lux and mode.
-
-"Good" excludes rows with brightness above 180 or more than 10% clipped pixels,
-so a bad frame cannot poison the next start. If the first test shot after that
-still comes back above 250, the seeded lux is used instead of the calculated
-one.
-
-```
-[Startup] Seeded from last capture: exposure=0.0022s, gain=1.12, WB=[2.50, 1.60], mode=day, brightness=118.6
-```
+- **Overcast boost.** A flat, low-contrast sky reads as dark at a fixed
+  target, so as contrast falls the target rises — by up to `overcast_boost`
+  (15), capped at `max_target` (140). Sunny scenes keep the base target; so
+  does the dark end of the ladder, where a raised target would wash out
+  aurora and stars.
+- **Highlight protection** pulls the target down when the bright end of the
+  frame approaches clipping — next section.
 
 ## Highlight protection
 
 Mean brightness says nothing about whether the sky is blown out. A frame can
 average a perfect 120 while the top 5% of pixels are pure white.
 
-When enabled, the 95th percentile brightness pulls the *target* down:
+The 95th percentile brightness pulls the *target* down:
 
 ```
-effective_target = target_brightness * highlight_scale
+effective_target = target * highlight_scale
 ```
 
 | p95 | Scale |
@@ -127,58 +99,67 @@ effective_target = target_brightness * highlight_scale
 | 220-240 | 0.95 → 0.85 |
 | > 240 | down to `min_scale` (0.70) |
 
-It scales the target, not the controller's output. Both settle, but scaling the
-target leaves the loop's own fixed point intact, so how much protection you get
-depends only on the `highlight_protection` settings. Scaling the output instead
-would tie it to `brightness_damping`, an unrelated knob.
+It scales the target, not the controller's output. Both settle, but scaling
+the target leaves the loop's own fixed point intact, so how much protection
+you get depends only on the `highlight_protection` settings. Scaling the
+output instead would tie it to `brightness_damping`, an unrelated knob.
 
-Three guards keep it calm: an exponential slew on the scale (0.25 per frame, so
-one noisy sample cannot step the target), the exact 1.0 below `safe_p95`, and
-`min_scale` as a hard floor.
+Three guards keep it calm: an exponential slew on the scale (0.25 per frame,
+so one noisy sample cannot step the target), the exact 1.0 below `safe_p95`,
+and `min_scale` as a hard floor.
 
-**Night is exempt by default.** Streetlamps and the moon push p95 high while the
-frame as a whole is already darker than target; protecting those makes aurora
-frames worse. Set `apply_in_night: true` if your scene calls for it.
+**On by default.** **Night is exempt by default**: streetlamps and the moon
+push p95 high while the frame as a whole is already darker than target, and
+protecting those makes aurora frames worse. Set `apply_in_night: true` if
+your scene calls for it, and `enabled: false` to turn the whole thing off.
 
-Set `enabled: false` to turn the whole thing off.
+## Startup seeding
+
+On a cold start the first frame begins from 0.02 s with no history, so the
+controller seeds from the last good capture in the database — exposure,
+colour gains and brightness. "Good" excludes rows brighter than 180 or more
+than 10% clipped, so a bad frame cannot poison the next start.
+
+Two things are deliberately *not* seeded:
+
+- **A stale row.** Older than 20 intervals, the seed is skipped entirely — a
+  20-second night row seeded into a bright morning costs ~24 pure-white
+  frames before the ramp catches up, which is worse than the cold start it
+  was meant to prevent.
+- **Reported gain, below the ceiling.** The `analogue_gain` column records
+  what the sensor delivered, and this sensor's floor is 1.1228 against a
+  commanded 1.0. The value is trusted only where the ladder genuinely
+  commands gain — a row at the shutter ceiling with gain above 1.2.
+
+```
+[Startup] Seeded from last capture: exposure=0.0022s, WB=[2.50, 1.60], mode=day, brightness=118.6
+```
 
 ## White balance
 
-Manual in every mode. AWB drifting between frames is the single largest source
-of colour flicker in a timelapse, and the flip when crossing a mode boundary is
-dramatic:
-
-```
-Night       lux 0.09   WB [1.83, 2.02]  4070 K   manual
-Transition  lux 2.03   WB [1.83, 2.02]  4070 K   manual
-Day         lux 50.28  WB [2.86, 1.48]  7849 K   AWB -- visible jump
-```
-
-Instead, every delivered frame is taken with `AwbEnable: 0`, and the gains
-cross-fade along the ladder at `wb_transition_speed` — a fraction of the gap
-per frame, so there is no step to see.
+Manual in every mode. AWB drifting between frames is the single largest
+source of colour flicker in a timelapse, and the flip when crossing from
+night into daylight is dramatic. Instead, every delivered frame is taken with
+`AwbEnable: 0`, and the gains cross-fade along the ladder's position at
+`wb_transition_speed` — a fraction of the gap per frame, so there is no step
+to see. The position is logarithmic, because light is: the step from 1/1000 s
+to 1/500 s is the same amount of light as the step from 10 s to 20 s.
 
 The daylight end of that cross-fade comes from one of two places, in this
 order:
 
-1. `day_mode.fixed_colour_gains`, if set. Fixed means fixed: nothing the camera
-   observes overrides it.
-2. Otherwise a reference the camera learns, from the periodic test shot — the
-   one frame taken with AWB on, and so the only reading of what the scene's
-   white actually is. Readings taken away from the bright end are discarded,
-   because AWB has nothing to go on there.
+1. `day_mode.fixed_colour_gains`, if set. Fixed means fixed: nothing the
+   camera observes overrides it, and the reference shot below is skipped
+   automatically — there is nothing for it to teach.
+2. Otherwise a reference the camera learns from a periodic reference shot —
+   the one frame taken with AWB on, and so the only reading of what the
+   scene's white actually is. Readings taken away from the bright end are
+   discarded, because AWB has nothing to go on there.
 
-The reference is never learned from an ordinary frame. Those are taken with AWB
-off, so their `ColourGains` are the ones the controller just chose; learning
-from them makes the reference its own input, and it drifts instead of
-correcting.
-
-AWB is also expensive at night: leaving it on during a 20-second exposure costs
-roughly a 5× slowdown in libcamera.
-
-If you have `fixed_colour_gains` set, the test shot is doing nothing for you and
-`test_shot.enabled: false` skips it — worth having, since it costs a camera
-teardown and restart each time it fires.
+The reference is never learned from an ordinary frame. Those are taken with
+AWB off, so their `ColourGains` are the ones the controller just chose;
+learning from them makes the reference its own input, and it drifts instead
+of correcting.
 
 ## Recovery
 
@@ -186,10 +167,11 @@ Two symmetric mechanisms handle a scene changing faster than the normal ramp:
 
 - **Overexposure** — brightness above 180 or more than 10% clipped pixels
   switches to `fast_rampdown_speed`; above 200, `critical_rampdown_speed`.
-- **Underexposure** — the mirror image, using the `rampup` speeds.
+- **Underexposure** — the mirror image: below 90 the `rampup` speeds engage,
+  below 70 the critical one, releasing once brightness is back above 105.
 
-These matter most at dawn, when the sky can brighten faster than a conservative
-ramp will follow.
+These matter most at dawn, when the sky can brighten faster than a
+conservative ramp will follow.
 
 ## Tuning
 
@@ -197,12 +179,10 @@ Symptoms and the setting to reach for:
 
 | Symptom | Try |
 |---------|-----|
-| Images too dark overall | raise `reference_lux` or `target_brightness` |
-| Images too bright | lower them |
+| Images too dark or too bright overall | raise or lower `brightness_target.base` (default 120) |
 | Brightness oscillating frame to frame | lower `brightness_damping` |
 | Slow to recover after a light change | raise `brightness_damping`, or the ramp speeds |
-| Blown-out skies | enable `highlight_protection` |
-| Mode flipping at dusk | raise `hysteresis_frames` |
+| Blown-out skies | lower `highlight_protection.min_scale` (or check it wasn't disabled) |
 | Colour shifting between frames | lower `wb_transition_speed` |
 | Daylight colour drifting over days | set `day_mode.fixed_colour_gains` |
 
@@ -215,6 +195,6 @@ tail -f logs/auto_timelapse.log
 ```
 
 Set `adaptive_timelapse.diagnostics.enabled: true` and every frame's metadata
-JSON gains a `diagnostics` block with the mode, lux, target, what the controller
-decided and what was applied. It ships disabled: the brightness analysis it does
-costs 100-300 ms per capture.
+JSON gains a `diagnostics` block with the ladder position, lux, target, what
+the controller decided and what was applied. It ships disabled: the
+brightness analysis it does costs 100-300 ms per capture.

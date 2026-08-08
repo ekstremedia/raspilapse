@@ -43,16 +43,19 @@ not the whole bar.
 |---|---|
 | `{camera_name}` | from `overlay.camera_name` |
 | `{date}` `{time}` `{datetime}` | `2026-07-27`, `01:12`, both |
-| `{datetime_localized}` | `mandag, 27 juli 2026 01:12` — see `overlay.datetime` |
-| `{exposure}` `{exposure_ms}` `{exposure_us}` | `190.9ms`, `190.9`, `190900` |
-| `{iso}` `{gain}` | `ISO 112`, `1.12` |
-| `{lux}` | `435.8` |
-| `{mode}` | `day`, `night`, `transition` |
-| `{night}` | `Yes` / `No` |
+| `{datetime_localized}` | `mandag. 27 juli 2026 01:12` — see `overlay.datetime` |
+| `{exposure}` `{exposure_ms}` `{exposure_us}` | `190.9ms`, `190.90`, `190900` |
+| `{iso}` `{gain}` | `ISO  112`, `1.12` |
+| `{lux}` | ` 435.8` |
+| `{mode}` | `Day`, `Night`, `Transition` |
 | `{wb}` `{wb_gains}` `{color_gains}` | white balance as text and as gains |
 | `{temperature}` | **sensor** temperature, not outdoor |
 | `{resolution}` | `3840x2160` |
 | `{af_mode}` `{lens_position}` `{focus_distance}` | autofocus state, where supported |
+
+The numeric formatters pad to fixed widths (the leading spaces above are
+real), so a value changing digits never makes the bar jump sideways
+mid-timelapse.
 
 ### System
 
@@ -79,7 +82,7 @@ that service.
 
 `{tide}` `{tide_level}` `{tide_trend}` `{tide_arrow}` `{tide_target}`
 `{tide_high_time}` `{tide_high_level}` `{tide_low_time}` `{tide_low_level}`
-`{ships}` `{ships_count}` `{ships_moving}`
+`{ships}` `{ships_count}` `{ships_moving}` `{ships_line_1}`…`{ships_line_5}`
 
 Tide and aurora also draw directly into the right-hand end of the top bar — a
 wave sparkline and a Kp/Bz readout — rather than through placeholders. Ships
@@ -103,7 +106,7 @@ overlay:
     padding: 0.6             # multiple of the font size
 
   layout:
-    line_spacing: 1.2
+    line_spacing: 1.2        # corner modes only; top-bar is fixed at 1.2
     bottom_padding_multiplier: 0.7
 
   datetime:
@@ -123,7 +126,7 @@ looks the same on 1080p and on 4K. At 0.020 that is about 43 px on 4K.
 for: a full-width band across the top, fading into the image.
 
 The other values place a text block in a corner instead — `top-left`,
-`top-right`, `bottom-left`, `bottom-right`, `center`, and `custom` (which uses
+`top-right`, `bottom-left`, `bottom-right`, and `custom` (which uses
 `overlay.custom_position.x`/`.y` as percentages). In those modes the four slots
 stack as separate lines rather than being laid out left and right.
 
@@ -136,7 +139,8 @@ sudo dpkg-reconfigure locales     # tick nb_NO.UTF-8, or whichever you want
 locale -a | grep nb_NO            # confirm
 ```
 
-Without it the code falls back to English and logs a warning.
+Without it you get numeric ISO output instead — `2026-07-27 01:12`, no weekday
+or month name in any language — and one warning in the log.
 
 ## Applying an overlay after the fact
 
@@ -145,7 +149,7 @@ metadata JSON:
 
 ```bash
 python3 -m raspilapse.cli.apply_overlay /var/www/html/images/2026/07/27/*.jpg --output-dir /tmp/out
-python3 -m raspilapse.cli.apply_overlay frame.jpg --overwrite
+python3 -m raspilapse.cli.apply_overlay frame.jpg     # in place when no -o/--output-dir
 ```
 
 Useful for trying a template change without waiting for the next capture.

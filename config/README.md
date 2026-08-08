@@ -28,7 +28,8 @@ Worth setting straight away:
 1. `output.directory` — where images land; must exist and be writable
 2. `output.project_name` — appears in every filename
 3. `location` — recorded with each frame
-4. `camera.resolution` — defaults to 1920x1080
+4. `camera.resolution` — the code defaults to 1920x1080; the example ships 4K,
+   which is where the disk figures in the docs come from
 
 Restart the service to apply changes:
 
@@ -53,7 +54,8 @@ Your `config.yml` is never touched. New settings appear in
 `docs/CONFIG-REFERENCE.yml` with their defaults already applied, so a pull
 cannot change your camera's behaviour by adding one.
 
-Two tests keep the three files honest, in `tests/test_config_example.py`:
+`tests/test_config_example.py` keeps the three files honest. The two checks
+that matter most:
 
 - every setting the reference documents is one the code actually reads
 - every setting the code *requires* has a default, so a short config still works
@@ -83,8 +85,8 @@ sudo systemctl restart raspilapse
 
 ## Troubleshooting
 
-**`FileNotFoundError: config/config.yml not found`** — you have not copied the
-example yet. See "First-time setup" above.
+**`FileNotFoundError: Configuration file not found: config/config.yml`** — you
+have not copied the example yet. See "First-time setup" above.
 
 **Invalid YAML** — check the indentation is spaces rather than tabs, and paste
 the file into <https://www.yamllint.com/>.

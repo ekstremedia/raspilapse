@@ -14,6 +14,10 @@ pip3 install -r requirements-dev.txt
 pip3 install pre-commit && pre-commit install
 ```
 
+On a PEP 668 system (Debian Bookworm and later, macOS Homebrew) those `pip3`
+lines need `--break-system-packages` — or a virtualenv, which is fine on a
+development machine, unlike on the camera.
+
 You do not need a Raspberry Pi to run the test suite. `picamera2` is imported
 lazily and stubbed in tests; only one test is hardware-gated.
 
@@ -30,9 +34,11 @@ or `make all`, which runs all four.
 
 **Use the black version pinned in `requirements-dev.txt`.** Black's stable
 style changes between yearly releases, so a newer black on your machine will
-reformat files that CI then rejects. Installing the dev requirements gives you
-the right one; the pre-commit hook uses whatever `black` is on your `PATH`, so
-check it with `black --version` if CI disagrees with you.
+reformat files that CI then rejects. The pre-commit hook builds its own
+isolated black from the `rev:` in `.pre-commit-config.yaml` — it never uses
+the one on your `PATH` — so keep that rev, `requirements-dev.txt` and
+`pyproject.toml` in step; a mismatch there is what makes CI disagree with a
+clean local run.
 
 ## Pull requests
 
@@ -66,7 +72,9 @@ Maintainers only.
 1. `raspilapse/__version__.py` is the single source of truth for the version.
    `pyproject.toml` reads it dynamically; update `CITATION.cff` by hand.
 2. Add a `CHANGELOG.md` entry under a new `## [x.y.z]` heading.
-   `tests/test_version.py` asserts these two agree.
+   `tests/test_version.py` asserts `__version__`, the top CHANGELOG heading
+   and `CITATION.cff` all agree, so a forgotten bump fails CI rather than
+   shipping.
 3. `make all` must pass.
 4. Commit, then tag: `git tag vX.Y.Z && git push --tags`.
 5. Create the GitHub release from the tag, pasting the CHANGELOG section.
@@ -79,7 +87,3 @@ for fixes.
 `CODECOV_TOKEN` lives in **Settings → Secrets and variables → Actions**.
 Get its value from the Codecov repository settings page — never paste a token
 into a file in this repository, including documentation.
-
----
-
-Thank you for contributing.

@@ -9,12 +9,14 @@ explains what each step is for and what to do when one fails.
 
 - Raspberry Pi with a CSI camera port (Zero 2 W and up; a Pi 4 handles 4K)
 - Camera Module V2, V3 or HQ
-- Raspberry Pi OS Bookworm recommended; Bullseye works and ships Python 3.9
-- Storage: roughly 6 GB per day at 4K on a 30 second interval, before cleanup
+- Raspberry Pi OS Bookworm or Trixie; Bullseye works and ships Python 3.9
+- Storage: roughly 6-8 GB per day at 4K on a 30 second interval, before cleanup
 
 Connect the camera with the Pi powered off: lift the clip on the CSI port, seat
 the ribbon with the contacts facing the HDMI connector, press the clip down.
-Enable it in `sudo raspi-config` → Interface Options → Camera, and reboot.
+There is nothing to enable — Bookworm and later detect a CSI camera
+automatically (the raspi-config camera menu is gone; the "Legacy camera"
+option that remains is the wrong stack for picamera2).
 
 Confirm the hardware works before touching this project at all:
 
@@ -23,7 +25,7 @@ rpicam-still -o /tmp/test.jpg
 ```
 
 A file appearing means the camera and driver are fine. If not, the problem is
-below Raspilapse — reseat the cable and re-check raspi-config.
+below Raspilapse — reseat the cable and check `rpicam-still --list-cameras`.
 
 ## 1. System packages
 
@@ -39,9 +41,7 @@ sudo apt install -y python3-picamera2 python3-yaml ffmpeg
 | `ffmpeg` | video assembly |
 
 That is everything required. `python3-picamera2` depends on `python3-numpy` and
-`python3-pil`, so the brightness metering and the overlay are already covered —
-this command used to name them separately, which made the install look bigger
-than it is.
+`python3-pil`, so the brightness metering and the overlay are already covered.
 
 ## 2. Optional extras
 
@@ -58,9 +58,9 @@ as unavailable; nothing else changes.
 missing one would give you.
 
 astral is the only one that needs pip: apt ships 1.6, whose API predates the
-`LocationInfo` this code uses. `--break-system-packages` is Bookworm's way of
-allowing pip alongside apt, and is safe here because nothing is being
-overwritten.
+`LocationInfo` this code uses. `--break-system-packages` is how Debian-packaged
+Python (Bookworm and later) allows pip alongside apt, and is safe here because
+nothing is being overwritten.
 
 `requests-toolbelt` streams the upload rather than holding a ~300 MB video in
 memory. Without it uploads still work, more expensively, and you get one warning
@@ -153,7 +153,7 @@ You get four units:
 |------|------|------|
 | `raspilapse.service` | continuous capture | always |
 | `raspilapse-daily-video.timer` | yesterday's video, keogram, slitscan | 05:00 |
-| `raspilapse-cleanup.timer` | expired images and database rows | 02:00 |
+| `raspilapse-cleanup.timer` | expired images, videos and database rows | 02:00 |
 | `raspilapse-upload-retry.timer` | retry failed uploads | every 30 min |
 
 Subsets and extras:
@@ -161,13 +161,16 @@ Subsets and extras:
 ```bash
 ./scripts/install.sh --only capture,cleanup
 ./scripts/install.sh --with-watchdog     # restarts on stalled capture; runs as root
+./scripts/install.sh --with-netwatch     # recovers a dropped network; runs as root
 ./scripts/install.sh --dry-run           # print the units, install nothing
 ./scripts/install.sh --uninstall
 ```
 
 The watchdog is opt-in because it runs as root and can reboot the machine. It
 exists for the case `Restart=always` cannot see: the process alive but the
-camera no longer producing frames.
+camera no longer producing frames. The network watchdog is the same idea for
+wifi — reconnect, restart NetworkManager, reboot as the last resort — and
+requires NetworkManager (check `systemctl is-active NetworkManager` first).
 
 ## 7. Confirm
 
@@ -188,7 +191,9 @@ output only.
 ## Optional
 
 **Serving images over the web.** If `output.directory` is under a webserver
-root, `output.symlink_latest` keeps a `status.jpg` pointing at the newest frame.
+root, set `output.symlink_latest.enabled: true` and a `path` (e.g.
+`/var/www/html/status.jpg`) and each capture repoints that symlink at the
+newest frame.
 
 **Uploading daily videos.** Fill in `video_upload.url` and `api_key`. Until you
 do, the retry service notices and exits cleanly rather than queueing forever.
@@ -211,6 +216,10 @@ sudo systemctl restart raspilapse
 
 Database migrations run automatically on start. `config/config.yml` is never
 touched by a pull; check `docs/CONFIG-REFERENCE.yml` for new settings.
+
+Coming from a checkout older than 1.5.0, the layout changed under the
+installed units — a plain pull deletes files they point at. Follow
+[UpgradeOldRaspilapse.md](../UpgradeOldRaspilapse.md) instead.
 
 ## When it does not work
 
