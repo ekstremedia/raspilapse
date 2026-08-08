@@ -10,6 +10,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+# db_graphs needs matplotlib, an optional dependency the install docs list as
+# "only for the graph scripts" -- a lean camera install must still be able to
+# run the suite. (CI installs it, so these tests are not skipped there.)
+pytest.importorskip("matplotlib")
+
 # Add scripts to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 

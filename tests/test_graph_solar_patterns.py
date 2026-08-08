@@ -11,6 +11,12 @@ import tempfile
 from datetime import datetime, timedelta
 from unittest import mock
 
+import pytest
+
+# graph_solar_patterns needs matplotlib, an optional dependency -- a lean
+# camera install must still be able to run the suite. CI installs it.
+pytest.importorskip("matplotlib")
+
 
 class TestGetDbPath:
     """Tests for get_db_path function."""
