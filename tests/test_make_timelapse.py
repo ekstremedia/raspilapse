@@ -282,6 +282,39 @@ class TestCreateVideoCodecHandling:
         shutil.rmtree(temp_dir)
 
     @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_the_frame_rate_is_set_on_the_input_not_the_output(
+        self, mock_run, temp_images, temp_output
+    ):
+        """`-r` after `-i` is an output option, and that changes what it means.
+
+        Against a concat input it becomes a constant-rate *conversion*: the
+        demuxer inherits image2's implicit 25 fps, so ffmpeg duplicates or
+        drops frames to reach whatever `-r` says. Measured with real files on
+        ffmpeg 5.1.9, 50 source images at `-r 30`: 60 encoded frames with `-r`
+        after `-i`, 50 with it before. At the configured `video.fps: 25` the
+        two rates agree and the bug is invisible, which is why it survived.
+
+        Asserted on position rather than presence: `"-r" in cmd and "30" in
+        cmd` passes on the broken command line and the fixed one alike, and
+        that is exactly the test this replaces the absence of.
+
+        `-framerate` is not the answer either -- the concat demuxer has no such
+        option and ffmpeg exits with "Option framerate not found".
+        """
+        from raspilapse.video.timelapse import create_video
+
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(temp_images, temp_output, fps=30, codec="libx264")
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd.count("-r") == 1, "two rates means one of them is a conversion"
+        assert cmd.index("-r") < cmd.index("-i"), "-r after -i is an output-side conversion"
+        assert cmd[cmd.index("-r") + 1] == "30"
+        assert "-framerate" not in cmd, "the concat demuxer has no -framerate option"
+
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_libx264_uses_crf_preset_threads(self, mock_run, temp_images, temp_output):
         """Test that libx264 codec uses CRF, preset, and threads."""
         from raspilapse.video.timelapse import create_video

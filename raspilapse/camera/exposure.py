@@ -18,6 +18,18 @@ The mode name survives as a label on the output -- the database column, the
 overlay, the graph scripts -- derived from the settings rather than deciding
 them.
 
+There is no handover across that label either, and there deliberately is not
+one. `seed_from_metadata` used to reseed the loop at the day-to-transition
+crossing from the last daylight frame's *camera* metadata. Its colour half was
+removed first, for bypassing the wb_speed cross-fade it was meant to feed; its
+exposure half was removed for the same class of reason. The metadata reports
+what the sensor *did*, and this sensor's analogue gain floor is 1.1228 while
+the ladder commands 1.0 -- so reseeding multiplied `_required` by 1.12 at every
+dusk, a 0.17-stop step measured on nine consecutive nights. Nothing needed
+seeding: `_required` already holds the last commanded value, which is the
+correct continuation. A boundary that no decision consults cannot need state
+carried across it.
+
 This module deliberately knows nothing about the camera, the clock, or where
 on Earth it is running.
 """
@@ -85,13 +97,6 @@ class ExposureController:
         self._smoothed_lux: Optional[float] = None
         self._lux_smoothing = transition.get("lux_smoothing_factor", 0.3)
 
-        # Handover state for the day-to-night boundary, where the camera stops
-        # using AWB and has to be told what neutral looked like.
-        self._seeded = False
-        self._seed_exposure: Optional[float] = None
-        self._seed_gain: Optional[float] = None
-        self._seed_wb: Optional[Tuple[float, float]] = None
-
         # What decide() decided, for the metadata diagnostics -- so the
         # calculation never runs twice per frame.
         self._last_decision: Dict = {}
@@ -136,10 +141,8 @@ class ExposureController:
         """
         if exposure_time is not None:
             self._shutter = exposure_time
-            self._seed_exposure = exposure_time
         if analogue_gain is not None:
             self._gain = analogue_gain
-            self._seed_gain = analogue_gain
         if exposure_time is not None:
             # The ladder's state is the product. A row with an exposure but no
             # gain is still worth having; assume the gain floor.
@@ -147,17 +150,12 @@ class ExposureController:
             self._position = ladder.position(self._required, self._max_shutter, self._max_gain)
         if colour_gains is not None:
             self._last_colour_gains = tuple(colour_gains)
-            self._seed_wb = tuple(colour_gains)
         if brightness is not None:
             self.meter.seed_brightness(brightness)
         if lux is not None:
             self._smoothed_lux = lux
         if mode is not None:
             self._mode = mode
-
-    def reset_seed_state(self) -> None:
-        """Forget the handover seed, on returning to the bright end."""
-        self._seeded = False
 
     # Read-only views for the capture loop and the metadata diagnostics.
     @property
@@ -173,17 +171,18 @@ class ExposureController:
         return self.meter.brightness
 
     @property
-    def transition_seeded(self) -> bool:
-        return self._seeded
-
-    @property
-    def seed_exposure(self) -> Optional[float]:
-        return self._seed_exposure
-
-    @property
     def ladder_position(self) -> float:
         """Where the last decision sat, 0 (bright) to 1 (dark)."""
         return self._position
+
+    @property
+    def max_shutter(self) -> float:
+        """The longest exposure this camera is allowed to take.
+
+        Exposed so callers can ask where the ladder starts trading gain without
+        re-reading the config and inventing a second answer.
+        """
+        return self._max_shutter
 
     def diagnostics(self) -> Dict:
         """Everything worth writing into a frame's metadata JSON."""
@@ -344,33 +343,6 @@ class ExposureController:
             f"[WB] Daylight reference: R={gains[0]:.2f} B={gains[1]:.2f}",
         )
 
-    def seed_from_metadata(self, capture_metadata: Dict = None):
-        """Carry the exposure across the day-to-night boundary.
-
-        Exposure only. This used to seed colour too, from the AWB reference
-        shot, on the reasoning that the handover was where the camera stopped
-        using AWB and the first manual frame had to match the last automatic
-        one. That stopped being true when white balance became manual on every
-        frame: there is no automatic frame to match any more, and assigning
-        _last_colour_gains here bypassed the wb_speed cross-fade, so it was the
-        seed itself that produced the one-frame colour step it was meant to
-        prevent. Colour now crosses the boundary the way it crosses everywhere
-        else -- a fraction of the way per frame.
-        """
-        source = capture_metadata or {}
-
-        exposure_us = source.get("ExposureTime")
-        gain = source.get("AnalogueGain")
-        if exposure_us:
-            shutter = exposure_us / 1_000_000
-            self._required = shutter * (gain or 1.0)
-            self._shutter = shutter
-            self._gain = gain
-            self._position = ladder.position(self._required, self._max_shutter, self._max_gain)
-
-        self._seeded = True
-        logger.info(f"[Handover] Seeded from metadata: exposure={self._shutter}, gain={self._gain}")
-
     def _wb_position(self, position: float) -> float:
         """Where in the day-to-night colour cross-fade this ladder position sits.
 
@@ -391,6 +363,51 @@ class ExposureController:
         if night_edge <= day_edge:
             return 0.0
         return max(0.0, min(1.0, (position - day_edge) / (night_edge - day_edge)))
+
+    @property
+    def learns_day_wb(self) -> bool:
+        """Whether a white-balance reference reading would change anything.
+
+        Two ways it would not, and both cost the same to get wrong.
+
+        False where `fixed_colour_gains` is configured, because
+        _target_colour_gains prefers it and never consults the learned
+        reference. This lives here, next to that precedence, rather than in the
+        capture loop: two copies of the rule is how the configured value came
+        to be silently overridden once already.
+
+        False away from the bright end, because update_day_wb_reference drops
+        every reading taken outside LightMode.DAY -- AWB has nothing to meter
+        in the dark. That guard used to be the only thing enforcing it, on the
+        far side of the teardown, so a camera without configured gains paid the
+        full price of the reading and then threw it away. Dusk is the worst
+        case: the ladder crosses most of its range, REFERENCE_LADDER_STEP fires
+        a couple of dozen times, and every one of those is discarded.
+
+        The mode is the *last* decided one -- the loop asks this before
+        decide() -- which is what makes it a policy rather than a guarantee.
+        The guard in update_day_wb_reference stays either way.
+
+        The loop asks because the reading is expensive in a way that shows up
+        in the finished video. Taking it means tearing the running camera down
+        and opening a second one -- libcamera will not hold two -- and it
+        happens between the top of the loop and the capture, so that frame's
+        timestamp lands about three seconds late and the next one reverts.
+        Measured on 2026-08-06: 68 of the day's 2879 intervals off by two
+        seconds or more from 30, hourly on the dot from
+        REFERENCE_MAX_INTERVAL_FRAMES plus a cluster either side of midnight
+        from REFERENCE_LADDER_STEP. That is a 10% wobble in playback speed
+        roughly once a second of finished video, and on a camera with a
+        configured white point it buys a number that is then discarded.
+        """
+        adaptive = self.config.get("adaptive_timelapse", {})
+        if adaptive.get("day_mode", {}).get("fixed_colour_gains"):
+            return False
+        # None on the very first frame, before anything has been decided. That
+        # counts as worth reading: it is the cold start, where the controller
+        # has no daylight white point at all and would otherwise sit on the
+        # hardcoded (2.5, 1.6) until the light happens to reach day.
+        return self._mode in (None, LightMode.DAY)
 
     def _target_colour_gains(self, position: float) -> Tuple[float, float]:
         """Cross-fade between the daylight white point and the configured night gains.

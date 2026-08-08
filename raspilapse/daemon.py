@@ -6,6 +6,7 @@ including stars and aurora activity.
 """
 
 import json
+import math
 import signal
 import sys
 import time
@@ -85,10 +86,13 @@ class Decision:
     raw_lux: Optional[float]
     ladder_position: Optional[float]
     settings: Dict[str, Any]
-    # Read the instant decide() returns. The handover seeding that runs a few
-    # lines later overwrites the controller's shutter, gain and ladder position
-    # from the last daylight frame's metadata, so asking for diagnostics after
-    # it describes the seed rather than the frame that was about to be taken.
+    # Read the instant decide() returns, so they describe the frame that was
+    # about to be taken. That used to be load-bearing: the handover seeding ran
+    # a few lines later and overwrote the controller's shutter, gain and ladder
+    # position from the last daylight frame's metadata, so diagnostics read
+    # afterwards described the seed instead. The seeding is gone -- see
+    # exposure.py's module docstring -- and nothing may reintroduce a writer
+    # between decide() and here.
     diagnostics: Dict[str, Any]
 
 
@@ -110,9 +114,6 @@ class AdaptiveTimelapse:
 
         # All exposure decisions and their state live here.
         self.exposure = ExposureController(self.config)
-
-        self._previous_mode: str = None  # Track mode changes for seeding detection
-        self._last_day_capture_metadata: Dict = None  # Metadata from last day mode capture
 
         # Where on the ladder the last white-balance reading was taken, and
         # when. The reading itself goes straight to the controller. See
@@ -253,9 +254,42 @@ class AdaptiveTimelapse:
             seed_exposure = exposure_us / 1_000_000 if has_exposure else None
             seed_gains = (colour_gains_r, colour_gains_b) if has_wb else None
 
+            # The analogue_gain column holds what the sensor reported, and the
+            # loop's state is in commanded units -- the two differ by the
+            # sensor's gain floor, 1.1228 against a commanded 1.0 on this
+            # camera. The loop never notices in flight, because it is a
+            # feedback loop and the constant is absorbed; it notices here,
+            # where the number is read back as if it were a command. Measured
+            # at the restart on 2026-08-07 08:06:33: 604us -> 657us, brightness
+            # 119.9 -> 126.2, corrected one frame later.
+            #
+            # ladder.allocate only asks for gain above 1.0 once the shutter is
+            # at its ceiling, so that is exactly when the column is worth
+            # trusting. Anywhere below it the ladder commanded 1.0 whatever the
+            # sensor answered. Deriving the condition from the ceiling rather
+            # than a threshold of its own keeps this from disagreeing with the
+            # ladder if the ceiling is reconfigured.
+            #
+            # The comparison needs slack because the column records what the
+            # camera *delivered*, and the camera quantises: a commanded 20 s
+            # comes back as 19999994 us, and this database holds 62556 such
+            # rows against not one at exactly 20000000. An equality test would
+            # therefore reject every real night frame and seed the restart at
+            # gain 1.0 -- up to six times too dark, which is worse than the
+            # daylight bug this is here to fix. The worst under-delivery on
+            # record is 85 us, so 0.1% is 235x the observed margin while still
+            # being far tighter than any ladder step: within it the ladder
+            # cannot have commanded a gain below about 1.001, nowhere near the
+            # 1.1228 floor that makes daylight rows ambiguous.
+            CEILING_TOLERANCE = 0.001
+            at_the_ceiling = has_exposure and seed_exposure >= self.exposure.max_shutter * (
+                1 - CEILING_TOLERANCE
+            )
+            seed_gain = analogue_gain if (has_gain and at_the_ceiling) else None
+
             self.exposure.seed_from_capture(
                 exposure_time=seed_exposure,
-                analogue_gain=analogue_gain if has_gain else None,
+                analogue_gain=seed_gain,
                 colour_gains=seed_gains,
                 brightness=last_brightness,
                 lux=last_lux,
@@ -265,8 +299,10 @@ class AdaptiveTimelapse:
             parts = []
             if seed_exposure:
                 parts.append(f"exposure={seed_exposure:.4f}s")
-            if has_gain:
-                parts.append(f"gain={analogue_gain:.2f}")
+            if seed_gain:
+                parts.append(f"gain={seed_gain:.2f}")
+            elif has_gain:
+                parts.append(f"gain={analogue_gain:.2f} reported, seeded as commanded 1.0")
             if seed_gains:
                 parts.append(f"WB=[{seed_gains[0]:.2f}, {seed_gains[1]:.2f}]")
             if last_mode:
@@ -701,11 +737,21 @@ class AdaptiveTimelapse:
         The controller keeps it as the daylight white point for a camera that
         has not configured `fixed_colour_gains`, and cross-fades towards it at
         wb_transition_speed like any other target. Where the gains are
-        configured, this whole path is dead weight and `test_shot.enabled: false`
-        turns it off.
+        configured this whole path is dead weight, and the controller says so
+        itself via `learns_day_wb` -- it used to be dead weight the operator
+        had to know to switch off by hand with `test_shot.enabled: false`,
+        which nobody did, so this camera spent 68 camera teardowns a day
+        computing a number it discarded.
         """
         reference = self.config["adaptive_timelapse"]["test_shot"]
         if not reference.get("enabled", True):
+            return False
+
+        # Asked, not assumed: the controller owns the precedence between a
+        # configured white point and a learned one, so it is the only thing
+        # that can say whether a reading would be used. Where it would not,
+        # taking it costs a camera teardown and a late frame for nothing.
+        if not self.exposure.learns_day_wb:
             return False
 
         if self._reference_position is None:
@@ -752,6 +798,55 @@ class AdaptiveTimelapse:
             f"{metadata.get('ColourGains')}"
         )
 
+    @staticmethod
+    def _next_slot(interval: float, after: float) -> float:
+        """The next capture time on the absolute grid.
+
+        Multiples of the interval since the epoch, not since this process
+        started. Three things follow from that, none of which the old
+        `sleep = interval - (now - loop_start)` gave:
+
+        - A frame that costs more than its slot no longer shifts every later
+          frame by the overrun. That arithmetic clamps at zero, so the train
+          keeps whatever phase an expensive frame left it on, permanently.
+        - A restart resumes the grid the previous process was on instead of
+          starting a new arbitrary phase.
+        - The drift stops. `elapsed` excludes the time between waking and
+          reading the clock, so the train slipped tens of milliseconds a frame.
+
+        It does *not* fix a frame that runs late inside its own slot -- the old
+        code re-anchored each iteration and recovered from those too. The white
+        balance reference shot was the source of those, and it is gone.
+        """
+        return math.floor(after / interval) * interval + interval
+
+    @staticmethod
+    def _sleep_until_next_slot(current_slot: float, interval: float) -> float:
+        """Advance one slot, skip any already in the past, and sleep to it.
+
+        Every path that ends an iteration goes through here, including the one
+        that failed to open the camera. That path used to `continue` straight
+        past the scheduling, so the retry fired the moment it succeeded rather
+        than on a slot -- and a failure lasting longer than an interval left
+        the grid behind without skipping the slots it had missed.
+        """
+        next_slot = current_slot + interval
+        now = time.time()
+        if now >= next_slot:
+            behind = now - next_slot
+            skipped = int(behind // interval) + 1
+            # Skip whole slots rather than firing a burst to catch up. Even
+            # spacing is the entire premise of a timelapse, and three captures
+            # 200 ms apart damage it far more than one missing frame does.
+            logger.warning(
+                f"Iteration ran {behind + interval:.1f}s against a {interval}s "
+                f"interval; skipping {skipped} slot(s) to stay on the grid"
+            )
+            next_slot += skipped * interval
+        logger.debug(f"Sleeping until the next slot, {next_slot - now:.1f}s")
+        time.sleep(next_slot - now)
+        return next_slot
+
     def _decide(self) -> Decision:
         """Choose settings for the next frame."""
         # Recorded, not consulted. Sun elevation is an interesting thing to have
@@ -762,8 +857,13 @@ class AdaptiveTimelapse:
         settings = self.exposure.decide()
         mode = self.exposure.last_mode
 
-        # Captured here, before _seed_across_mode_change can overwrite the
-        # state they describe. See the note on Decision.diagnostics.
+        # Read straight after decide(), so the diagnostics describe the frame
+        # they were recorded with. That used to be an ordering constraint
+        # rather than a fact: _seed_across_mode_change ran between these two
+        # and overwrote the shutter, gain and ladder position the diagnostics
+        # report, so every handover frame recorded the seed instead of its own
+        # exposure. The seeding is gone (see exposure.py's module docstring),
+        # so there is nothing left to race -- but keep the read here anyway.
         decision = Decision(
             mode=mode,
             lux=self.exposure.smoothed_lux,
@@ -773,31 +873,7 @@ class AdaptiveTimelapse:
             diagnostics=self.exposure.diagnostics(),
         )
 
-        self._seed_across_mode_change(mode)
-        self._previous_mode = mode
-
         return decision
-
-    def _seed_across_mode_change(self, mode: str) -> None:
-        """Hand exposure state across the day/night boundary.
-
-        The last daylight frame is the starting point for the climb into the
-        dark, so the controller is primed from it rather than continuing from
-        whatever the ladder happened to hold.
-
-        It used to prime colour from the AWB reference shot here as well. That
-        is gone: see seed_from_metadata.
-        """
-        entering_manual = self._previous_mode == LightMode.DAY and mode in (
-            LightMode.TRANSITION,
-            LightMode.NIGHT,
-        )
-        if entering_manual and not self.exposure.transition_seeded:
-            self.exposure.seed_from_metadata(self._last_day_capture_metadata)
-
-        if mode == LightMode.DAY and self._previous_mode != LightMode.DAY:
-            self.exposure.reset_seed_state()
-            logger.info("[Handover] Back at the bright end - seed state reset")
 
     def _measure_lux(self, brightness: Optional[float], settings: Dict) -> Optional[float]:
         """Estimate ambient light from the frame that was just taken.
@@ -893,14 +969,6 @@ class AdaptiveTimelapse:
 
         capture_metadata = self._read_capture_metadata(metadata_path)
 
-        # Kept for the exposure handover, which needs the last real daylight
-        # frame. The white balance reference is not learned here: this frame
-        # was taken with AWB off, so its ColourGains are the ones the
-        # controller chose, not a reading of the scene. See
-        # _take_reference_shot.
-        if capture_metadata is not None and decision.mode == LightMode.DAY:
-            self._last_day_capture_metadata = capture_metadata
-
         if self._database is None:
             return
 
@@ -944,10 +1012,13 @@ class AdaptiveTimelapse:
         capture = None
         last_mode = None
 
+        # Put the first frame on the grid too, so a restart does not leave one
+        # short interval behind it.
+        next_slot = self._next_slot(interval, time.time())
+        time.sleep(max(0.0, next_slot - time.time()))
+
         try:
             while self.running:
-                loop_start = time.time()
-
                 if num_frames > 0 and self.frame_count >= num_frames:
                     logger.info(f"Reached frame limit: {num_frames}")
                     break
@@ -1004,7 +1075,12 @@ class AdaptiveTimelapse:
                         # it would reach the outer handler and stop the daemon.
                         logger.error(f"Camera initialisation failed: {e}", exc_info=True)
                         capture = None
-                        time.sleep(min(interval, 5))
+                        # Back onto the grid rather than a bare sleep. Retrying
+                        # off-grid puts the recovered frame at an arbitrary
+                        # offset, and a failure outlasting an interval used to
+                        # leave the schedule behind without skipping what it
+                        # had missed.
+                        next_slot = self._sleep_until_next_slot(next_slot, interval)
                         continue
 
                 try:
@@ -1032,15 +1108,7 @@ class AdaptiveTimelapse:
                 except Exception as e:
                     logger.error(f"Frame capture failed: {e}", exc_info=True)
 
-                elapsed = time.time() - loop_start
-                sleep_time = max(0, interval - elapsed)
-                if sleep_time > 0:
-                    logger.debug(f"Sleeping for {sleep_time:.1f} seconds...")
-                    time.sleep(sleep_time)
-                else:
-                    logger.warning(
-                        f"Capture took longer than interval ({elapsed:.1f}s > {interval}s)"
-                    )
+                next_slot = self._sleep_until_next_slot(next_slot, interval)
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")

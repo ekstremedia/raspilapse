@@ -459,8 +459,6 @@ class TestWhiteBalanceWiring:
             os.unlink(metadata_path)
 
         timelapse.exposure.update_day_wb_reference.assert_not_called()
-        # Still kept: the exposure handover starts from the last daylight frame.
-        assert timelapse._last_day_capture_metadata["ColourGains"] == [2.9, 1.4]
 
     def test_the_reference_shot_is_where_it_is_learned(self, test_config_file):
         """The one frame taken with AWB on is the only honest source."""
@@ -493,20 +491,315 @@ class TestWhiteBalanceWiring:
         assert timelapse._reference_frame == 40
         assert timelapse._reference_position == timelapse.exposure.ladder_position
 
-    def test_the_handover_cannot_inject_awb_gains(self, test_config_file):
-        """seed_from_metadata assigns state directly, bypassing the wb_speed
-        cross-fade. Handing it the AWB reference shot is what produced the
-        one-frame step; it now takes the daylight frame and no colour at all."""
+    def test_deciding_leaves_the_controller_holding_what_it_decided(self, test_config_file):
+        """Nothing may rewrite the loop's state after decide() has run.
+
+        This is the test that fails if the day-to-transition seeding comes
+        back, in any spelling. _seed_across_mode_change ran immediately after
+        decide() and overwrote _required from the last daylight frame's camera
+        metadata -- whose AnalogueGain is the sensor's 1.1228 floor while the
+        ladder had commanded 1.0. The settings handed to the camera therefore
+        described one exposure and the controller's state described another
+        1.12x larger, and the next frame started from the wrong one. Nine
+        consecutive dusks in this camera's database show the resulting step:
+        200 043 -> 224 519 us, +8 to +11 points of mean brightness.
+
+        Asserting the equality rather than the absence catches a reseed however
+        it is written -- including one that does not go through a function
+        named `seed_*`.
+        """
         timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._previous_mode = LightMode.DAY
-        timelapse._last_day_capture_metadata = {"ExposureTime": 500_000, "AnalogueGain": 2.0}
-        timelapse.exposure.seed_from_metadata = MagicMock()
+        timelapse._database = None
 
-        timelapse._seed_across_mode_change(LightMode.TRANSITION)
+        # Walk down through the knee so a crossing actually happens, and check
+        # the invariant on every frame rather than only the one that flips.
+        knee = timelapse.exposure._max_shutter * 0.01
+        seen = set()
+        for _ in range(60):
+            decision = timelapse._decide()
+            seen.add(decision.mode)
 
-        timelapse.exposure.seed_from_metadata.assert_called_once_with(
-            {"ExposureTime": 500_000, "AnalogueGain": 2.0}
+            settings = decision.settings
+            delivered = (settings["ExposureTime"] / 1e6) * settings["AnalogueGain"]
+            # abs=1e-5 is the floor, not slack: ExposureTime is int(shutter *
+            # 1e6), so the delivered product is quantised to a microsecond
+            # times the gain -- at most 6e-6 here. The step this guards against
+            # is 0.0246 in the same units, 2400x larger.
+            assert timelapse.exposure._required == pytest.approx(delivered, rel=1e-4, abs=1e-5), (
+                f"the controller holds {timelapse.exposure._required} but handed the "
+                f"camera {delivered} -- something rewrote the state after decide()"
+            )
+
+            brightness = max(0.0, min(255.0, (120.0 / knee) * delivered))
+            timelapse.exposure.observe_frame(
+                {"mean_brightness": brightness, "std_brightness": 50.0}
+            )
+
+        assert {LightMode.DAY, LightMode.TRANSITION} <= seen, (
+            f"never crossed the day/transition knee, so the invariant was "
+            f"never tested where it used to break (saw {sorted(seen)})"
         )
+
+
+class TestTheCaptureGrid:
+    """Capture times land on multiples of the interval, not on the process.
+
+    The old arithmetic was `sleep = interval - (now - loop_start)`, clamped at
+    zero. That recovers from a frame that runs late *within* its slot, but an
+    iteration that overruns the whole interval sleeps zero and moves every
+    later frame by the overrun, forever -- the video plays at a constant speed
+    either side of a permanent seam.
+    """
+
+    def test_the_grid_is_absolute_not_relative_to_the_process(self):
+        """Two calls an arbitrary offset apart land on the same multiples, so a
+        restart resumes the previous process's phase instead of inventing one."""
+        assert AdaptiveTimelapse._next_slot(30, 1_000_000_003.7) == 1_000_000_020.0
+        assert AdaptiveTimelapse._next_slot(30, 1_000_000_019.9) == 1_000_000_020.0
+        assert AdaptiveTimelapse._next_slot(30, 1_000_000_020.0) == 1_000_000_050.0
+
+    def test_a_slot_boundary_advances_rather_than_returning_itself(self):
+        """Landing exactly on a boundary must give the *next* slot. Returning
+        the current one makes the loop sleep zero and spin."""
+        assert AdaptiveTimelapse._next_slot(30, 300.0) == 330.0
+
+    def test_an_overrun_costs_its_own_slots_and_no_more(self):
+        """The frame that overran is lost; the ones after it stay on the grid.
+
+        Simulated the way the loop does it: advance by one interval, and when
+        that is already in the past skip whole slots forward. Under the old
+        arithmetic the same overrun shifts the phase by 25s and never recovers.
+        """
+        interval, next_slot = 30, 300.0
+        emitted = []
+        for i, cost in enumerate([5, 5, 55, 5, 5]):  # one frame takes 55s
+            emitted.append(next_slot)
+            now = next_slot + cost
+            next_slot += interval
+            if now >= next_slot:
+                next_slot += (int((now - next_slot) // interval) + 1) * interval
+
+        assert emitted == [300.0, 330.0, 360.0, 420.0, 450.0]
+        gaps = {b - a for a, b in zip(emitted, emitted[1:])}
+        assert gaps <= {30.0, 60.0}, f"a gap off the grid: {sorted(gaps)}"
+
+
+class TestSlotRecovery:
+    """Every path that ends an iteration goes back onto the grid, including the
+    one that failed to open the camera.
+
+    That path used to `continue` straight past the scheduling, so a retry fired
+    the instant it succeeded rather than on a slot -- and a failure lasting
+    longer than an interval left the schedule behind without skipping the slots
+    it had missed. libcamera refusing a camera that is still closing is an
+    ordinary event here, because the camera is opened and closed once per
+    frame, so this is not a rare path.
+    """
+
+    @staticmethod
+    def _advance(current_slot, interval, now):
+        """_sleep_until_next_slot with the clock and the sleep stubbed out."""
+        slept = []
+        with (
+            patch("raspilapse.daemon.time.time", return_value=now),
+            patch("raspilapse.daemon.time.sleep", side_effect=slept.append),
+        ):
+            returned = AdaptiveTimelapse._sleep_until_next_slot(current_slot, interval)
+        return returned, slept
+
+    def test_an_ordinary_iteration_sleeps_to_the_next_slot(self):
+        """The baseline the two failure cases below are departures from: a
+        frame costing 5s of a 30s interval sleeps the remaining 25."""
+        returned, slept = self._advance(300.0, 30, now=305.0)
+        assert returned == 330.0
+        assert slept == [25.0]
+
+    def test_a_failure_outlasting_an_interval_skips_the_slots_it_missed(self):
+        """Recovery took 70s of a 30s interval. The next capture belongs on the
+        grid at 390, not 70s late at 330, and not immediately either."""
+        returned, slept = self._advance(300.0, 30, now=370.0)
+        assert returned == 390.0
+        assert slept == [20.0]
+
+    def test_it_never_returns_a_slot_in_the_past(self):
+        """A negative sleep is what an immediate off-grid retry looks like."""
+        for late in (0, 1, 29, 30, 31, 200):
+            returned, slept = self._advance(300.0, 30, now=300.0 + late)
+            assert returned > 300.0 + late, f"{late}s late returned a slot already gone"
+            assert slept and slept[0] > 0
+
+
+class TestTheLoopIsWiredToTheGrid:
+    """The scheduling helpers are unit-tested above; this is the wiring.
+
+    `_next_slot` and `_sleep_until_next_slot` can both be perfect while the
+    loop drops the returned value on the floor, calls the wrong one, or misses
+    a path entirely -- which is exactly how the camera-init branch came to skip
+    the schedule. These run one bounded iteration with the camera mocked and
+    assert the call actually happens.
+    """
+
+    @staticmethod
+    def _run_one(config_file, init_side_effect=None, max_iterations=6):
+        """Run the capture loop once with the camera mocked out.
+
+        Returns the stubbed `_sleep_until_next_slot` and `time.sleep` so the
+        caller can assert on what the loop actually reached.
+        """
+        timelapse = AdaptiveTimelapse(config_file)
+        timelapse._database = None
+        timelapse._record = MagicMock()
+        timelapse._read_capture_metadata = MagicMock(return_value=None)
+
+        def capture(*args, **kwargs):
+            """Stand in for capture_frame, counter included.
+
+            test_mode stops the loop via `frame_count >= num_frames`, and
+            frame_count is incremented inside capture_frame -- so a mock that
+            only returns a path leaves the loop spinning forever. This cost a
+            hung test run to find.
+            """
+            timelapse.frame_count += 1
+            return ("frame.jpg", None)
+
+        timelapse.capture_frame = MagicMock(side_effect=capture)
+
+        calls = []
+
+        def advance_stub(current_slot, interval):
+            """Record the reschedule, and stop the loop independently of it.
+
+            The bound is deliberately not the loop's own exit condition: a
+            future change that breaks that condition should fail the assertion
+            below rather than hang the suite.
+            """
+            calls.append(current_slot)
+            if len(calls) >= max_iterations:
+                timelapse.running = False
+            return 999.0
+
+        with (
+            patch("raspilapse.daemon.ImageCapture") as camera,
+            patch("raspilapse.daemon.time.sleep") as sleep,
+            patch.object(
+                AdaptiveTimelapse, "_sleep_until_next_slot", side_effect=advance_stub
+            ) as advance,
+        ):
+            if init_side_effect:
+                camera.return_value.initialize_camera.side_effect = init_side_effect
+            timelapse.run(test_mode=True)
+
+        assert len(calls) < max_iterations, "the loop did not stop on its own"
+        return advance, sleep
+
+    def test_a_normal_frame_ends_on_the_grid(self, test_config_file):
+        """The happy path, and the control for the failure case below: an
+        iteration that captures normally must still reschedule, and the first
+        frame must be aligned before the loop starts at all."""
+        advance, sleep = self._run_one(test_config_file)
+        assert advance.called, "the loop finished an iteration without rescheduling"
+        assert sleep.called, "the first frame was not aligned to a slot before starting"
+
+    def test_a_failed_camera_init_also_ends_on_the_grid(self, test_config_file):
+        """The branch that used to `continue` past the scheduling entirely.
+
+        libcamera refusing a camera that is still closing is ordinary here --
+        the camera is opened and closed once per frame -- so an off-grid retry
+        was not a rare path.
+        """
+        advance, _ = self._run_one(
+            test_config_file, init_side_effect=[RuntimeError("device busy"), None]
+        )
+        assert advance.call_count >= 2, (
+            f"init failed once and the loop rescheduled {advance.call_count} time(s); "
+            f"the failure path skipped the grid"
+        )
+
+
+class TestSeedingAcrossARestart:
+    """The database row is a record, not a command, and the two differ.
+
+    `analogue_gain` holds what the sensor reported. The loop's state is in
+    commanded units: ladder.allocate keeps gain at 1.0 until the shutter is at
+    its ceiling, and this sensor answers 1.1228 regardless. In flight that
+    constant is absorbed -- it is a feedback loop and nothing reads it back.
+    Here it is read back as if it were a command, and the first frame after a
+    restart is seeded 12% bright.
+
+    Measured on this camera at the restart on 2026-08-07 08:06:33, one frame
+    wide because the loop corrects it immediately:
+
+        08:06:14   604 us   brightness 119.9
+        08:06:33   657 us   brightness 126.2     <- 604 x 1.1228, on the grid
+        08:06:44   604 us   brightness 120.2
+    """
+
+    def _seeded(self, config_path, row):
+        """Seed a fresh daemon from one database row, and return what the
+        controller ended up holding as its required exposure."""
+        timelapse = AdaptiveTimelapse(config_path)
+        timelapse._database = MagicMock()
+        timelapse._database.get_last_capture.return_value = row
+        timelapse._seed_from_last_capture()
+        return timelapse.exposure._required
+
+    def test_a_daylight_row_is_seeded_as_the_gain_the_ladder_commanded(self, test_config_file):
+        """604 us at a reported 1.1228 is a commanded 604 us at gain 1.0."""
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 604,
+                "analogue_gain": 1.1228070259094238,
+                "brightness_mean": 119.9,
+                "mode": LightMode.DAY,
+            },
+        )
+        assert required == pytest.approx(
+            0.000604, rel=1e-6
+        ), "seeded the sensor's gain floor as though the ladder had asked for it"
+
+    def test_a_quantised_ceiling_still_counts_as_the_ceiling(self, test_config_file):
+        """The column records what the camera delivered, and it under-delivers.
+
+        A commanded 20 s comes back as 19999994 us. This camera's database has
+        62556 gain-controlled rows at that value and not one at exactly
+        20000000, so an equality test against max_shutter rejects every real
+        night frame and seeds the restart at gain 1.0 -- up to six times too
+        dark. That is a worse bug than the daylight one the check exists for,
+        and it is the reason the comparison carries a tolerance.
+        """
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 19_999_994,
+                "analogue_gain": 5.98830413818359,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+            },
+        )
+        assert required == pytest.approx(19.999994 * 5.98830413818359, rel=1e-6), (
+            "dropped a genuinely commanded night gain because the sensor "
+            "delivered a few microseconds under the ceiling"
+        )
+
+    def test_a_row_at_the_ceiling_keeps_its_gain(self, test_config_file):
+        """The sibling that stops the fix being 'ignore the column'.
+
+        Past the shutter ceiling the ladder really does command gain, and it is
+        the only thing distinguishing a 20-second frame at gain 1 from one at
+        gain 6. Drop it here and every restart after dark begins six times too
+        dark.
+        """
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 20_000_000,
+                "analogue_gain": 3.1,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+            },
+        )
+        assert required == pytest.approx(62.0, rel=1e-6)
 
 
 class TestPolarAwareness:
@@ -956,6 +1249,8 @@ class TestReferenceShotPolicy:
         assert timelapse._wants_reference_shot()
 
     def test_a_stale_reading_expires_even_in_still_light(self, test_config_file):
+        """The ladder trigger cannot see what it does not move for: a season
+        turning, a dirty lens, a streetlight coming on. Hence the floor."""
         from raspilapse.daemon import REFERENCE_MAX_INTERVAL_FRAMES
 
         timelapse = self._timelapse(test_config_file)
@@ -967,10 +1262,101 @@ class TestReferenceShotPolicy:
         assert timelapse._wants_reference_shot()
 
     def test_it_can_be_switched_off_entirely(self, test_config_file):
+        """The explicit off switch, which still wins over every other reason to
+        take one -- including the always-fires first frame."""
         timelapse = self._timelapse(test_config_file)
         timelapse._reference_position = None
         timelapse.config["adaptive_timelapse"]["test_shot"]["enabled"] = False
         assert not timelapse._wants_reference_shot()
+
+    def test_a_configured_white_point_makes_the_reading_pointless(self, test_config_file):
+        """_target_colour_gains prefers `fixed_colour_gains` and never looks at
+        the learned reference, so on those cameras the reading is taken, paid
+        for and discarded. The price is a camera teardown and a frame landing
+        three seconds late: 68 of 2879 intervals on 2026-08-06.
+
+        The operator used to have to know to set `test_shot.enabled: false`.
+        """
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None  # the always-fires case
+        assert timelapse._wants_reference_shot(), "the fixture must start from wanting one"
+
+        timelapse.exposure.config["adaptive_timelapse"]["day_mode"]["fixed_colour_gains"] = [
+            2.547,
+            1.579,
+        ]
+        assert not timelapse._wants_reference_shot()
+
+    def test_a_camera_without_a_configured_white_point_still_takes_one(self, test_config_file):
+        """The sibling that stops the test above passing with the feature
+        deleted outright. A camera with no configured white point has no other
+        source of daylight colour: the AWB frame is the only one the ISP meters
+        itself, and without it the controller falls back to a hardcoded
+        (2.5, 1.6) forever.
+        """
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None
+        assert not timelapse.exposure.config["adaptive_timelapse"]["day_mode"].get(
+            "fixed_colour_gains"
+        )
+        assert timelapse._wants_reference_shot()
+
+    @pytest.mark.parametrize("mode", [LightMode.TRANSITION, LightMode.NIGHT])
+    def test_no_reading_away_from_the_bright_end(self, test_config_file, mode):
+        """update_day_wb_reference drops everything taken outside DAY -- AWB has
+        nothing to meter in the dark -- and it did so on the far side of the
+        teardown, so the frame was already late by then. Dusk is the worst case:
+        the ladder crosses most of its range and REFERENCE_LADDER_STEP fires a
+        couple of dozen times, every one of them discarded.
+        """
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None  # the otherwise-always-fires case
+
+        timelapse.exposure._mode = mode
+        assert not timelapse._wants_reference_shot()
+
+        timelapse.exposure._mode = LightMode.DAY
+        assert timelapse._wants_reference_shot(), "the day case must still fire"
+
+    def test_wanting_a_reading_tracks_whether_one_would_be_used(self, test_config_file):
+        """The property and the precedence must not drift apart.
+
+        Two controllers on the same light, one shown a reference reading and
+        one not: they may diverge only where learns_day_wb says the reading is
+        used. A third source of daylight colour added to _target_colour_gains
+        without updating the property fails here rather than silently
+        reintroducing the teardowns.
+        """
+        for fixed, should_matter in (([2.547, 1.579], False), (None, True)):
+            shown = AdaptiveTimelapse(test_config_file).exposure
+            hidden = AdaptiveTimelapse(test_config_file).exposure
+            for controller in (shown, hidden):
+                day = controller.config["adaptive_timelapse"]["day_mode"]
+                if fixed:
+                    day["fixed_colour_gains"] = fixed
+                else:
+                    day.pop("fixed_colour_gains", None)
+
+            # One frame first: update_day_wb_reference only learns in DAY, and
+            # a controller that has decided nothing yet has no mode at all.
+            for controller in (shown, hidden):
+                controller.decide()
+            assert shown.last_mode == LightMode.DAY
+
+            shown.update_day_wb_reference({"ColourGains": [2.9, 1.35]})
+            # Several frames, because the cross-fade moves 15% of the way per
+            # frame -- one frame's difference is real but small enough to read
+            # as noise.
+            for _ in range(9):
+                shown.decide()
+                hidden.decide()
+            diverged = shown.decide()["ColourGains"] != hidden.decide()["ColourGains"]
+
+            assert diverged == should_matter, (
+                f"with fixed_colour_gains={fixed!r} the reading "
+                f"{'changed' if diverged else 'did not change'} the output, but "
+                f"learns_day_wb says {shown.learns_day_wb}"
+            )
 
 
 class TestLuxFromTheCapturedFrame:

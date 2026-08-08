@@ -310,7 +310,8 @@ class TestSeeding:
         assert controller.last_brightness == 118.0
         assert controller.smoothed_lux == 12.0
         assert controller.last_mode == LightMode.NIGHT
-        assert controller.seed_exposure == 5.0
+        # The ladder's state is the product, so that is what a row primes.
+        assert product(controller.decide()) == pytest.approx(10.0, rel=0.01)
 
     def test_a_partial_row_still_helps(self, controller):
         """seed_from_capture applies only the fields the database row had."""
@@ -321,32 +322,58 @@ class TestSeeding:
         controller.seed_from_capture()
         assert product(controller.decide()) == pytest.approx(COLD_START_EXPOSURE_S)
 
-    def test_the_handover_seeds_from_metadata(self, controller):
-        """The last daylight frame is where the climb into the dark starts."""
-        controller.seed_from_metadata({"ExposureTime": 500_000, "AnalogueGain": 2.0})
-        assert controller.transition_seeded
-        assert product(controller.decide()) == pytest.approx(1.0, rel=0.01)
+    def test_there_is_no_handover_to_seed(self, controller):
+        """`seed_from_metadata` is gone, and nothing may put it back.
 
-    def test_the_handover_can_be_reset(self, controller):
-        controller.seed_from_metadata({})
-        controller.reset_seed_state()
-        assert not controller.transition_seeded
+        It reseeded the loop at the day-to-transition crossing from the last
+        daylight frame's *camera* metadata. Its colour half went first, for
+        bypassing the wb_speed cross-fade it was meant to feed. Its exposure
+        half survived that and kept stepping: metadata reports what the sensor
+        did, and this sensor's analogue gain floor is 1.1228 where the ladder
+        commands 1.0, so every dusk multiplied the loop's state by 1.12.
 
-    def test_the_handover_does_not_touch_the_colour(self, controller):
-        """The seed used to assign colour directly, which is a step by
-        definition: it bypasses the wb_speed cross-fade that exists to stop
-        exactly that. Seven of them are visible in this camera's own database,
-        one per dusk, each a single frame jumping ~0.3 in gain and sliding back
-        over the following ten."""
-        converge(controller, 500_000.0)
-        before = controller._last_colour_gains
+        This is a shape assertion and it knows it -- it catches the symbol
+        coming back, not a differently-spelled reseed. The behaviour is pinned
+        by test_crossing_the_day_knee_is_not_an_event below and, on real
+        recorded dusks, by the golden replay suite.
+        """
+        assert not hasattr(controller, "seed_from_metadata")
+        assert not hasattr(controller, "reset_seed_state")
+        assert not hasattr(controller, "transition_seeded")
 
-        controller.seed_from_metadata({"ExposureTime": 500_000, "AnalogueGain": 2.0})
-        assert controller._last_colour_gains == before, "the seed moved the colour"
 
-        after = controller.decide()["ColourGains"]
-        assert abs(after[0] - before[0]) <= 0.5 * WB_SPEED
-        assert abs(after[1] - before[1]) <= 0.5 * WB_SPEED
+class TestTheDayTransitionBoundary:
+    """Crossing the label must cost nothing, because the label decides nothing.
+
+    `ladder.label()` names a region after the settings are chosen; its own
+    docstring says "No exposure decision consults it." So an exposure walking
+    across the knee must walk, not jump.
+    """
+
+    def test_crossing_the_day_knee_is_not_an_event(self, controller):
+        """Walk the light across the knee and watch every step.
+
+        The knee is at max_shutter * DAY_KNEE = 0.2 s exactly. The light is
+        moved by only 2%, so every honest frame-to-frame step is about 2% --
+        which leaves the 12% the old seeding produced nowhere to hide. A wider
+        light change would blur the two together and let the bug through.
+        """
+        knee = MAX_SHUTTER * 0.01
+        converge(controller, 120.0 / (knee * 0.99))  # settle just below it
+
+        products = []
+        for _ in range(40):
+            settings = controller.decide()
+            p = product(settings)
+            products.append(p)
+            brightness = max(0.0, min(255.0, (120.0 / (knee * 1.01)) * p))
+            controller.observe_frame({"mean_brightness": brightness, "std_brightness": 50.0})
+
+        assert min(products) < knee < max(products), "the walk never crossed the knee"
+
+        steps = [products[i] / products[i - 1] for i in range(1, len(products))]
+        worst = max(steps, key=lambda r: abs(r - 1.0))
+        assert abs(worst - 1.0) < 0.05, f"a single frame moved the exposure by {worst:.3f}x"
 
 
 class TestCosmeticLux:

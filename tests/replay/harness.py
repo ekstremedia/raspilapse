@@ -193,8 +193,6 @@ def replay(sequence: Dict, controller_cls: Optional[Any] = None) -> List[Dict]:
         controller.seed_from_capture(**seed)
 
     results: List[Dict] = []
-    previous_mode: Optional[str] = None
-    last_day_capture_metadata: Optional[Dict] = None
 
     for frame in sequence["frames"]:
         # Lux is still measured and recorded, but nothing decides from it.
@@ -203,23 +201,14 @@ def replay(sequence: Dict, controller_cls: Optional[Any] = None) -> List[Dict]:
         settings = controller.decide()
         mode = controller.last_mode
 
-        # Read now, not after the seeding below. seed_from_metadata overwrites
-        # the shutter, gain and ladder position these describe, so a handover
-        # frame would otherwise record the seed rather than the exposure the
-        # frame was taken with -- and every golden would bake that in.
+        # Read straight after decide(), so these describe the frame they were
+        # recorded with. This used to be an ordering constraint: the
+        # day-to-transition seeding ran between the two and overwrote the
+        # shutter, gain and ladder position these report, so every handover
+        # frame recorded the seed rather than its own exposure. The seeding is
+        # gone -- see exposure.py's module docstring -- and with it the mirror
+        # of daemon._seed_across_mode_change that used to sit here.
         diagnostics = _round_floats(controller.diagnostics())
-
-        entering_manual = previous_mode == modes.DAY and mode in (
-            modes.TRANSITION,
-            modes.NIGHT,
-        )
-        if entering_manual and not controller.transition_seeded:
-            controller.seed_from_metadata(last_day_capture_metadata)
-
-        if mode == modes.DAY and previous_mode != modes.DAY:
-            controller.reset_seed_state()
-
-        previous_mode = mode
 
         # --- the frame is taken here ---
 
@@ -241,16 +230,19 @@ def replay(sequence: Dict, controller_cls: Optional[Any] = None) -> List[Dict]:
             }
         )
 
-        # The white balance reference is not learned here. This is an ordinary
-        # frame, taken with AWB off, so its ColourGains are the ones the
-        # controller chose -- see update_day_wb_reference. In the daemon the
+        # A sequence's `capture_metadata` is deliberately not fed back into the
+        # controller. It records what the sensor *did*, which is not what the
+        # controller commanded -- the analogue gain floor alone differs by 12%
+        # -- and feeding it back is exactly the defect that removing
+        # seed_from_metadata fixed. It stays in the fixtures because
+        # scene_luminance() reads it to reconstruct the light that arrived.
+        #
+        # The white balance reference is not learned here either. This is an
+        # ordinary frame, taken with AWB off, so its ColourGains are the ones
+        # the controller chose -- see update_day_wb_reference. In the daemon the
         # reference comes from the AWB test shot; a recorded sequence has
         # `test_metadata` for the frames that had one, and replaying it means
         # replaying that source and no other.
-        capture_metadata = frame.get("capture_metadata")
-        if capture_metadata and mode == modes.DAY:
-            last_day_capture_metadata = capture_metadata
-
         test_metadata = frame.get("test_metadata")
         if test_metadata:
             controller.update_day_wb_reference(test_metadata)
