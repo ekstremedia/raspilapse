@@ -568,6 +568,7 @@ class TestUploadToServer:
 
     def test_upload_with_toolbelt_sets_content_type(self, upload_config, temp_video_file):
         """With requests-toolbelt, the encoder's Content-Type must be passed through."""
+        pytest.importorskip("requests_toolbelt")
         service = UploadService(upload_config)
 
         with patch("raspilapse.storage.upload.requests.post") as mock_post:
