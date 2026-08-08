@@ -5,6 +5,7 @@ timestamps, and debug information.
 """
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -97,15 +98,17 @@ class ImageOverlay:
 
         logger.debug("Overlay initialized")
 
-    def _load_font(self) -> Optional[ImageFont.FreeTypeFont]:
+    def _load_font(self) -> Optional[str]:
         """
         Load font with fallback options.
 
         Returns:
-            Font object or None for default font
+            Path to a loadable TrueType font, or None for PIL's built-in
+            bitmap font. The built-in ignores the computed size -- 10px text
+            on a 4K frame -- so "default" is the last resort, not the default.
         """
         font_config = self.overlay_config.get("font", {})
-        font_family = font_config.get("family", "default")
+        font_family = font_config.get("family", "DejaVuSans-Bold.ttf")
 
         if font_family == "default":
             logger.debug("Using default PIL font")
@@ -458,7 +461,7 @@ class ImageOverlay:
         bbox_height = text_bbox[3] - text_bbox[1]
         margin = self.overlay_config.get("margin", 20)
 
-        position_preset = self.overlay_config.get("position", "bottom-left")
+        position_preset = self.overlay_config.get("position", "top-bar")
 
         # Check for bar mode
         if position_preset == "top-bar":
@@ -804,7 +807,11 @@ class ImageOverlay:
         lines = self._get_text_lines(data)
 
         if not lines:
-            logger.debug("No overlay content configured")
+            logger.warning(
+                "Overlay is enabled but this corner layout has no content "
+                "configured; nothing drawn. Use overlay.position: top-bar "
+                "(which has built-in content) or set overlay.content lines."
+            )
             return False
 
         # Calculate text dimensions
@@ -894,7 +901,7 @@ class ImageOverlay:
             # Create drawing context
             draw = ImageDraw.Draw(img, "RGBA")
 
-            position_preset = self.overlay_config.get("position", "bottom-left")
+            position_preset = self.overlay_config.get("position", "top-bar")
 
             # Check if we're in top-bar mode (special 2-line layout)
             if position_preset == "top-bar":
@@ -906,12 +913,26 @@ class ImageOverlay:
             if output_path is None:
                 output_path = image_path
 
-            output_quality = self.config.get("output", {}).get("quality", 95)
+            # 85 matches output.quality's real default; this fallback was 95,
+            # so the one path that bypasses merge_defaults re-encoded at a
+            # different quality from every other frame.
+            output_quality = self.config.get("output", {}).get("quality", 85)
+            # Write beside the target and rename into place. Image.save opens
+            # its destination "w+b", so saving in place truncates the good
+            # capture first -- a failure mid-encode (ENOSPC, power loss) left
+            # a partial JPEG that was then symlinked, recorded and uploaded
+            # as if it were a frame.
+            tmp_path = f"{output_path}.tmp"
             try:
-                img.save(output_path, quality=output_quality)
+                img.save(tmp_path, format="JPEG", quality=output_quality)
+                os.replace(tmp_path, output_path)
                 logger.debug(f"Overlay saved to {output_path}")
             except Exception as save_error:
                 logger.error(f"Failed to save overlay image: {save_error}", exc_info=True)
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
                 return None  # Return None to indicate failure
 
             return output_path
