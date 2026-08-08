@@ -704,10 +704,15 @@ class TestTheLoopIsWiredToTheGrid:
     def test_a_normal_frame_ends_on_the_grid(self, test_config_file):
         """The happy path, and the control for the failure case below: an
         iteration that captures normally must still reschedule, and the first
-        frame must be aligned before the loop starts at all."""
-        advance, sleep = self._run_one(test_config_file)
-        assert advance.called, "the loop finished an iteration without rescheduling"
-        assert sleep.called, "the first frame was not aligned to a slot before starting"
+        frame must be aligned before the loop starts at all. Both waits go
+        through the scheduler now (the pre-loop alignment used to be a bare
+        time.sleep, which SIGTERM could not interrupt), so both show up as
+        scheduler calls: one before the first frame, one after each frame."""
+        advance, _ = self._run_one(test_config_file)
+        assert advance.call_count >= 2, (
+            f"scheduler reached {advance.call_count} time(s); expected the "
+            f"pre-loop alignment plus at least one per-frame reschedule"
+        )
 
     def test_a_failed_camera_init_also_ends_on_the_grid(self, test_config_file):
         """The branch that used to `continue` past the scheduling entirely.

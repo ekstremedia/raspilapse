@@ -12,6 +12,7 @@ be tested without an image, a font or a camera.
 
 import locale
 import logging
+import threading
 from datetime import datetime
 from typing import Dict, List
 
@@ -20,6 +21,11 @@ logger = logging.getLogger(__name__)
 # Locales that already failed to load, so the warning fires once per locale
 # rather than once per frame -- 2,880 journal lines a day at a 30 s interval.
 _warned_locales: set = set()
+
+# setlocale() mutates process-global state and is not thread-safe; serialize
+# the read-set-format-restore cycle so concurrent callers cannot interleave
+# and restore each other's locale.
+_locale_lock = threading.Lock()
 
 
 def exposure_time(exposure_us: int) -> str:
@@ -114,15 +120,16 @@ def localized_datetime(dt: datetime, datetime_config: Dict) -> str:
         # was setlocale(LC_TIME, ""), which reads the *environment* -- not a
         # restore at all. setlocale is process-global, so leaving it changed
         # leaks into every other strftime in the daemon.
-        previous = locale.setlocale(locale.LC_TIME)
-        try:
-            locale.setlocale(locale.LC_TIME, locale_str)
-            # %A full weekday, %B full month -- both are what the locale is for.
-            if show_seconds:
-                return dt.strftime("%A. %d %B %Y %H:%M:%S").lower()
-            return dt.strftime("%A. %d %B %Y %H:%M").lower()
-        finally:
-            locale.setlocale(locale.LC_TIME, previous)
+        with _locale_lock:
+            previous = locale.setlocale(locale.LC_TIME)
+            try:
+                locale.setlocale(locale.LC_TIME, locale_str)
+                # %A full weekday, %B full month -- what the locale is for.
+                if show_seconds:
+                    return dt.strftime("%A. %d %B %Y %H:%M:%S").lower()
+                return dt.strftime("%A. %d %B %Y %H:%M").lower()
+            finally:
+                locale.setlocale(locale.LC_TIME, previous)
     except Exception as e:
         if locale_str not in _warned_locales:
             _warned_locales.add(locale_str)

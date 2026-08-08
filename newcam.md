@@ -51,9 +51,10 @@ pip3 install --break-system-packages 'astral>=3.2'   # sun elevation; apt's astr
 apt-only, and a venv's own numpy shadows the one picamera2 was compiled
 against. `requirements.txt` is for CI, never for a Pi.
 
-Optional, each buys one feature: `python3-requests-toolbelt` (streamed
-uploads), `python3-matplotlib` (graph scripts — also lets the full test suite
-run rather than skip those modules).
+Optional, each buys one feature: `python3-requests` + `python3-requests-toolbelt`
+(video upload; the second streams it instead of holding ~300 MB in memory),
+`python3-matplotlib` (graph scripts — also lets the full test suite run
+rather than skip those modules).
 
 If the overlay should show Norwegian dates, generate the locale once:
 
@@ -148,9 +149,10 @@ ffprobe -v error -select_streams v:0 -show_entries stream=width,height \
     -of default=nw=1 /var/www/html/videos/$(date +%Y/%m)/*.mp4
 ```
 
-Expect `width=3840 height=2160`, a keogram and slitscan beside the mp4, and a
-200 from the webserver for all three. Tomorrow's 05:00 run covers the same
-window and simply overwrites this partial render.
+Expect `width=3840 height=2160` and a keogram and slitscan beside the mp4 —
+plus, if you set up a webserver in step 3, a 200 for all three URLs.
+Tomorrow's 05:00 run covers the same window and simply overwrites this
+partial render.
 
 ## 8. Disk budget
 
@@ -162,6 +164,7 @@ anything tracked by git:
 sudo systemctl edit raspilapse-cleanup.service
 # [Service]
 # Environment=RASPILAPSE_KEEP_DAYS=14
+# Environment=RASPILAPSE_IMAGE_DIR=/var/www/html/images   # match output.directory
 ```
 
 Videos are ~0.5 GB/day and kept forever by default — on a 128 GB card that

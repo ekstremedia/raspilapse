@@ -1082,10 +1082,14 @@ class AdaptiveTimelapse:
 
         # Put the first frame on the grid too, so a restart does not leave one
         # short interval behind it -- except in test mode, where the single
-        # frame should come now and the grid does not matter.
+        # frame should come now and the grid does not matter. Through the
+        # scheduler path, not a bare sleep, so SIGTERM interrupts this wait
+        # like every other one.
         next_slot = self._next_slot(interval, time.time())
         if not test_mode:
-            time.sleep(max(0.0, next_slot - time.time()))
+            next_slot = self._sleep_until_next_slot(
+                next_slot - interval, interval, lambda: self.running
+            )
 
         try:
             while self.running:

@@ -46,16 +46,15 @@ not the whole bar.
 | `{datetime_localized}` | `mandag. 27 juli 2026 01:12` — see `overlay.datetime` |
 | `{exposure}` `{exposure_ms}` `{exposure_us}` | `190.9ms`, `190.90`, `190900` |
 | `{iso}` `{gain}` | `ISO  112`, `1.12` |
-| `{lux}` | ` 435.8` |
+| `{lux}` | `435.8`, padded to six characters |
 | `{mode}` | `Day`, `Night`, `Transition` |
 | `{wb}` `{wb_gains}` `{color_gains}` | white balance as text and as gains |
 | `{temperature}` | **sensor** temperature, not outdoor |
 | `{resolution}` | `3840x2160` |
 | `{af_mode}` `{lens_position}` `{focus_distance}` | autofocus state, where supported |
 
-The numeric formatters pad to fixed widths (the leading spaces above are
-real), so a value changing digits never makes the bar jump sideways
-mid-timelapse.
+The numeric formatters pad to fixed widths, so a value changing digits never
+makes the bar jump sideways mid-timelapse.
 
 ### System
 

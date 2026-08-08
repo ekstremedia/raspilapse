@@ -6,6 +6,7 @@ timestamps, and debug information.
 
 import json
 import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -921,8 +922,13 @@ class ImageOverlay:
             # its destination "w+b", so saving in place truncates the good
             # capture first -- a failure mid-encode (ENOSPC, power loss) left
             # a partial JPEG that was then symlinked, recorded and uploaded
-            # as if it were a frame.
-            tmp_path = f"{output_path}.tmp"
+            # as if it were a frame. mkstemp, not a predictable ".tmp": two
+            # runs on the same target (the daemon plus a hand-run
+            # apply_overlay) must not truncate or rename each other's
+            # half-written file.
+            out_dir = os.path.dirname(str(output_path)) or "."
+            tmp_fd, tmp_path = tempfile.mkstemp(prefix=".overlay-", dir=out_dir)
+            os.close(tmp_fd)
             try:
                 img.save(tmp_path, format="JPEG", quality=output_quality)
                 os.replace(tmp_path, output_path)

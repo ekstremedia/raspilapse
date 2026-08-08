@@ -582,6 +582,12 @@ class ImageCapture:
         metadata_filename = timestamp.strftime(metadata_filename)
 
         metadata_path = image_path.parent / metadata_filename
+        if image_path.stem.endswith("_dst"):
+            # The image kept both DST-fold passes under a _dst suffix; the
+            # sidecar must follow, or the second pass overwrites the first
+            # pass's sidecar and the {stem}_metadata.json pairing that
+            # apply_overlay relies on breaks for the suffixed image.
+            metadata_path = image_path.parent / f"{image_path.stem}_metadata.json"
 
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2, default=str)
