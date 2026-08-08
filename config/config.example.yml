@@ -11,7 +11,7 @@
 # ---------------------------------------------------------------- required --
 
 location:
-  # Yours, not these -- this pair is in Vesteralen, Norway. Only used to
+  # Yours, not these -- this pair is in Vesterålen, Norway. Only used to
   # record the sun's elevation with each frame: exposure is decided from
   # measured brightness, not from the clock, so wrong coordinates do not
   # stop the camera working.
