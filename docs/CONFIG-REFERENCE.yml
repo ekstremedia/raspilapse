@@ -343,6 +343,21 @@ adaptive_timelapse:
   dynamic_range:
     method: off    # off | fusion | sensor_hdr | raw | tone_map
 
+    # Exposure fusion: bracket each slot 2-3 times and merge with Mertens
+    # exposure fusion at full resolution -- shadows and highlights from the
+    # exposures that held them, no "HDR look". The spread narrows smoothly to
+    # zero as exposures lengthen (log ramp from 0.05s), so by
+    # single_shot_above_s the plan IS the plain single shot: the day-night
+    # transition has no seam and long night exposures are untouched. A slot
+    # budget guard drops brackets (over first) sooner than overrun the grid.
+    # While fusion is active, highlight_protection defaults off -- the under
+    # bracket buys ~2 stops of highlight headroom against the ~0.5 the
+    # protection floor could, without darkening the base frame.
+    fusion:
+      brackets: 3              # 3 = under/base/over, 2 = base/under
+      ev_spread: 2.0           # +/- EV at full spread (clamped to 0..4)
+      single_shot_above_s: 0.5 # base exposure at/above this -> single shot
+
     # Post-process tone mapping: luminance-only CLAHE blended into the frame.
     # Lifts shadows and adds local contrast without shifting colours; fades
     # smoothly to nothing on dark frames so night noise is not amplified and

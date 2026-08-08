@@ -697,7 +697,11 @@ class AdaptiveTimelapse:
             logger.error(f"Failed to create symlink: {e}")
 
     def capture_frame(
-        self, capture: ImageCapture, mode: str, calculated_lux: float = None
+        self,
+        capture: ImageCapture,
+        mode: str,
+        calculated_lux: float = None,
+        settings: Optional[Dict] = None,
     ) -> Tuple[str, Optional[str]]:
         """
         Capture a single frame with the camera's current settings.
@@ -706,6 +710,8 @@ class AdaptiveTimelapse:
             capture: ImageCapture instance with initialized camera
             mode: Light mode
             calculated_lux: Calculated lux value to use in overlay (overrides camera's estimate)
+            settings: The decision's camera controls, so the dynamic-range
+                dispatcher can plan brackets around the commanded exposure
 
         Returns:
             Tuple of (image_path, metadata_path)
@@ -718,10 +724,10 @@ class AdaptiveTimelapse:
         if calculated_lux is not None:
             extra_metadata["Lux"] = calculated_lux
 
-        # Capture the image (controls were set during initialization)
-        # Pass mode so overlay knows the light mode, and calculated lux for accurate display
-        image_path, metadata_path = capture.capture(
-            mode=mode, extra_metadata=extra_metadata if extra_metadata else None
+        # Capture through the dynamic-range dispatcher; with method off this
+        # is exactly capture.capture() with the controls set at initialization.
+        image_path, metadata_path = self._dr.capture_frame(
+            capture, mode=mode, settings=settings, extra_metadata=extra_metadata
         )
 
         # Create symlink to latest image if enabled
@@ -1190,7 +1196,7 @@ class AdaptiveTimelapse:
 
                 try:
                     image_path, metadata_path = self.capture_frame(
-                        capture, decision.mode, decision.lux
+                        capture, decision.mode, decision.lux, decision.settings
                     )
                     logger.info(f"Frame captured: {image_path}")
 

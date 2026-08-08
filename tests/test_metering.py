@@ -261,6 +261,28 @@ class TestHighlightFactor:
         assert highlight_factor(210.0, safe=200, warning=200, critical=200) >= 0.0
 
 
+class TestFusionRelaxesHighlightProtection:
+    """Fusion's under-bracket protects highlights better than underexposing
+    the whole frame ever could, so the protection default flips off with it."""
+
+    def test_default_flips_off_under_fusion(self):
+        meter = Meter(config(dynamic_range={"method": "fusion"}))
+        assert meter._p95_enabled is False
+
+    def test_default_stays_on_without_fusion(self):
+        assert Meter(config())._p95_enabled is True
+        assert Meter(config(dynamic_range={"method": "tone_map"}))._p95_enabled is True
+
+    def test_explicit_enabled_still_wins(self):
+        meter = Meter(
+            config(
+                dynamic_range={"method": "fusion"},
+                highlight_protection={"enabled": True},
+            )
+        )
+        assert meter._p95_enabled is True
+
+
 class TestHighlightProtection:
     def test_disabled_means_no_scaling(self):
         meter = Meter(config(highlight_protection={"enabled": False}))

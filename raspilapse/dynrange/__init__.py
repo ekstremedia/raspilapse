@@ -83,6 +83,20 @@ class DynamicRange:
         strength = tone_map.get("strength", 0.5)
         self._tone_map_strength = min(max(float(strength), 0.0), 1.0)
 
+        fusion_cfg = block.get("fusion", {}) or {}
+        self._fusion_brackets = min(max(int(fusion_cfg.get("brackets", 3)), 2), 3)
+        self._fusion_ev_spread = min(max(float(fusion_cfg.get("ev_spread", 2.0)), 0.0), 4.0)
+        self._fusion_single_shot_above_s = max(
+            float(fusion_cfg.get("single_shot_above_s", 0.5)), 0.01
+        )
+        self._interval_s = float(adaptive.get("interval", 30))
+        self._quality = int((config.get("output", {}) or {}).get("quality", 85))
+
+        # Frames a bracket discards while its controls land, seeded with the
+        # figure measured on a running camera and refined from what the
+        # brackets actually need. Only the budget guard reads it.
+        self._settle_ema = 8.0
+
         missing = [d for d in _REQUIRES.get(method, ()) if importlib.util.find_spec(d) is None]
         if missing:
             packages = " ".join(_APT_PACKAGES[d] for d in missing)
@@ -128,6 +142,59 @@ class DynamicRange:
         streams (raw) contribute here; the rest return nothing.
         """
         return {}
+
+    def capture_frame(
+        self,
+        capture,
+        mode: Optional[str] = None,
+        settings: Optional[Dict] = None,
+        extra_metadata: Optional[Dict] = None,
+    ):
+        """Capture one frame the way the active method dictates.
+
+        Everything except an actively-bracketing fusion frame falls through
+        to ``ImageCapture.capture``: off, tone_map, sensor_hdr, raw and a
+        converged fusion all share the plain, battle-tested path. That is
+        also what makes fusion's night behaviour smooth -- once the plan
+        collapses to one exposure there is no fusion code left running.
+        """
+        if self.method == "fusion" and settings:
+            plan = self._fusion_plan(settings)
+            if len(plan) > 1:
+                from raspilapse.dynrange import fusion
+
+                merged = dict(extra_metadata or {})
+                merged["fusion_exposures_us"] = [int(t * 1_000_000) for t in plan]
+                result = capture.capture_bracketed(
+                    merged["fusion_exposures_us"],
+                    fusion.build_fuse_fn(self._quality),
+                    mode=mode,
+                    extra_metadata=merged,
+                )
+                self._observe_settle(capture.last_settle_frames)
+                return result
+        return capture.capture(mode=mode, extra_metadata=extra_metadata)
+
+    def _fusion_plan(self, settings: Dict) -> list:
+        """The bracket exposures (seconds, base first) for this decision."""
+        from raspilapse.dynrange import fusion
+
+        base_s = settings.get("ExposureTime", 0) / 1_000_000
+        if base_s <= 0:
+            return [base_s]
+        return fusion.plan_brackets(
+            base_s,
+            self._fusion_brackets,
+            self._fusion_ev_spread,
+            self._fusion_single_shot_above_s,
+            self._interval_s,
+            round(self._settle_ema),
+        )
+
+    def _observe_settle(self, settle_frames) -> None:
+        """Fold what the last bracket run measured into the settle estimate."""
+        if settle_frames:
+            self._settle_ema += 0.3 * (max(settle_frames) - self._settle_ema)
 
     def build_post_process(self, config: Dict) -> Optional[Callable[..., object]]:
         """Return the frame's post-process chain, or None for nothing to do.

@@ -42,3 +42,10 @@ requests-toolbelt>=1.0.0
 
 # scripts/db_graphs.py and scripts/graph_solar_patterns.py only.
 matplotlib>=3.5.0
+
+# The dynamic_range methods: fusion and tone_map need OpenCV, raw needs
+# rawpy. On a Pi both come from apt:
+#     sudo apt install -y python3-opencv python3-rawpy
+# Installed in CI so the pixel paths are tested there, not just on cameras.
+opencv-python-headless>=4.6.0
+rawpy>=0.21.0
