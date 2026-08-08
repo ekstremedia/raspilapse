@@ -133,6 +133,23 @@ class DynamicRange:
             int(resolution.get("height", 1080)),
         )
 
+        # The DNG sidecar is independent of the method: every Nth frame's raw
+        # negative is kept beside its JPEG for hand-developing, retention-
+        # capped. Inert under sensor_hdr, whose binned merged mode produces
+        # nothing worth calling a negative.
+        output_cfg = config.get("output", {}) or {}
+        sidecar_cfg = output_cfg.get("dng_sidecar", {}) or {}
+        self._sidecar_enabled = bool(sidecar_cfg.get("enabled", False))
+        self._sidecar_every_n = int(sidecar_cfg.get("every_n_frames", 20))
+        self._sidecar_max_files = int(sidecar_cfg.get("max_files", 200))
+        self._output_directory = str(output_cfg.get("directory", "images"))
+
+        # Per-frame state the pre_open/capture_frame pair hands between
+        # themselves; a single thread owns both calls.
+        self._slot_index = -1
+        self._raw_stream_on = False
+        self._keep_dng_this_frame = False
+
         self.method = method
         self.tone_map_enabled = tone_map_enabled
         self._block = block
@@ -158,8 +175,11 @@ class DynamicRange:
 
         Returns keyword arguments for ``ImageCapture.initialize_camera``.
         Methods that reconfigure the sensor (sensor_hdr) or need extra
-        streams (raw) contribute here; the rest return nothing.
+        streams (raw, the sidecar) contribute here; the rest return nothing.
         """
+        self._slot_index += 1
+        kwargs: Dict = {}
+
         if self.method == "sensor_hdr":
             from raspilapse.dynrange import sensor_hdr
 
@@ -169,8 +189,21 @@ class DynamicRange:
             hdr_on = mode == "day" or not self._sensor_hdr_day_only
             sensor_hdr.set_wdr(hdr_on)
             if hdr_on:
-                return {"main_size_override": sensor_hdr.hdr_main_size(self._resolution)}
-        return {}
+                kwargs["main_size_override"] = sensor_hdr.hdr_main_size(self._resolution)
+
+        from raspilapse.dynrange import sidecar
+
+        self._keep_dng_this_frame = (
+            self._sidecar_enabled
+            and self.method != "sensor_hdr"
+            and sidecar.keep_sidecar(self._slot_index, self._sidecar_every_n)
+        )
+        wants_raw = self._keep_dng_this_frame or (self.method == "raw" and mode != "night")
+        self._raw_stream_on = wants_raw
+        if wants_raw:
+            kwargs["enable_raw"] = True
+
+        return kwargs
 
     def pre_reference_shot(self) -> None:
         """Called before the white-balance reference shot opens its camera.
@@ -227,7 +260,27 @@ class DynamicRange:
                 )
                 self._observe_settle(capture.last_settle_frames)
                 return result
-        return capture.capture(mode=mode, extra_metadata=extra_metadata)
+        return capture.capture(
+            mode=mode, extra_metadata=extra_metadata, save_dng=self._wants_dng(mode, settings)
+        )
+
+    def _wants_dng(self, mode: Optional[str], settings: Optional[Dict]) -> bool:
+        """Whether this plain capture should also write its DNG.
+
+        True for a sidecar keeper frame, and for the raw method when the
+        develop will fit the slot. Never true unless pre_open enabled the
+        raw stream -- save_dng on a stream-less camera raises.
+        """
+        if not self._raw_stream_on:
+            return False
+        if self._keep_dng_this_frame:
+            return True
+        if self.method == "raw" and settings:
+            from raspilapse.dynrange import raw_develop
+
+            exposure_s = settings.get("ExposureTime", 0) / 1_000_000
+            return raw_develop.should_use_raw(mode, exposure_s, self._interval_s)
+        return False
 
     def _fusion_plan(self, settings: Dict) -> list:
         """The bracket exposures (seconds, base first) for this decision."""
@@ -265,6 +318,9 @@ class DynamicRange:
         overlay = build_overlay(config)
         stages = []
 
+        if self.method == "raw" or self._sidecar_enabled:
+            stages.append(self._develop_stage)
+
         if self.method == "sensor_hdr":
             from raspilapse.dynrange import sensor_hdr
 
@@ -290,3 +346,45 @@ class DynamicRange:
             return processed
 
         return chain
+
+    def _develop_stage(self, image_path: str) -> bool:
+        """Develop and/or dispose of the frame's DNG, before the overlay.
+
+        Runs inside the capture's post-process, which is the only moment
+        after the DNG exists and before the overlay is burned in -- develop
+        any later and it would overwrite the overlaid frame. A frame without
+        a DNG (night fallback, budget fallback) passes straight through.
+        Whatever happens, the temporary DNG does not survive this call
+        except by being promoted to a keeper.
+        """
+        import os
+
+        dng_tmp = image_path + ".dng.tmp"
+        if not os.path.exists(dng_tmp):
+            return True
+
+        try:
+            developed = True
+            if self.method == "raw":
+                from raspilapse.dynrange import raw_develop
+
+                developed = raw_develop.develop_dng(
+                    dng_tmp, image_path, self._resolution, self._quality
+                )
+            if self._keep_dng_this_frame:
+                from raspilapse.dynrange import sidecar
+
+                keeper_path = os.path.splitext(image_path)[0] + ".dng"
+                os.replace(dng_tmp, keeper_path)
+                logger.info(f"Kept raw negative: {keeper_path}")
+                sidecar.prune_sidecars(self._output_directory, self._sidecar_max_files)
+            return developed
+        except Exception as e:
+            logger.warning(f"DNG handling failed for {image_path}: {e}")
+            return False
+        finally:
+            try:
+                if os.path.exists(dng_tmp):
+                    os.unlink(dng_tmp)
+            except OSError:
+                pass

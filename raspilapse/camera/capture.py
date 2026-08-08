@@ -136,6 +136,7 @@ class ImageCapture:
         self,
         manual_controls: Optional[Dict] = None,
         main_size_override: Optional[Tuple[int, int]] = None,
+        enable_raw: bool = False,
     ):
         """
         Initialize and configure the camera.
@@ -146,6 +147,9 @@ class ImageCapture:
             main_size_override: Capture size to request instead of the
                 configured resolution. Used while sensor HDR is active,
                 whose binned mode cannot deliver the configured size.
+            enable_raw: Configure the raw Bayer stream alongside main and
+                lores, so capture(save_dng=True) can write DNGs. Off by
+                default -- the stream costs memory and per-frame time.
         """
         logger.debug("Initializing camera...")
 
@@ -205,7 +209,8 @@ class ImageCapture:
                     main={"size": resolution, "format": "RGB888"},
                     # Low-res stream for fast brightness measurement (avoids disk I/O)
                     lores={"size": (320, 240), "format": "YUV420"},
-                    raw=None,  # Disable RAW for performance
+                    # RAW disabled for performance unless a DNG was asked for
+                    raw={} if enable_raw else None,
                     buffer_count=3,  # CRITICAL: prevents frame queuing delays
                     queue=False,  # Ensures fresh frame after request
                     display=None,
@@ -477,6 +482,7 @@ class ImageCapture:
         output_path: Optional[str] = None,
         mode: Optional[str] = None,
         extra_metadata: Optional[Dict] = None,
+        save_dng: bool = False,
     ) -> Tuple[str, Optional[str]]:
         """
         Capture an image.
@@ -485,6 +491,11 @@ class ImageCapture:
             output_path: Optional custom output path. If None, uses config pattern.
             mode: Optional light mode (day/night/transition) for overlay display
             extra_metadata: Optional dict of extra metadata to merge (e.g., calculated lux)
+            save_dng: Also write the frame's raw data as ``<image>.dng.tmp``
+                beside the JPEG. Requires initialize_camera(enable_raw=True).
+                The dynamic-range post-process develops or promotes it; the
+                .tmp suffix means a crash leaves nothing that looks like a
+                finished negative.
 
         Returns:
             Tuple of (image_path, metadata_path)
@@ -517,6 +528,10 @@ class ImageCapture:
                 # Save the image
                 request.save("main", str(output_path))
                 logger.info(f"Image captured successfully: {output_path}")
+
+                if save_dng:
+                    request.save_dng(f"{output_path}.dng.tmp")
+                    logger.debug(f"Raw data saved: {output_path}.dng.tmp")
 
                 # Get metadata from request (always, for overlay)
                 metadata_dict = request.get_metadata()
