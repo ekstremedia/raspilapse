@@ -93,11 +93,13 @@ class CameraConfig:
 
     def should_organize_by_date(self) -> bool:
         """Check if images should be organized by date."""
-        return self.config["output"].get("organize_by_date", False)
+        # merge_defaults() always fills these keys; the fallbacks only exist
+        # for dicts that bypass it, and match DEFAULTS so both paths agree.
+        return self.config["output"].get("organize_by_date", True)
 
     def get_date_format(self) -> str:
         """Get date format for subdirectories."""
-        return self.config["output"].get("date_format", "%Y-%m-%d")
+        return self.config["output"].get("date_format", "%Y/%m/%d")
 
 
 class ImageCapture:
@@ -233,6 +235,15 @@ class ImageCapture:
 
         except Exception as e:
             logger.error(f"Failed to initialize camera: {e}")
+            # Release whatever was allocated before the failure. Relying on
+            # __del__ to close a half-opened camera is what left the device
+            # "in use" for a retry that would otherwise have succeeded.
+            if self.picam2 is not None:
+                try:
+                    self.picam2.close()
+                except Exception:
+                    pass
+                self.picam2 = None
             raise
 
     def _prepare_control_map(self, controls: Dict) -> Dict:
@@ -321,11 +332,19 @@ class ImageCapture:
             # In YUV420, the Y (luminance) plane comes first, followed by U and V
             lores_array = request.make_array("lores")
 
-            # For YUV420, the array shape is (height * 1.5, width) with Y plane first
-            # Extract just the Y (luminance) plane - first 240 rows for 320x240 lores
-            # The Y values are already brightness (0-255), no conversion needed
-            height = 240
-            gray = lores_array[:height, :].astype(np.float32)
+            # For YUV420, the array shape is (height * 1.5, stride) with the Y
+            # plane first; Y values are already brightness (0-255). Slice to
+            # the size libcamera actually granted rather than assuming
+            # 320x240: an adjusted stream would silently average chroma rows
+            # (or stride padding) into every exposure decision.
+            try:
+                lores_w, lores_h = self.picam2.camera_config["lores"]["size"]
+            except Exception:
+                # The configured size is the truth; if the lookup shape ever
+                # changes, fall back to the size we request rather than losing
+                # brightness feedback entirely.
+                lores_w, lores_h = 320, 240
+            gray = lores_array[:lores_h, :lores_w].astype(np.float32)
 
             # Compute statistics
             mean_brightness = float(np.mean(gray))
@@ -426,9 +445,17 @@ class ImageCapture:
             # Prepare output directory
             output_dir = Path(self.config.get_output_directory())
 
+            # One timestamp for the date subdirectory, the filename and the
+            # metadata sidecar. Separate now() calls let a frame straddling
+            # midnight land in yesterday's directory under today's filename,
+            # where find_images_in_range() never looks. Timezone-aware so the
+            # sidecar's capture_timestamp carries the UTC offset: during the
+            # DST fall-back hour a naive string repeats, and the database's
+            # INSERT OR REPLACE destroyed the first pass's rows.
+            timestamp = datetime.now().astimezone()
+
             # Add date subdirectories if organize_by_date is enabled
             if self.config.should_organize_by_date():
-                timestamp = datetime.now()
                 date_subdir = timestamp.strftime(self.config.get_date_format())
                 output_dir = output_dir / date_subdir
                 logger.debug(f"Date-organized directory: {output_dir}")
@@ -439,7 +466,6 @@ class ImageCapture:
 
             # Generate filename
             if output_path is None:
-                timestamp = datetime.now()
                 filename = self.config.get_filename_pattern().format(
                     name=self.config.get_project_name(),
                     counter=f"{self._counter:04d}",
@@ -448,6 +474,17 @@ class ImageCapture:
                 # Support strftime formatting
                 filename = timestamp.strftime(filename)
                 output_path = output_dir / filename
+                if output_path.exists():
+                    # Only reachable when local wall time repeats (the DST
+                    # fall-back hour): the second pass would silently
+                    # overwrite the first. A _dst suffix keeps both files;
+                    # the video renderer skips the suffixed name (its
+                    # trailing fields no longer parse as a timestamp), so the
+                    # repeated hour is absent from the video but not from disk.
+                    logger.warning(f"{output_path} already exists; keeping both")
+                    output_path = output_path.with_name(
+                        f"{output_path.stem}_dst{output_path.suffix}"
+                    )
             else:
                 output_path = Path(output_path)
 
@@ -479,7 +516,9 @@ class ImageCapture:
                 metadata_path = None
                 if self.config.should_save_metadata():
                     logger.debug("Saving metadata...")
-                    metadata_path = self._save_metadata_from_dict(output_path, metadata_dict)
+                    metadata_path = self._save_metadata_from_dict(
+                        output_path, metadata_dict, timestamp
+                    )
                     logger.debug(f"Metadata saved: {metadata_path}")
             finally:
                 # Always release the request
@@ -504,25 +543,30 @@ class ImageCapture:
             logger.error(f"Failed to capture image: {e}")
             raise
 
-    def _save_metadata_from_dict(self, image_path: Path, metadata: Dict) -> str:
+    def _save_metadata_from_dict(
+        self, image_path: Path, metadata: Dict, timestamp: Optional[datetime] = None
+    ) -> str:
         """
         Save capture metadata from a metadata dictionary.
 
         Args:
             image_path: Path to captured image
             metadata: Metadata dictionary from capture_request
+            timestamp: The capture's own timestamp, so the sidecar's filename
+                and capture_timestamp match the image filename exactly
 
         Returns:
             Path to metadata file
         """
+        timestamp = timestamp or datetime.now()
+
         # Add custom metadata
-        metadata["capture_timestamp"] = datetime.now().isoformat()
+        metadata["capture_timestamp"] = timestamp.isoformat()
         metadata["image_path"] = str(image_path)
         metadata["resolution"] = self.config.get_resolution()
         metadata["quality"] = self.config.get_quality()
 
         # Generate metadata filename
-        timestamp = datetime.now()
         metadata_filename = self.config.get_metadata_pattern().format(
             name=self.config.get_project_name(),
             counter=f"{self._counter:04d}",
@@ -542,8 +586,13 @@ class ImageCapture:
         """Close and cleanup camera resources."""
         if self.picam2:
             logger.debug("Closing camera...")
-            self.picam2.close()
-            self.picam2 = None
+            try:
+                self.picam2.close()
+            finally:
+                # Null the handle even when close() raises: a half-dead
+                # Picamera2 kept here pins the device in picamera2's global
+                # registry, and every later open fails with "Camera in use".
+                self.picam2 = None
             logger.debug("Camera closed successfully")
 
     def __enter__(self):

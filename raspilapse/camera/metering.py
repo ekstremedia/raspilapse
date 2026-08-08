@@ -113,8 +113,12 @@ class Meter:
         # Contrast-adaptive target. Overcast scenes are flat and read as dark
         # at a fixed target, so the target rises as contrast falls.
         target_config = adaptive.get("brightness_target", {})
-        self._target = transition.get("target_brightness", 120)
         self._base_target = target_config.get("base", 120)
+        # Seed the working target from the same knob the dynamic target uses.
+        # It used to seed from transition_mode.target_brightness -- a dead
+        # key, so anyone lowering brightness_target.base still got 120 aimed
+        # at for the first frame after every restart.
+        self._target = self._base_target
         self._overcast_boost = target_config.get("overcast_boost", 15)
         self._max_target = target_config.get("max_target", 140)
         self._contrast_low = target_config.get("contrast_threshold_low", 25)
@@ -122,7 +126,7 @@ class Meter:
 
         # Highlight protection. See highlight_factor.
         protection = adaptive.get("highlight_protection", {})
-        self._p95_enabled = protection.get("enabled", False)
+        self._p95_enabled = protection.get("enabled", True)
         self._p95_safe = protection.get("safe_p95", 200)
         self._p95_warning = protection.get("warning_p95", 220)
         self._p95_critical = protection.get("critical_p95", 240)
@@ -393,12 +397,15 @@ class Meter:
             return self._under
 
         # A missing measurement reads as 128, which is above the release
-        # threshold and therefore clears the flag rather than holding it. The
-        # comment here used to claim the opposite -- "leaves the flags where
-        # they are" -- which is not what `or 128` does against a release at
-        # 105. Clearing is the safer of the two: it drops back to the ordinary
-        # rate rather than hurrying on the strength of a stale reading.
-        brightness = metrics.get("mean_brightness") or 128
+        # threshold and therefore clears the flag rather than holding it --
+        # dropping back to the ordinary rate beats hurrying on a stale
+        # reading. Missing means None, though: a measured 0.0 is a real and
+        # emphatic reading (lens cap, blackout), and the old `or 128` treated
+        # it as absent -- clearing the underexposure flag at the exact moment
+        # it mattered most and recovering 4.7x slower for it.
+        brightness = metrics.get("mean_brightness")
+        if brightness is None:
+            brightness = 128
 
         warning, critical, safe = 90, 70, 105
 
