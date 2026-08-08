@@ -257,7 +257,7 @@ do_dry_run() {
 }
 
 STAGING=""
-cleanup_staging() { [ -n "$STAGING" ] && rm -rf "$STAGING"; }
+cleanup_staging() { if [ -n "$STAGING" ]; then rm -rf "$STAGING"; fi; }
 trap cleanup_staging EXIT
 
 do_install() {

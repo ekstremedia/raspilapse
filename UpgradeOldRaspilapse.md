@@ -275,10 +275,11 @@ python3 -m raspilapse.cli.db --prune --dry-run
 python3 -m pytest tests/ -q      # ~1130 tests, about 2.5 min on a Pi 4
 ```
 
-⚠ **`--check` exits 1 even when it says "Ready to install."** Its EXIT trap ends on
-`[ -n "$STAGING" ]`, which is false in check mode and flips the reported status. Read the
-output, not `$?`. (`--check` also only *warns* about missing `picamera2`, `astral`,
-`requests`, `requests_toolbelt` and `matplotlib` — it does not fail on them.)
+`--check` exits 0 on success and 1 when something required is missing. (It only *warns*
+about missing `picamera2`, `astral`, `requests`, `requests_toolbelt` and `matplotlib` —
+it does not fail on them. Checkouts older than 2026-08-08 exited 1 even on success
+because of an EXIT-trap quirk; if you are scripting against one of those, read the
+output, not `$?`.)
 
 Then take one frame:
 
@@ -570,15 +571,14 @@ recoverable, which is the whole reason for the dry-run in step 8.
 
 ## Summary of the traps
 
-1. `install.sh --check` exits 1 on success. Read the output.
-2. A restricted shell gets `EPERM` on `/dev/media*`; that is not a broken camera. Test
+1. A restricted shell gets `EPERM` on `/dev/media*`; that is not a broken camera. Test
    through systemd.
-3. Grep sibling repos for `from src` as well as `src/` paths.
-4. `reference_lux` is dead — `brightness_target.base` replaced it.
-5. `video.retention_days` and `database.retention_days` default to 0 in code but to 7 and
-   180 in the reference file. Dry-run both.
-6. Delete your `video.codec` preset/crf/threads overrides or you keep the slow encoder.
-7. `logging.console: true` is what makes the journal enormous. Set it to `auto`.
-8. `--with-netwatch` needs NetworkManager. Check `systemctl is-active NetworkManager`.
-9. Never `--only` on an upgrade; it strands the old units.
-10. Never pip-install requirements.txt on a Pi.
+2. Grep sibling repos for `from src` as well as `src/` paths.
+3. `reference_lux` is dead — `brightness_target.base` replaced it.
+4. `video.retention_days` and `database.retention_days` default to 0 in code (keep
+   forever); set them explicitly if you want pruning. Dry-run both.
+5. Delete your `video.codec` preset/crf/threads overrides or you keep the slow encoder.
+6. `logging.console: true` is what makes the journal enormous. Set it to `auto`.
+7. `--with-netwatch` needs NetworkManager. Check `systemctl is-active NetworkManager`.
+8. Never `--only` on an upgrade; it strands the old units.
+9. Never pip-install requirements.txt on a Pi.
