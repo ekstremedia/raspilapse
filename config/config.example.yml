@@ -11,22 +11,29 @@
 # ---------------------------------------------------------------- required --
 
 location:
-  # Used to record the sun's elevation with each frame. Wrong coordinates do
-  # not stop the camera working -- exposure is decided from measured
-  # brightness, not from the clock.
+  # Yours, not these -- this pair is in Vesteralen, Norway. Only used to
+  # record the sun's elevation with each frame: exposure is decided from
+  # measured brightness, not from the clock, so wrong coordinates do not
+  # stop the camera working.
   latitude: 68.7
   longitude: 15.4
   timezone: Europe/Oslo
 
 output:
-  # Where frames are written. Must exist and be writable by the service user.
+  # Frames land here as YYYY/MM/DD/<project_name>_<timestamp>.jpg.
+  # Must exist and be writable by the service user.
   directory: /var/www/html/images
   # Used in every filename, so pick something without spaces.
   project_name: timelapse
+  # A stable "newest frame" path, handy behind a webserver:
+  # symlink_latest:
+  #   enabled: true
+  #   path: /var/www/html/status.jpg
 
 # ------------------------------------------------------- worth setting soon --
 
 camera:
+  # The daily video is rendered at this same resolution -- 3840x2160 is 4K.
   resolution:
     width: 3840
     height: 2160
@@ -37,12 +44,23 @@ camera:
 adaptive_timelapse:
   # Seconds between frames. 30 is a good starting point: fast enough for
   # weather to move, slow enough for a 20-second night exposure to finish.
+  # Day-to-night exposure is automatic; there is nothing else to enable.
   interval: 30
-  # Overall brightness. Raise for brighter images, lower for darker.
-  reference_lux: 3.8
+  # Overall brightness target (0-255). Raise for brighter images, lower for
+  # darker; an overcast-sky boost is added on top automatically.
+  brightness_target:
+    base: 120
 
 video:
+  # The 05:00 timer renders yesterday (05:00 -> 05:00) into this directory.
   directory: /var/www/html/videos
+  # File videos into month folders, videos/2026/08/... The code default is
+  # false, which piles every video into one flat directory.
+  organize_by_date: true
+  date_format: "%Y/%m"
+  # Videos are kept forever by default, ~0.5 GB/day at 4K. Uncomment to prune
+  # (uploaded-but-unconfirmed files are never deleted):
+  # retention_days: 30
 
 logging:
   # INFO while setting up, WARNING once it is running unattended.
@@ -53,12 +71,18 @@ database:
   # tools read it; nothing breaks without it.
   enabled: true
   path: data/timelapse.db
+  # Rows are kept forever by default (~200 MB/year at a 30 s interval):
+  # retention_days: 180
+
+# Captured stills are pruned after 7 days by the 02:00 cleanup timer -- the
+# daily videos are what preserves them. That knob lives outside this file:
+# see RASPILAPSE_KEEP_DAYS in scripts/cleanup_old_images.sh.
 
 # ------------------------------------------------------------- optional -----
 #
 # Left off by default. See docs/CONFIG-REFERENCE.yml for what each one takes.
 #
-#   overlay        burn camera settings, time and weather into each frame
+#   overlay        burn camera name, time and weather into each frame
 #   weather        fetch observations to display and record
 #   video_upload   POST the daily video to a server
 #   barentswatch   ship positions, from a separate feed service
@@ -67,3 +91,7 @@ database:
 
 overlay:
   enabled: false
+  # When enabled, the default top bar shows camera_name on the left with a
+  # localized date/time beneath it. Localized dates want the nb_NO.UTF-8
+  # locale generated (or set datetime: { localized: false }).
+  # camera_name: "My Camera 01"

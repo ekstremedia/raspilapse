@@ -1,12 +1,14 @@
 # Raspilapse configuration reference.
 #
-# Every setting there is, annotated, with its default. This is documentation,
-# not a template: do not copy it wholesale. Start from
+# Every setting there is, annotated. Values are what a working camera uses;
+# where the code's own default differs, the comment names it. This is
+# documentation, not a template: do not copy it wholesale. Start from
 # config/config.example.yml and copy across only the blocks you want to change
 # -- everything omitted falls back to raspilapse/config.py.
 #
-# A test fails if this file documents a key nothing reads, and another fails if
-# the code starts requiring a key with no default.
+# Three tests keep this file honest: one fails if it documents a key nothing
+# reads, one if the code starts requiring a key with no default, and one if a
+# key in DEFAULTS goes undocumented here.
 
 location:
   # Latitude in decimal degrees (negative for South)
@@ -82,9 +84,9 @@ output:
   # Project name (used in filename)
   project_name: "timelapse"
 
-  # Image quality (0-100, JPEG compression)
+  # Image quality (0-100, JPEG compression; 85 is also the code default)
   # Higher = better quality, larger files
-  quality: 75
+  quality: 85
 
   # Create subdirectories by date (YEAR/MONTH/DAY structure)
   # When enabled, images are organized as: directory/YYYY/MM/DD/filename.jpg
@@ -95,7 +97,7 @@ output:
   # %Y = 4-digit year, %m = 2-digit month, %d = 2-digit day
   date_format: "%Y/%m/%d"
 
-  # Symlink latest image (for web status display)
+  # Symlink latest image (for web status display; code default: disabled)
   symlink_latest:
     enabled: true
     path: "/var/www/html/status.jpg"
@@ -105,22 +107,21 @@ video:
   # Base directory for generated timelapse videos
   directory: "/var/www/html/videos"
 
-  # Create subdirectories by date (YEAR/MONTH structure)
+  # Create subdirectories by date (YEAR/MONTH structure). The code default is
+  # false -- without this key, videos land flat in the directory above.
   # When enabled, videos are organized as: directory/YYYY/MM/filename.mp4
-  # Example: /var/www/html/videos/2025/12/timelapse_daily_2025-12-23.mp4
+  # Example: /var/www/html/videos/2025/12/timelapse_2025-12-22_0500_to_2025-12-23_0500.mp4
+  # The subfolder comes from the END of the window, so a month's last daily
+  # video files under the following month.
   organize_by_date: true
 
   # Date format for subdirectories (if organize_by_date is true)
   # %Y = 4-digit year, %m = 2-digit month
   date_format: "%Y/%m"
 
-  # Video filename pattern (supports strftime formatting)
-  # Available placeholders:
-  # - {name} - Project name
-  # - {start_date} - Start date (YYYY-MM-DD)
-  # - {end_date} - End date (YYYY-MM-DD)
-  # You can also use strftime directives like %Y%m%d
-  filename_pattern: "{name}_{start_date}_to_{end_date}.mp4"
+  # Video filenames are not configurable: {project}_{date}_{HHMM}-{HHMM}.mp4
+  # for a same-day window, {project}_{start}_to_{end}.mp4 across days.
+  # Keograms and slitscans carry the same stem behind keogram_/slitscan_.
 
   # Video codec settings
   codec:
@@ -154,6 +155,11 @@ video:
     # frame is still 3840x2160 but foliage, water and distant edges flatten.
     crf: 20
 
+    # Bitrate for the hardware encoder, which takes a bitrate rather than a
+    # CRF. Ignored by libx264. Only reachable via --hw, which also needs --hd
+    # (the Pi's V4L2 encoder tops out at 1920x1080).
+    bitrate: "10M"
+
   # Frame rate (frames per second)
   # 25 fps = smooth European standard
   # 30 fps = smooth NTSC standard
@@ -177,7 +183,9 @@ video:
   # rather than silently skipped. Files the queue has never heard of are not
   # protected, which is how ad-hoc partial-day renders get cleaned up.
   #
-  # At 4K/crf 20 a day is roughly 500 MB, so 7 days is ~3.4 GB.
+  # At 4K/crf 20 a day is roughly 500 MB, so 7 days is ~3.4 GB. The code
+  # default is 0 -- keep everything -- so nothing is deleted until you choose
+  # a window.
   retention_days: 7
 
   # Default time range for timelapse generation (used when no --start/--end provided)
@@ -295,33 +303,25 @@ adaptive_timelapse:
     # Higher = faster but may show color jumps
     wb_transition_speed: 0.15
 
-    # Exposure time transition speed (0.0-1.0)
+    # Exposure time transition speed (0.0-1.0; 0.15 is also the code default)
     # How quickly exposure changes towards target per frame
     # Uses logarithmic interpolation for natural brightness changes
     # Lower = smoother transitions (0.05-0.15 recommended)
-    exposure_transition_speed: 0.10
+    exposure_transition_speed: 0.15
 
-    # === BRIGHTNESS FEEDBACK SETTINGS ===
-    # These settings enable real-time brightness correction for butter-smooth
-    # transitions. The system analyzes actual image brightness and gradually
-    # adjusts exposure to maintain consistent brightness.
-
-    # Enable brightness feedback (recommended for smooth transitions)
+    # Feed each frame's measured brightness back into the next decision.
+    # This is the control loop itself; leave it on. (The brightness target
+    # lives under adaptive_timelapse.brightness_target below.)
     brightness_feedback_enabled: true
-
-    # Target brightness (0-255, where 128 is mid-gray)
-    # Higher = brighter images, lower = darker images
-    target_brightness: 120
 
     # === OVEREXPOSURE FAST RAMP-DOWN ===
     # When overexposure is detected (brightness > 180 or >10% clipped pixels),
     # exposure ramps down faster to prevent the "light flash" at dawn.
     # This speed replaces the normal exposure_transition_speed temporarily.
     #
-    # fast_rampdown_speed (0.1-0.5)
-    # - 0.30 = 3x faster than normal (conservative)
-    # - 0.40 = 4x faster (moderate)
-    # - 0.50 = 5x faster (recommended for quick overexposure correction)
+    # fast_rampdown_speed (0.1-0.5), against a normal speed of 0.15:
+    # - 0.30 = 2x faster (the code default)
+    # - 0.50 = 3.3x faster (this camera's choice: quick dawn correction)
     fast_rampdown_speed: 0.50
 
     # Severe overexposure (brightness > 200): even faster, to stop a dawn flare
@@ -339,7 +339,7 @@ adaptive_timelapse:
   # On Pi 4 (vc4): effectively a no-op (logged but ignored by hardware).
   # Night mode always uses HDR Off to preserve aurora/star captures.
   hdr:
-    enabled: true
+    enabled: true    # code default: false
     day_mode: "SingleExposure"    # HDR mode for day/transition (SingleExposure or Off)
     night_mode: "Off"             # HDR mode for night (always Off for long exposures)
 
@@ -356,22 +356,18 @@ adaptive_timelapse:
     contrast_threshold_low: 25    # Below this std = full boost (overcast)
     contrast_threshold_high: 40   # Above this std = no boost (sunny)
 
-  # Test shot settings (used to measure light levels)
+  # White-balance reference shot (the one frame taken with AWB on, so the
+  # camera can learn the scene's daylight white point). Fires rarely, only
+  # near the bright end of the ladder, and is skipped automatically when
+  # day_mode.fixed_colour_gains is set -- there is nothing for it to learn.
   test_shot:
-    # Take a test shot before each capture to measure light
     enabled: true
 
-    # Test shot exposure time in seconds (quick test)
+    # Reference shot exposure time in seconds (quick test)
     exposure_time: 0.1
 
-    # Test shot gain
+    # Reference shot gain
     analogue_gain: 1.0
-
-    # Measurement frequency: how often to take test shots
-    # 1 = every capture (default), 2 = every other capture, etc.
-    # Higher values reduce overhead but may miss rapid light changes
-    # Recommended: 1 for dawn/dusk transitions, 2-3 for stable lighting
-    frequency: 1
 
   # Diagnostic metadata settings
   # Adds extra analysis data to each capture's metadata JSON
@@ -397,18 +393,20 @@ system:
 
 # Overlay Settings
 overlay:
-  # Enable/disable overlay
+  # Enable/disable overlay (code default: false)
   enabled: true
 
   # Font settings
   font:
-    # Font family (system font name or path to .ttf file)
-    # Common: "DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "Arial.ttf"
-    # Leave as "default" to use PIL default font
-    family: "DejaVuSans-Bold.ttf"  # Bold for sharper, clearer text
+    # Font family (system font name or path to .ttf file). This is also the
+    # code default. "default" forces PIL's built-in bitmap font, which
+    # ignores the computed size -- 10px text on a 4K frame -- so it is a last
+    # resort, not a default.
+    family: "DejaVuSans-Bold.ttf"
 
-    # Font size relative to image height (0.02 = 2% of image height)
-    size_ratio: 0.020  # Slightly larger for bar mode
+    # Font size relative to image height (code default 0.025; a touch
+    # smaller reads better across a 4K top bar)
+    size_ratio: 0.020
 
     # Font color (RGB or RGBA)
     color: [255, 255, 255, 255]  # Pure white with full opacity
@@ -420,13 +418,15 @@ overlay:
 
     # Background color (RGBA - last value is opacity: 0=transparent, 255=opaque)
     # For top-bar mode, this creates a gradient that fades out at the bottom
-    color: [0, 0, 30, 70]  # Black with 43% opacity (very transparent with gradient)
+    color: [0, 0, 30, 70]  # Near-black blue at 27% opacity
 
-    # Padding around text (relative to font size)
-    padding: 0.6  # Extra padding for more breathing room
+    # Padding around text (relative to font size; code default 0.3)
+    padding: 0.6
 
-  # Position presets: "top-left", "top-right", "bottom-left", "bottom-right", "top-bar", "custom"
-  # "top-bar" creates a full-width navbar at top with centered text
+  # Position presets: "top-bar", "top-left", "top-right", "bottom-left",
+  # "bottom-right", "custom". "top-bar" (the code default) is a full-width
+  # band across the top with built-in content; the corner modes need
+  # overlay.content lines or they draw nothing.
   position: "top-bar"
 
   # Custom position (only used if position = "custom")
@@ -447,7 +447,7 @@ overlay:
   #   {time} - Time (HH:MM:SS)
   #   {datetime} - Full datetime
   #   {camera_name} - Camera name from config
-  #   {mode} - Light mode (day/night/transition)
+  #   {mode} - Light mode (rendered Day/Night/Transition)
   #   {exposure} - Exposure time (human readable)
   #   {exposure_ms} - Exposure time in milliseconds
   #   {exposure_us} - Exposure time in microseconds
@@ -534,12 +534,13 @@ overlay:
 
   # Layout options
   layout:
-    # Line spacing multiplier (1.0 = normal, 1.5 = 1.5x spacing)
-    line_spacing: 1.2  # Tighter spacing for bar mode
+    # Line spacing multiplier -- corner modes only; the top bar is fixed at
+    # 1.2 (code default here is 1.3)
+    line_spacing: 1.2
 
-
-    # Extra bottom spacing for bar (adds padding below text)
-    bottom_padding_multiplier: 0.7  # 30% more space at bottom
+    # Bar only: bottom padding as a multiple of the padding unit
+    # (code default 1.3)
+    bottom_padding_multiplier: 0.7
 
 # Logging Settings
 logging:
@@ -575,7 +576,9 @@ logging:
 
 # Video Upload Settings (for raspilapse.cli.daily)
 video_upload:
-  # Enable/disable automatic upload after timelapse creation
+  # Enable/disable automatic upload after timelapse creation.
+  # Careful: a video_upload block WITHOUT this key counts as enabled -- set
+  # false explicitly if you are staging the url/api_key ahead of time.
   enabled: false
 
   # Server endpoint URL for video uploads
@@ -610,6 +613,7 @@ weather:
 # Database Settings (for capture history storage)
 database:
   # Enable/disable SQLite database storage for capture metadata
+  # (code default: false; the example config turns it on)
   enabled: true
 
   # Path to database file (relative to project root or absolute)
@@ -631,6 +635,7 @@ database:
   # Pruning runs from raspilapse-cleanup.timer. Space is only handed back to
   # the filesystem by an explicit `python3 -m raspilapse.cli.db --vacuum`, which is
   # slow and needs free disk equal to the database size.
+  # The code default is 0 -- keep every row.
   retention_days: 180
 
 # Barentswatch Ship Tracking Overlay
@@ -640,7 +645,7 @@ barentswatch:
   enabled: false
 
   # Path to ships_current.json from pi-overlay-data service
-  ships_file: "/www/pi-overlay-data/data/ships_current.json"
+  ships_file: "/home/pi/pi-overlay-data/data/ships_current.json"
 
 # Tide Data Overlay
 # Shows tide information in the overlay (from pi-overlay-data service)
@@ -649,7 +654,7 @@ tide:
   enabled: false
 
   # Path to tide.json from pi-overlay-data service
-  tide_file: "/www/pi-overlay-data/data/tide.json"
+  tide_file: "/home/pi/pi-overlay-data/data/tide.json"
 
 # Aurora Data Overlay
 # Shows aurora/space weather information in the overlay (from pi-overlay-data service)
@@ -658,4 +663,4 @@ aurora:
   enabled: false
 
   # Path to aurora.json from pi-overlay-data service
-  aurora_file: "/www/pi-overlay-data/data/aurora.json"
+  aurora_file: "/home/pi/pi-overlay-data/data/aurora.json"

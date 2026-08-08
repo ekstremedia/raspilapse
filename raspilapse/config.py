@@ -58,7 +58,7 @@ DEFAULTS: Dict = {
         "num_frames": 0,
         "night_mode": {"max_exposure_time": 20.0, "analogue_gain": 6},
         "day_mode": {"exposure_time": 0.01, "analogue_gain": 1.0},
-        "test_shot": {"enabled": True, "exposure_time": 0.1, "analogue_gain": 1.0, "frequency": 1},
+        "test_shot": {"enabled": True, "exposure_time": 0.1, "analogue_gain": 1.0},
     },
     "video": {
         "directory": "videos",
