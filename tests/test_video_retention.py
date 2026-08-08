@@ -7,6 +7,7 @@ of these are about what is *kept*.
 import os
 import sqlite3
 import time
+from datetime import date, timedelta
 
 import pytest
 
@@ -35,8 +36,20 @@ def setup(tmp_path):
     config = {
         "video": {"directory": str(tmp_path / "videos"), "retention_days": 7},
         "database": {"path": str(db)},
+        "output": {"project_name": "cam"},
     }
     return {"root": tmp_path, "videos": videos, "db": db, "config": config}
+
+
+def dated_name(age_days, prefix="cam", suffix=".mp4"):
+    """A generated-style filename whose covered day is age_days ago.
+
+    Built from today rather than hardcoded: retention now judges files by the
+    date in their name, so a literal date would make these tests rot as the
+    calendar moves past it.
+    """
+    covered = date.today() - timedelta(days=age_days)
+    return f"{prefix}_{covered.isoformat()}{suffix}"
 
 
 def make(setup, name, age_days, size=1024):
@@ -68,21 +81,21 @@ class TestAgeWindow:
     """What the retention window does and does not reach."""
 
     def test_an_old_uploaded_video_is_deleted(self, setup):
-        old = make(setup, "cam_2026-07-20.mp4", age_days=30)
+        old = make(setup, dated_name(30), age_days=30)
         queue(setup, "success", video=old)
         result = prune_videos(setup["config"])
         assert not old.exists()
         assert str(old.resolve()) in result["deleted"]
 
     def test_a_recent_video_is_kept(self, setup):
-        recent = make(setup, "cam_2026-08-06.mp4", age_days=2)
+        recent = make(setup, dated_name(2), age_days=2)
         queue(setup, "success", video=recent)
         prune_videos(setup["config"])
         assert recent.exists()
 
     def test_keograms_and_slitscans_go_too(self, setup):
-        k = make(setup, "keogram_cam_2026-07-20.jpg", age_days=30)
-        s = make(setup, "slitscan_cam_2026-07-20.jpg", age_days=30)
+        k = make(setup, dated_name(30, prefix="keogram_cam", suffix=".jpg"), age_days=30)
+        s = make(setup, dated_name(30, prefix="slitscan_cam", suffix=".jpg"), age_days=30)
         queue(setup, "success", keogram=k, slitscan=s)
         prune_videos(setup["config"])
         assert not k.exists() and not s.exists()
@@ -94,6 +107,22 @@ class TestAgeWindow:
         os.utime(other, (when, when))
         prune_videos(setup["config"])
         assert other.exists()
+
+    def test_another_projects_mp4_is_untouched(self, setup):
+        # A second camera writing into the same web tree, or a hand-parked
+        # clip: age alone must never qualify a file the patterns don't own.
+        parked = make(setup, dated_name(90, prefix="othercam"), age_days=90)
+        prune_videos(setup["config"])
+        assert parked.exists()
+
+    def test_a_rerendered_old_day_still_expires(self, setup):
+        # Re-rendering an old day refreshes its mtime; the covered day in the
+        # name is what the window judges. (It also survives a stale clock
+        # stamping fresh files with old mtimes -- no RTC on a Pi.)
+        old = make(setup, dated_name(40), age_days=0)
+        queue(setup, "success", video=old)
+        prune_videos(setup["config"])
+        assert not old.exists()
 
 
 class TestUploadProtection:
@@ -113,29 +142,47 @@ class TestUploadProtection:
     def test_a_file_the_queue_never_saw_is_not_protected(self, setup):
         # Ad-hoc partial-day renders have no queue row; cleaning them up is the
         # point of not treating "unknown" as "protected".
-        adhoc = make(setup, "cam_2026-07-20_0500-1552.mp4", age_days=30)
+        adhoc = make(setup, dated_name(30, suffix="_0500-1552.mp4"), age_days=30)
         prune_videos(setup["config"])
         assert not adhoc.exists()
 
     def test_an_unreadable_database_deletes_nothing(self, setup):
-        old = make(setup, "cam_2026-07-20.mp4", age_days=30)
+        old = make(setup, dated_name(30), age_days=30)
         setup["db"].write_text("this is not a database")
         result = prune_videos(setup["config"])
         assert old.exists()
         assert result["deleted"] == []
+
+    def test_a_missing_database_deletes_nothing_when_uploads_are_on(self, setup):
+        # With uploads configured, an absent queue file means database.path is
+        # mispointed -- and an empty protected set would delete the only copy
+        # of every day that never uploaded. Fail closed instead.
+        old = make(setup, dated_name(30), age_days=30)
+        setup["db"].unlink()
+        setup["config"]["video_upload"] = {"enabled": True, "url": "https://example"}
+        result = prune_videos(setup["config"])
+        assert old.exists()
+        assert result["skipped"] == "upload queue unreadable"
+
+    def test_a_missing_database_is_fine_when_uploads_are_off(self, setup):
+        # No uploads, no queue: nothing to protect, pruning proceeds.
+        old = make(setup, dated_name(30), age_days=30)
+        setup["db"].unlink()
+        result = prune_videos(setup["config"])
+        assert not old.exists()
 
 
 class TestSafety:
     """The ways a pruner could destroy something it should not."""
 
     def test_retention_zero_is_a_no_op(self, setup):
-        old = make(setup, "cam_2026-07-20.mp4", age_days=365)
+        old = make(setup, dated_name(365), age_days=365)
         setup["config"]["video"]["retention_days"] = 0
         prune_videos(setup["config"])
         assert old.exists()
 
     def test_dry_run_reports_without_deleting(self, setup):
-        old = make(setup, "cam_2026-07-20.mp4", age_days=30)
+        old = make(setup, dated_name(30), age_days=30)
         result = prune_videos(setup["config"], dry_run=True)
         assert old.exists()
         assert str(old.resolve()) in result["deleted"]
@@ -161,16 +208,25 @@ class TestSafety:
         assert outside.exists()
 
     def test_emptied_month_directories_are_removed(self, setup):
-        make(setup, "cam_2026-07-20.mp4", age_days=30)
+        make(setup, dated_name(30), age_days=30)
         prune_videos(setup["config"])
         assert not setup["videos"].exists()
+
+    def test_directories_the_prune_did_not_empty_are_kept(self, setup):
+        # An empty directory that held nothing this prune deleted is not the
+        # prune's to remove -- another camera or a manual mkdir owns it.
+        bystander = setup["root"] / "videos" / "2026" / "09"
+        bystander.mkdir(parents=True)
+        make(setup, dated_name(30), age_days=30)
+        prune_videos(setup["config"])
+        assert bystander.exists()
 
     def test_a_missing_video_directory_is_not_an_error(self, setup):
         setup["config"]["video"]["directory"] = str(setup["root"] / "nope")
         assert prune_videos(setup["config"])["deleted"] == []
 
     def test_the_override_beats_the_config(self, setup):
-        old = make(setup, "cam_2026-08-04.mp4", age_days=3)
+        old = make(setup, dated_name(3), age_days=3)
         prune_videos(setup["config"], retention_days=1)
         assert not old.exists()
 
