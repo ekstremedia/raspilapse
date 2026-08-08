@@ -1,230 +1,202 @@
 # Setting Up a New Camera Pi
 
-Notes for deploying a new camera, written while setting one up alongside the working
-Spjutvika Pi. Reference config on the working Pi: `/home/pi/raspilapse/config/config.yml`.
+From a blank SD card to a camera that captures every 30 seconds and publishes
+a daily 4K video — the exact path, validated on sigerfjordcam-2 (Pi 4, Camera
+Module 3, Raspberry Pi OS Lite trixie). [docs/INSTALL.md](docs/INSTALL.md)
+explains what each step is for and what to do when one fails; this is the
+walk-through.
 
-## What actually makes up a camera
+## What you end up with
 
-`raspilapse` is not the whole stack. A fully-featured camera is up to four separate repos:
+- A frame every 30 s in `/var/www/html/images/YYYY/MM/DD/`, exposure handled
+  automatically from full sun to 20-second night exposures — **nothing to
+  enable**, the adaptive ladder is the capture path.
+- Yesterday's 4K video, keogram and slitscan in `/var/www/html/videos/YYYY/MM/`
+  every morning at 05:00 (05:00→05:00, so a night lands in one file).
+- `/var/www/html/status.jpg` always pointing at the newest frame.
+- One service and three timers, installed by one script; images pruned after
+  7 days (the videos are what preserves them), journal capped at 200 MB.
 
-| Repo | systemd unit | Required? | What it does |
-|---|---|---|---|
-| `raspilapse` | `raspilapse.service` + 3 timers | **yes** | Captures stills, builds + uploads daily video |
-| `python-reverb` | `reverb-client.service` | if you want live remote control | Inbound WebSocket channel — on-demand current image, health pings, vitals |
-| `pi-overlay-data` | `pi-overlay-data.service` | only for ships/tide/aurora overlay | Writes local JSON the overlay reads |
-| `dashboard-raspilapse` | `raspilapse-dashboard.service` | only for the local web UI | Flask/gunicorn on `127.0.0.1:5000` |
+## 1. OS
 
-### Is python-reverb part of raspilapse?
+Flash Raspberry Pi OS **Lite** with Raspberry Pi Imager and preseed hostname,
+your user, ssh and wifi in the imager's settings — the Pi never needs a
+monitor. Bookworm and Trixie both work.
 
-**No, not at the code level.** Zero cross-references — raspilapse has no websocket client, no
-listener, no inbound control path at all. It's strictly outbound: POST video to the server,
-GET weather. Neither repo imports or execs the other.
-
-**But they're coupled at runtime**, via the shared image directory and a shared identity:
-
-| | raspilapse | python-reverb |
-|---|---|---|
-| image dir | *writes* `/var/www/html/images/YYYY/MM/DD` | *reads* `IMAGE_BASE_PATH` (same path) |
-| camera id | `video_upload.camera_id` | `DEVICE_ID` — must match |
-| server | `video_upload.url` | `API_BASE_URL` / `REVERB_HOST` |
-| token | `video_upload.api_key` | `API_TOKEN` — same value on the current Pi |
-
-python-reverb subscribes to channel `device.{DEVICE_ID}` and handles three events
-(`device_listener.py:125-127`):
-
-- `health.ping` → POST `/api/device/pong`
-- `vitals.request` → load/mem/temp/uptime/disk → POST `/api/device/vitals`
-- `capture.request` → runs `scripts/capture.sh` → POST `/api/device/capture/complete`
-
-`scripts/capture.sh` does **not** trigger the camera. It globs the newest JPG out of
-raspilapse's output dir for today and curls it to `/api/camera/current-image`. So if
-raspilapse isn't running (or it's past midnight with no captures yet), capture requests
-fail with "No images found".
-
----
-
-## Part 1 — raspilapse
-
-### 1. OS + camera
+First login:
 
 ```bash
-sudo raspi-config          # Interface Options → Camera → Enable → reboot
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3-picamera2 python3-yaml python3-pil python3-numpy
-sudo apt install -y ffmpeg python3-matplotlib python3-openpyxl
-pip3 install astral requests
-rpicam-still -o test.jpg   # verify hardware before going further
+sudo apt update && sudo apt full-upgrade -y && sudo reboot
 ```
 
-**picamera2 must come from apt, never pip** — a pip install shadows the apt one and breaks.
+Reboot *before* installing anything, so a kernel or firmware bump never lands
+mid-deployment.
 
-### 2. Clone and configure
+There is no camera step in raspi-config any more — Bookworm and later
+autodetect CSI cameras (the "Legacy camera" toggle that remains is the wrong
+stack). Just verify the hardware:
 
 ```bash
-cd /home/pi
+rpicam-still -o /tmp/test.jpg    # trixie ships rpicam-*; the libcamera-* names are gone
+```
+
+## 2. Packages
+
+```bash
+sudo apt install -y python3-picamera2 python3-yaml ffmpeg
+pip3 install --break-system-packages 'astral>=3.2'   # sun elevation; apt's astral is too old
+```
+
+**No virtualenv.** The systemd units run `/usr/bin/python3`, picamera2 is
+apt-only, and a venv's own numpy shadows the one picamera2 was compiled
+against. `requirements.txt` is for CI, never for a Pi.
+
+Optional, each buys one feature: `python3-requests-toolbelt` (streamed
+uploads), `python3-matplotlib` (graph scripts — also lets the full test suite
+run rather than skip those modules).
+
+If the overlay should show Norwegian dates, generate the locale once:
+
+```bash
+sudo sed -i 's/^# *nb_NO.UTF-8 UTF-8/nb_NO.UTF-8 UTF-8/' /etc/locale.gen && sudo locale-gen
+```
+
+(or set `overlay.datetime.localized: false` and skip this.)
+
+## 3. Web directories
+
+Only if serving over HTTP, and only if they do not already exist:
+
+```bash
+sudo apt install -y apache2        # or nginx; anything that serves files
+sudo mkdir -p /var/www/html/images /var/www/html/videos
+sudo chown -R $USER:www-data /var/www/html/images /var/www/html/videos
+sudo chmod -R 775 /var/www/html/images /var/www/html/videos
+```
+
+## 4. Clone and configure
+
+```bash
+cd ~
 git clone https://github.com/ekstremedia/raspilapse.git
 cd raspilapse
 cp config/config.example.yml config/config.yml
+nano config/config.yml
 ```
 
-Per-camera values to change in `config/config.yml`:
+Per-camera values:
 
-| Key | Notes |
-|---|---|
-| `location.latitude` / `longitude` / `timezone` | drives polar day/night detection |
-| `output.project_name` | goes into the image filenames |
-| `output.directory` | `/var/www/html/images` — keep it, python-reverb expects it |
-| `overlay.content.camera_name` | display name burnt into the frame |
-| `video_upload.enabled` | example ships `false` → set `true` |
-| `video_upload.url` | `https://nesthus.no/api/piVideo/new-store` |
-| `video_upload.api_key` | **new key from the server** |
-| `video_upload.camera_id` | **unique** — do not reuse `spjutvika_01` |
-| `weather.enabled` + `weather.endpoint` | its own Netatmo station UUID, or leave disabled |
+| Key | This camera's value | Notes |
+|---|---|---|
+| `location.latitude` / `longitude` / `timezone` | `68.66` / `15.39` / `Europe/Oslo` | recorded with each frame; does not affect exposure |
+| `output.directory` | `/var/www/html/images` | must exist and be writable |
+| `output.project_name` | `sigerfjordcam2` | leads every filename — no spaces |
+| `output.symlink_latest` | `enabled: true`, `path: /var/www/html/status.jpg` | the live "current view" |
+| `camera.resolution` | `3840x2160` | the daily video inherits this — this line *is* the 4K |
+| `adaptive_timelapse.interval` | `30` | seconds between frames |
+| `video.directory` | `/var/www/html/videos` | |
+| `video.organize_by_date` | `true` | code default is false → flat pile of videos |
+| `overlay.enabled` + `overlay.camera_name` | `true`, `"Sigerfjord #02"` | top bar: name + localized date/time |
 
-### 3. Gaps in config.example.yml — add these by hand
+Renames to know if you are pattern-matching from an old camera's config:
+`reference_lux` and `direct_brightness_control` are gone (the knob is
+`adaptive_timelapse.brightness_target.base`), the overlay name key is
+`overlay.camera_name` (not `overlay.content.camera_name`), and exposure has
+no modes to configure — the ladder ramps shutter to 20 s then gain, by
+itself, out of the box.
 
-The example is behind the live config. Two keys matter:
+Never change `output.filename_pattern`'s trailing timestamp: the video
+renderer re-parses it out of every filename.
 
-```yaml
-adaptive_timelapse:
-  direct_brightness_control: true
-  brightness_damping: 0.5
-```
-
-Direct Brightness Control replaced the ML exposure path in Jan 2026 and is the recommended
-system, but it never made it into the example. Copy verbatim from
-`config/config.yml:71-72` on the working Pi. Without it you silently fall back to the
-deprecated ML path.
-
-Also: the example's overlay data paths point at `/www/pi-overlay-data/data/...`; the working
-Pi uses `/home/pi/pi-overlay-data/data/...`. Fix these or disable the sections:
-
-```yaml
-barentswatch.ships_file: /home/pi/pi-overlay-data/data/ships_current.json
-tide.tide_file:          /home/pi/pi-overlay-data/data/tide.json
-aurora.aurora_file:      /home/pi/pi-overlay-data/data/aurora.json
-```
-
-### 4. Test, then install services
+## 5. Check, then one test frame
 
 ```bash
-python3 src/auto_timelapse.py --test    # single capture, then exits
-./scripts/install.sh                    # main capture service (enable only, no start)
+./scripts/install.sh --check     # exits 0 when ready
+python3 -m raspilapse.cli.capture --test
+ls -R /var/www/html/images/$(date +%Y/%m/%d)/
+```
+
+Expect `<project>_<YYYY_MM_DD_HH_MM_SS>.jpg` plus a `_metadata.json` sidecar,
+with the overlay bar across the top. The very first frames settle in from a
+cold start — a blown or dark opener is normal for a frame or two.
+
+If capture fails with `EPERM` on `/dev/media*` *from your shell* while
+`rpicam-still` worked earlier, something is confining that shell (it is
+inherited, so sudo does not help). The camera is fine — verify through
+systemd instead. This has burned an hour more than once.
+
+## 6. Install the services
+
+```bash
+./scripts/install.sh
 sudo systemctl start raspilapse
+systemctl list-timers 'raspilapse-*'
 ```
 
-`install.sh` installs **only** `raspilapse.service`. The three timers are separate — and one
-has no installer at all:
+One installer, four components: the capture service, the 05:00 daily video,
+the 02:00 cleanup, the upload retry. `--with-watchdog` and `--with-netwatch`
+exist for a camera that has *proved* flaky — both run as root and can reboot
+the Pi, so add them from evidence, not up front.
+
+## 7. Same-day video test
+
+No need to wait for 05:00 — after a few minutes of capture:
 
 ```bash
-./scripts/install_daily_video.sh        # daily video timer, 05:00
-./scripts/install_cleanup.sh            # image cleanup timer, 02:00 (keeps 7 days)
-
-# upload-retry has NO install script — do it by hand, easy to forget:
-sudo cp systemd/raspilapse-upload-retry.* /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now raspilapse-upload-retry.timer
+python3 -m raspilapse.cli.daily --date "$(date +%F)" --no-upload
+ffprobe -v error -select_streams v:0 -show_entries stream=width,height \
+    -of default=nw=1 /var/www/html/videos/$(date +%Y/%m)/*.mp4
 ```
 
-Verify:
+Expect `width=3840 height=2160`, a keogram and slitscan beside the mp4, and a
+200 from the webserver for all three. Tomorrow's 05:00 run covers the same
+window and simply overwrites this partial render.
+
+## 8. Disk budget
+
+At 4K/30 s: **6–8 GB of images per day**, pruned after 7 days by the cleanup
+timer → a ~45–55 GB rolling plateau. Change the window without editing
+anything tracked by git:
 
 ```bash
-systemctl status raspilapse.service
-systemctl list-timers | grep raspilapse   # expect 3 timers
-journalctl -u raspilapse.service -f
+sudo systemctl edit raspilapse-cleanup.service
+# [Service]
+# Environment=RASPILAPSE_KEEP_DAYS=14
 ```
 
-Expect a few overexposed frames on the very first run — the startup-flash fix seeds exposure
-from the last DB capture, and a brand-new Pi has an empty database.
+Videos are ~0.5 GB/day and kept forever by default — on a 128 GB card that
+is roughly two to three months of headroom after the image plateau, so
+decide early: set `video.retention_days` (say 30), or archive them off-Pi.
+Database rows are ~200 MB/year; `database.retention_days` if you care.
 
----
+## If you run a sparse interval instead
 
-## Part 2 — python-reverb
+Not this camera, but if you set `interval` to minutes rather than seconds:
+the video duration is frames ÷ `video.fps` (48 frames/day at 25 fps is a
+2-second clip — lower `video.fps` to taste), set `video.deflicker: false`
+(its 10-frame window would smear hours of sky), and expect keograms only as
+wide as the frame count.
 
-Only needed if this camera should serve live current-image requests from the server.
-There is **no install script** here; it's manual.
+## Traps
 
-```bash
-sudo apt install -y python3 python3-venv python3-pip git
-cd /home/pi
-git clone https://github.com/ekstremedia/python-reverb.git
-cd python-reverb
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install . aiohttp        # aiohttp is not a core dep, must be named explicitly
-cp .env.example .env
-chmod 600 .env
-```
+1. `config/config.yml` is gitignored — it will not survive the SD card.
+   Keep a copy off-Pi; it is the only non-reproducible file.
+2. picamera2 from apt, astral from pip — never the other way around.
+3. `video.organize_by_date` defaults to false. Set it.
+4. A `video_upload:` block without `enabled:` counts as enabled — set
+   `enabled: false` explicitly while staging credentials.
+5. The first frames after an empty database settle in; judge exposure from
+   frame five, not frame one.
+6. `EPERM` on `/dev/media*` in a restricted shell is not a broken camera
+   (see step 5).
+7. The month's last daily video files under the *next* month's folder — the
+   subfolder comes from the window's 05:00 end.
+8. `logging.level: INFO` while setting up, `WARNING` once it runs unattended.
 
-Fill in `.env`:
+## Sibling repos
 
-```bash
-DEVICE_ID=<new_camera_id>          # MUST match video_upload.camera_id in raspilapse
-REVERB_APP_KEY=<from Laravel .env> # server-wide, same as existing Pi
-REVERB_APP_SECRET=<from Laravel .env>
-REVERB_HOST=nesthus.no
-REVERB_PORT=443
-REVERB_SCHEME=wss
-API_BASE_URL=https://nesthus.no
-API_TOKEN=base64:<token>           # same token as raspilapse video_upload.api_key
-CAPTURE_SCRIPT=/home/pi/python-reverb/scripts/capture.sh
-IMAGE_BASE_PATH=/var/www/html/images
-REVERB_LOG_LEVEL=INFO              # existing Pi is on DEBUG; use INFO here
-```
-
-Test in the foreground first — you want to see the channel subscription land:
-
-```bash
-source venv/bin/activate
-python device_listener.py
-# expect: "listening on channel device.<new_camera_id>"
-```
-
-Then install the service (the repo ships the unit file, unlike raspilapse):
-
-```bash
-sudo cp reverb-client.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now reverb-client
-sudo journalctl -u reverb-client -f
-```
-
-`./restart.sh` is a convenience wrapper for restart + status.
-
-### Server side
-
-The new `DEVICE_ID` has to exist on nesthus.no before any of this responds — the device
-record, its API token, and something publishing to `device.{DEVICE_ID}`.
-
----
-
-## Things to watch
-
-- **Token is duplicated** across `raspilapse/config/config.yml` and `python-reverb/.env`.
-  Rotating it means editing both files and restarting both services.
-- **The Reverb channel is public**, not private — `device.{DEVICE_ID}`, no auth. Anyone able
-  to publish to that channel on the server can trigger captures and vitals.
-  `python-reverb/docs/RASPBERRY_PI_SETUP.md:315-329` suggests moving to
-  `private-device.{ID}`; worth doing while adding a second camera.
-- **`config.yml` is gitignored** in raspilapse — it won't come down with a `git pull`, and it
-  won't be backed up by git either.
-- **`docs/SETUP_COMPLETE.md` is stale** — it lists video at 00:04 and cleanup at 01:00; the
-  shipped timers are 05:00 and 02:00. It also links three files that don't exist.
-- **Rollout to an existing Pi** is just
-  `cd /home/pi/raspilapse && git pull && sudo systemctl restart raspilapse`. See `UPGRADE.md`.
-
-## End-to-end verification
-
-```bash
-# stills landing
-ls -t /var/www/html/images/$(date +%Y/%m/%d)/ | head
-
-# video build + upload path
-python3 src/daily_timelapse.py --dry-run                 # show what it would do
-python3 src/daily_timelapse.py --date $(date -d yesterday +%Y-%m-%d)
-python3 src/retry_uploads.py --status                    # queue empty = upload succeeded
-
-# remote control path
-sudo journalctl -u reverb-client -f    # then trigger a capture.request from the server
-```
+A full-featured camera in this fleet can also run `python-reverb` (live
+remote control), `pi-overlay-data` (ships/tide/aurora feeds for the overlay)
+and `dashboard-raspilapse` (local web UI). None are needed for capture or
+daily videos; see section 10 of
+[UpgradeOldRaspilapse.md](UpgradeOldRaspilapse.md) for how they connect.

@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The rest of the dusk step, and the reason the timelapse felt choppy.
+The rest of the dusk step, and the reason the timelapse felt choppy — then a
+fresh install on a new camera put the whole path under audit: three
+correctness passes over the daemon, the video pipeline and the storage layer,
+and a claim-by-claim review of every document. What they confirmed is fixed
+below.
 
 1.5.0 removed the *colour* half of the day-to-transition seeding. The exposure
 half was still there, and so was a second copy of the same mistake at every
@@ -16,6 +20,110 @@ day to compute a white balance reading it then discarded — and each of those
 landed a frame three seconds late.
 
 ### Fixed
+- **`install.sh --check` exited 1 even when it printed "Ready to install."**
+  The EXIT trap's last command was `[ -n "$STAGING" ]`, false whenever nothing
+  was staged, and bash takes the trap's status as the script's — which also
+  broke the success exits of `--dry-run` and `--uninstall`, and any script
+  gating on `$?`.
+- **The overlay could be enabled and draw nothing.** The default position was
+  a corner layout, corner layouts require `overlay.content` lines, and the
+  miss was logged at DEBUG. `top-bar` — which has built-in content — is now
+  the default, the unconfigured-corner case logs a WARNING, and the default
+  font is DejaVuSans-Bold rather than PIL's built-in bitmap font, which
+  ignores the computed size and rendered 10px text on a 4K frame.
+- **A frame straddling midnight filed under the wrong day.** The date
+  subdirectory, the image filename, the metadata sidecar's name and its
+  `capture_timestamp` each called `datetime.now()` separately; one shared,
+  timezone-aware timestamp now covers all four. Aware matters in October:
+  during the DST fall-back hour a naive timestamp repeats, and the database's
+  `INSERT OR REPLACE` destroyed the first pass's rows while the second pass
+  overwrote its JPEGs (those now keep both files under a `_dst` suffix).
+- **A wedged ffmpeg ended daily videos forever, silently.** The render ran
+  under `TimeoutStartSec=infinity`, and a `Type=oneshot` start that never
+  returns never fails — the next morning's timer merges into the stuck job.
+  The unit now caps at 4h, the renderer caps its own ffmpeg at 3h, daily.py
+  caps the renderer subprocess, and lock contention reports how long the
+  holder has been at it.
+- **A broken renderer invocation reported "no images — nothing to do" nightly.**
+  "Nothing to render" exited 2, which argparse also uses for usage errors, so
+  daily.py mapped both to success. It is now exit 10.
+- **A failed keogram uploaded yesterday's file as today's.** The upload
+  finder's loose fallback glob (`keogram*<date>*`) matched the *end* date in
+  the previous day's `_0500_to_` filename. The loose patterns are gone.
+- **Video retention judged by mtime and swept too widely.** Files now expire
+  by the covered date in their name (mtime does not survive clock steps on an
+  RTC-less Pi, and re-rendering an old day reset its clock); the patterns are
+  anchored to `output.project_name` so a parked mp4 or a second camera's
+  files are never swept; empty-directory removal is limited to directories
+  this prune emptied; and with uploads configured, a *missing* queue database
+  now refuses to delete — an absent file is indistinguishable from a
+  mispointed `database.path`, and answering "nothing is protected" to that
+  deletes the only copy of every day that never uploaded.
+- **One failed reference shot disabled metadata sidecars for the process
+  lifetime.** `take_test_shot` restored `save_metadata` only on the success
+  path; a busy camera — ordinary right after a teardown — left it `False`,
+  which nulled every later row's exposure columns and starved restart
+  seeding. The restore is in a `finally`.
+- **A camera that stayed wedged walked the daemon into its fd limit.** Every
+  failed `Picamera2()` open leaks a pipe fd inside picamera2, and the loop
+  retried forever while systemd showed healthy; ~8 hours to
+  `Too many open files`. Five consecutive failures now exit for a clean
+  `Restart=always` respawn; a half-opened camera is closed before the retry,
+  and `close()` nulls the handle even when picamera2's own close raises. The
+  same five-strikes tolerance now also covers a failing exposure decision,
+  which used to end the loop — with exit code 0 — on the first transient.
+- **Restart seeding trusted stale and ambiguous rows.** A row older than 20
+  intervals is no longer seeded at all (a night row seeded into a bright
+  morning cost ~24 pure-white frames), and at the shutter ceiling the gain
+  column is only trusted above 1.2 — below that the sensor's 1.1228 floor is
+  indistinguishable from a commanded 1.0, the same 12% step this changelog
+  already removed twice.
+- **A backward clock step put the daemon to sleep for the whole step.** The
+  grid re-anchors when the next slot is more than an interval away; and the
+  slot sleep now runs in one-second slices so SIGTERM stops the loop now
+  rather than after the remainder of the slot (PEP 475 resumes a sleep after
+  a handled signal).
+- **`--test` could not fail and took a minute to do one frame's work.** It
+  slept to the grid before and after its single frame, and exited 0 with zero
+  frames captured. It now shoots immediately, stops without the trailing
+  sleep, and exits 1 when no frame was produced.
+- **A measured brightness of 0.0 read as "no measurement".** `or 128` treated
+  a genuinely black frame as absent, clearing the underexposure flag at the
+  exact moment it mattered and recovering 4.7× slower. The dark-frame
+  fallback that re-read the *overlaid* JPEG from disk — biasing the loop
+  toward overexposure — is gone too; with no lores metrics the controller
+  holds its last measurement.
+- **`status.jpg` vanished briefly on every frame, and a failed overlay save
+  truncated the frame it was overlaying.** The symlink now swaps by atomic
+  rename, and the overlay saves to a temp file and renames into place — an
+  ENOSPC mid-encode used to leave a partial JPEG that was then symlinked,
+  recorded and uploaded. The overlay re-encode also now defaults to quality
+  85, matching `output.quality`, instead of 95 on the one path that bypasses
+  the config merge.
+- **A locked database was reported as a Python generator bug.** The
+  connection context managers in storage yielded a second time when the
+  caller's body raised `sqlite3.Error`, which contextlib reports as
+  "generator didn't stop after throw()" — burying the actual "database is
+  locked". `db --prune` also reported its pre-count as deletions even when
+  the DELETE failed; it now reports `rowcount`.
+- **The lores brightness reader assumed 320x240.** It slices what libcamera
+  actually granted, so an adjusted stream can no longer silently average
+  chroma rows into every exposure decision.
+- **The overlay's locale handling leaked and spammed.** `setlocale` restored
+  from the environment instead of the previous value (not a restore at all,
+  and process-global), and a missing locale warned once per frame — 2,880
+  journal lines a day. It restores properly in a `finally` and warns once.
+  The exposure formatter's 1-second boundary also produced an 8-character
+  `1000.0ms` against ` 20.0s` — the exact sideways jump the fixed-width
+  module exists to prevent — and its 1/Ns fraction branch was unreachable.
+- **The suite could not run on a lean camera install.** Two test modules
+  imported matplotlib — documented as optional, "only for the graph scripts"
+  — at collection time and took the whole run down with them. They now skip
+  without it; CI still runs them.
+- **The metering target seeded from a dead key.** The first decision after
+  every restart aimed at `transition_mode.target_brightness` (fixed 120)
+  regardless of `brightness_target.base`.
+
 - **The exposure stepped 12% at every dusk.** `seed_from_metadata` reseeded the
   loop from the last daylight frame's *camera* metadata at the day-to-transition
   crossing. Metadata reports what the sensor did, not what was commanded, and
@@ -58,6 +166,39 @@ landed a frame three seconds late.
 - `synthetic_overexposure_critical_edge` replay sequence. Removing the dusk
   seeding removed the violent overshoot that used to be the only thing reaching
   the critical-overexposure branch, and `mutation_check.py` caught the loss.
+
+### Changed
+- **Highlight protection is on by default**, as CONFIG-REFERENCE always said
+  it was. Night remains exempt by default.
+- **`scripts/cleanup_old_images.sh` takes `RASPILAPSE_IMAGE_DIR` and
+  `RASPILAPSE_KEEP_DAYS`** environment overrides (with a systemd drop-in
+  example in the unit template), validates them, and treats 0 as "retention
+  off" — under `find -mtime +0` it used to mean "delete everything older
+  than a day".
+- **A frame exactly on a window's end instant belongs to the next window.**
+  The image range is half-open, so the 05:00:00 frame no longer appears in
+  two consecutive videos and both keograms.
+- **`config/config.example.yml` grew the settings everyone was missing**:
+  `video.organize_by_date` (the code default files every video flat),
+  retention pointers, the `symlink_latest` and `overlay.camera_name` shapes
+  — and dropped `reference_lux`, which nothing has read since the ladder
+  replaced the modes; `brightness_target.base` is the knob.
+- **Documentation audited claim-by-claim against the code.** EXPOSURE.md
+  rewritten around the ladder (its threshold/hysteresis/civil-twilight
+  system no longer exists); TIMELAPSE_VIDEO.md brought to the veryfast/crf 20
+  encoder and real CLI defaults; CONFIG-REFERENCE.yml's twenty-two drifted
+  values named against their code defaults, dead keys removed, `bitrate`
+  documented; newcam.md rewritten as a fresh-Pi quickstart; trixie noted as
+  supported; the raspi-config camera step (gone since Bookworm) removed from
+  the install docs.
+
+### Removed
+- `adaptive_timelapse.test_shot.frequency` (never read),
+  `video.filename_pattern` (documented but hardcoded), and the reference
+  entry for `transition_mode.target_brightness` (inert since the dynamic
+  target; the code no longer reads it either). The `_daily_` filename branch
+  in the renderer produced keogram/slitscan names that neither the uploader
+  nor retention recognised — gone.
 
 ## [1.5.0] - 2026-08-07
 
