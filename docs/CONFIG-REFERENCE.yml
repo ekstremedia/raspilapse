@@ -358,6 +358,18 @@ adaptive_timelapse:
       ev_spread: 2.0           # +/- EV at full spread (clamped to 0..4)
       single_shot_above_s: 0.5 # base exposure at/above this -> single shot
 
+    # The imx708's on-chip HDR (Camera Module 3). Zero CPU cost, but the
+    # sensor merges in a binned mode: frames arrive at 2304x1296 and are
+    # upscaled back to the configured size before the overlay -- expect
+    # soft detail relative to a native 4K frame. day_only keeps it off in
+    # transition and night, where the ladder commands exposures the HDR
+    # mode would silently cap (that fight is also why HDR nights are
+    # noisy: the sensor compensates with gain). Switching costs nothing:
+    # the camera reopens every frame. Pi 4 note: this is the V4L2
+    # wide_dynamic_range control, not libcamera's HdrMode.
+    sensor_hdr:
+      day_only: true    # false = HDR through transition/night (exposures cap)
+
     # Post-process tone mapping: luminance-only CLAHE blended into the frame.
     # Lifts shadows and adds local contrast without shifting colours; fades
     # smoothly to nothing on dark frames so night noise is not amplified and

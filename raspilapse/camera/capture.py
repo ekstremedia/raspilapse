@@ -132,13 +132,20 @@ class ImageCapture:
 
         logger.debug("ImageCapture instance created")
 
-    def initialize_camera(self, manual_controls: Optional[Dict] = None):
+    def initialize_camera(
+        self,
+        manual_controls: Optional[Dict] = None,
+        main_size_override: Optional[Tuple[int, int]] = None,
+    ):
         """
         Initialize and configure the camera.
 
         Args:
             manual_controls: Optional dict of controls to apply during configuration.
                            These override config file controls.
+            main_size_override: Capture size to request instead of the
+                configured resolution. Used while sensor HDR is active,
+                whose binned mode cannot deliver the configured size.
         """
         logger.debug("Initializing camera...")
 
@@ -159,6 +166,8 @@ class ImageCapture:
 
             # Create camera configuration
             resolution = self.config.get_resolution()
+            if main_size_override is not None:
+                resolution = (int(main_size_override[0]), int(main_size_override[1]))
             logger.debug(f"Setting camera resolution to {resolution[0]}x{resolution[1]}")
 
             # Prepare controls - merge manual_controls with config controls

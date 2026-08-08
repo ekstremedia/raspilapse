@@ -1118,6 +1118,9 @@ class AdaptiveTimelapse:
                             self._close_camera_fast(capture, last_mode)
                             capture = None
                             last_mode = None
+                        # The reference shot captures at full resolution,
+                        # which the sensor's HDR mode cannot deliver.
+                        self._dr.pre_reference_shot()
                         self._take_reference_shot()
                 except Exception as e:
                     logger.error(f"Reference-shot handling failed: {e}", exc_info=True)
@@ -1166,7 +1169,13 @@ class AdaptiveTimelapse:
                     try:
                         logger.debug("Initializing camera for timelapse...")
                         capture = ImageCapture(self.camera_config, post_process=self._overlay)
-                        capture.initialize_camera(manual_controls=decision.settings)
+                        # The dynamic-range method may need the sensor
+                        # reconfigured (sensor_hdr) or the capture size
+                        # adjusted -- both only possible while it is closed.
+                        capture.initialize_camera(
+                            manual_controls=decision.settings,
+                            **self._dr.pre_open(decision.mode),
+                        )
                         last_mode = decision.mode
                         consecutive_failures = 0
                     except Exception as e:
@@ -1239,6 +1248,10 @@ class AdaptiveTimelapse:
             if capture is not None:
                 logger.info("Closing camera...")
                 self._close_camera_fast(capture, last_mode)
+
+            # Leave the sensor as the plain pipeline expects to find it
+            # (sensor_hdr's wide_dynamic_range flag outlives the process).
+            self._dr.shutdown()
 
             logger.info(f"=== Adaptive Timelapse Stopped ({self.frame_count} frames) ===")
 

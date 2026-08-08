@@ -114,6 +114,25 @@ class DynamicRange:
             )
             tone_map_enabled = False
 
+        hdr_cfg = block.get("sensor_hdr", {}) or {}
+        self._sensor_hdr_day_only = bool(hdr_cfg.get("day_only", True))
+        if method == "sensor_hdr":
+            from raspilapse.dynrange import sensor_hdr
+
+            if sensor_hdr.find_wdr_subdev() is None:
+                logger.warning(
+                    "dynamic_range.method 'sensor_hdr' needs a sensor exposing "
+                    "wide_dynamic_range and none was found; running with 'off'"
+                )
+                method = "off"
+
+        camera = config.get("camera", {}) or {}
+        resolution = camera.get("resolution", {}) or {}
+        self._resolution = (
+            int(resolution.get("width", 1920)),
+            int(resolution.get("height", 1080)),
+        )
+
         self.method = method
         self.tone_map_enabled = tone_map_enabled
         self._block = block
@@ -141,7 +160,42 @@ class DynamicRange:
         Methods that reconfigure the sensor (sensor_hdr) or need extra
         streams (raw) contribute here; the rest return nothing.
         """
+        if self.method == "sensor_hdr":
+            from raspilapse.dynrange import sensor_hdr
+
+            # Merged exposures cannot be long ones: outside day mode the
+            # ladder wants exposures the HDR mode would silently cap, which
+            # would darken every dusk frame and fight the metering loop.
+            hdr_on = mode == "day" or not self._sensor_hdr_day_only
+            sensor_hdr.set_wdr(hdr_on)
+            if hdr_on:
+                return {"main_size_override": sensor_hdr.hdr_main_size(self._resolution)}
         return {}
+
+    def pre_reference_shot(self) -> None:
+        """Called before the white-balance reference shot opens its camera.
+
+        The reference shot captures at the configured full resolution, which
+        the sensor's HDR mode cannot deliver -- so the mode is dropped first.
+        The next slot's pre_open switches it back on.
+        """
+        if self.method == "sensor_hdr":
+            from raspilapse.dynrange import sensor_hdr
+
+            sensor_hdr.set_wdr(False)
+
+    def shutdown(self) -> None:
+        """Leave the sensor the way the plain pipeline expects to find it.
+
+        wide_dynamic_range persists on the sensor after the process exits;
+        left on, it would cap the next run's resolution whatever that run's
+        method is. A SIGKILL skips this, but the next boot -- or the next
+        sensor_hdr night -- clears the flag anyway.
+        """
+        if self.method == "sensor_hdr":
+            from raspilapse.dynrange import sensor_hdr
+
+            sensor_hdr.set_wdr(False)
 
     def capture_frame(
         self,
@@ -201,22 +255,36 @@ class DynamicRange:
 
         With every stage off this is exactly ``build_overlay(config)`` --
         the same callable the daemon used before this seam existed, so
-        ``method: off`` is provably the old pipeline. With tone mapping on,
-        the chain tone-maps the saved frame first and then hands the same
-        arguments to the overlay: the overlay bar must be drawn on the
-        mapped image, never mapped itself.
+        ``method: off`` is provably the old pipeline.
+
+        Stage order is load-bearing: sensor_hdr's upscale first (everything
+        downstream must see the uniform frame size), tone mapping second,
+        the overlay last -- its bar is drawn on the finished image, never
+        resized or mapped itself.
         """
         overlay = build_overlay(config)
-        if not self.tone_map_enabled:
+        stages = []
+
+        if self.method == "sensor_hdr":
+            from raspilapse.dynrange import sensor_hdr
+
+            target, quality = self._resolution, self._quality
+            stages.append(lambda path: sensor_hdr.upscale_to(path, target, quality))
+
+        if self.tone_map_enabled:
+            from raspilapse.dynrange import tonemap
+
+            strength = self._tone_map_strength
+            quality = config.get("output", {}).get("quality", 85)
+            stages.append(lambda path: tonemap.tone_map_file(path, strength, quality))
+
+        if not stages:
             return overlay
 
-        from raspilapse.dynrange import tonemap
-
-        strength = self._tone_map_strength
-        quality = config.get("output", {}).get("quality", 85)
-
         def chain(image_path, metadata, mode, output_path=None):
-            processed = tonemap.tone_map_file(str(image_path), strength, quality)
+            processed = True
+            for stage in stages:
+                processed = stage(str(image_path)) and processed
             if overlay is not None:
                 return overlay(image_path, metadata, mode, output_path=output_path)
             return processed
