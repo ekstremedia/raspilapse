@@ -343,6 +343,15 @@ adaptive_timelapse:
   dynamic_range:
     method: off    # off | fusion | sensor_hdr | raw | tone_map
 
+    # Post-process tone mapping: luminance-only CLAHE blended into the frame.
+    # Lifts shadows and adds local contrast without shifting colours; fades
+    # smoothly to nothing on dark frames so night noise is not amplified and
+    # twilight never flickers across an on/off edge. Combines with any capture
+    # method (`method: tone_map` is shorthand for off + enabled).
+    tone_map:
+      enabled: false
+      strength: 0.5    # 0..1 blend of the mapped image into the original
+
   # === CONTRAST-AWARE BRIGHTNESS TARGET (Overcast Boost) ===
   # On overcast days, images have low contrast (low std deviation) and look
   # flat/dark at the normal target of 120. This boosts the brightness target
@@ -492,6 +501,7 @@ overlay:
   #   {load_5min} - 5-minute load average (e.g., "0.48")
   #   {load_15min} - 15-minute load average (e.g., "0.45")
   #   {uptime} - System uptime (e.g., "2d 5h 30m")
+  #   {dr_method} - Dynamic-range method that produced the frame (e.g., "fusion")
   content:
     # Line 1 - Left side
     line_1_left: "{camera_name}"

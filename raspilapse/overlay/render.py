@@ -265,6 +265,9 @@ class ImageOverlay:
             "af_mode": af_mode_str,
             "lens_position": lens_position_str,
             "focus_distance": focus_distance_str,
+            # Which dynamic-range method produced this frame -- injected by the
+            # daemon per frame; "off" for callers that don't (test shots).
+            "dr_method": str(metadata.get("dr_method", "off")),
         }
 
     def _system_fields(self) -> Dict[str, str]:

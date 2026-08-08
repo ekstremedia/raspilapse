@@ -36,12 +36,13 @@ __all__ = ["DynamicRange", "METHODS"]
 
 METHODS = ("off", "fusion", "sensor_hdr", "raw", "tone_map")
 
-# Import-level requirements per method, checked with find_spec so the check is
-# free. The real imports stay inside the functions that use them: cv2 alone
-# takes over a second to import on a Pi, and CI has neither package.
+# Import-level requirements per capture method, checked with find_spec so the
+# check is free. The real imports stay inside the functions that use them: cv2
+# alone takes over a second to import on a Pi, and CI has neither package.
+# tone_map is absent here because it is not a capture method -- it normalises
+# to a post-process stage below and its cv2 check happens there.
 _REQUIRES = {
     "fusion": ("cv2",),
-    "tone_map": ("cv2",),
     "raw": ("rawpy", "cv2"),
 }
 
@@ -72,6 +73,16 @@ class DynamicRange:
             )
             method = "off"
 
+        # Tone mapping is a post-process stage, not a capture method, so it
+        # combines with any of the others. `method: tone_map` is sugar for
+        # `method: off` plus `tone_map.enabled: true`.
+        tone_map = block.get("tone_map", {}) or {}
+        tone_map_enabled = bool(tone_map.get("enabled", False)) or method == "tone_map"
+        if method == "tone_map":
+            method = "off"
+        strength = tone_map.get("strength", 0.5)
+        self._tone_map_strength = min(max(float(strength), 0.0), 1.0)
+
         missing = [d for d in _REQUIRES.get(method, ()) if importlib.util.find_spec(d) is None]
         if missing:
             packages = " ".join(_APT_PACKAGES[d] for d in missing)
@@ -82,7 +93,15 @@ class DynamicRange:
             )
             method = "off"
 
+        if tone_map_enabled and importlib.util.find_spec("cv2") is None:
+            logger.warning(
+                "dynamic_range.tone_map needs cv2 "
+                "(sudo apt install python3-opencv); running without it"
+            )
+            tone_map_enabled = False
+
         self.method = method
+        self.tone_map_enabled = tone_map_enabled
         self._block = block
 
     @classmethod
@@ -97,6 +116,8 @@ class DynamicRange:
         config asks for fusion without OpenCV installed labels its frames
         ``off``, so the trial's records stay honest.
         """
+        if self.tone_map_enabled:
+            return "tone_map" if self.method == "off" else f"{self.method}+tm"
         return self.method
 
     def pre_open(self, mode: Optional[str]) -> Dict:
@@ -113,6 +134,24 @@ class DynamicRange:
 
         With every stage off this is exactly ``build_overlay(config)`` --
         the same callable the daemon used before this seam existed, so
-        ``method: off`` is provably the old pipeline.
+        ``method: off`` is provably the old pipeline. With tone mapping on,
+        the chain tone-maps the saved frame first and then hands the same
+        arguments to the overlay: the overlay bar must be drawn on the
+        mapped image, never mapped itself.
         """
-        return build_overlay(config)
+        overlay = build_overlay(config)
+        if not self.tone_map_enabled:
+            return overlay
+
+        from raspilapse.dynrange import tonemap
+
+        strength = self._tone_map_strength
+        quality = config.get("output", {}).get("quality", 85)
+
+        def chain(image_path, metadata, mode, output_path=None):
+            processed = tonemap.tone_map_file(str(image_path), strength, quality)
+            if overlay is not None:
+                return overlay(image_path, metadata, mode, output_path=output_path)
+            return processed
+
+        return chain
