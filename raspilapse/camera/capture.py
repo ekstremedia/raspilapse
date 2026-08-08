@@ -231,6 +231,12 @@ class ImageCapture:
             logger.debug("Waiting for camera to stabilize (2 seconds)...")
             time.sleep(2)
 
+            # request.save() encodes at picamera2's own default (90) unless
+            # told otherwise -- without this line output.quality only ever
+            # applied to the overlay's re-encode, and not at all with the
+            # overlay off.
+            self.picam2.options["quality"] = self.config.get_quality()
+
             logger.debug("Camera initialization complete")
 
         except Exception as e:
