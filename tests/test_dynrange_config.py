@@ -62,13 +62,21 @@ class TestMethodParsing:
         assert dr.method == "off"
         assert any("magic" in r.message for r in dynrange_logs.records)
 
-    def test_sensor_hdr_needs_no_optional_packages(self):
-        """sensor_hdr talks to V4L2, not to cv2/rawpy; it must parse anywhere."""
+    def test_sensor_hdr_needs_no_optional_packages(self, monkeypatch):
+        """sensor_hdr talks to V4L2, not to cv2/rawpy; it must parse without
+        them. The subdev probe is mocked -- these tests run identically on a
+        camera-equipped Pi and in CI, and must never touch real hardware."""
+        import raspilapse.dynrange.sensor_hdr as sensor_hdr_module
+
+        monkeypatch.setattr(sensor_hdr_module, "find_wdr_subdev", lambda: "/dev/v4l-subdev0")
         assert DynamicRange.from_config(make_config(method="sensor_hdr")).method == "sensor_hdr"
 
     @pytest.mark.parametrize("method", METHODS)
     def test_every_advertised_method_parses(self, method, monkeypatch):
+        import raspilapse.dynrange.sensor_hdr as sensor_hdr_module
+
         monkeypatch.setattr(dynrange_module.importlib.util, "find_spec", lambda name: object())
+        monkeypatch.setattr(sensor_hdr_module, "find_wdr_subdev", lambda: "/dev/v4l-subdev0")
         dr = DynamicRange.from_config(make_config(method=method))
         if method == "tone_map":
             # Sugar: normalises to the off capture path + the tone_map stage,
