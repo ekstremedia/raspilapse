@@ -458,7 +458,7 @@ class TestMainCLI:
         )
 
         with patch("raspilapse.video.daily.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=2)  # nothing to render
+            mock_run.return_value = MagicMock(returncode=10)  # nothing to render
 
             with patch("raspilapse.video.daily.UploadService") as mock_upload:
                 result = main()

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Daily Timelapse Runner - Creates timelapse video and uploads to webserver.
+Daily timelapse runner -- renders yesterday's video and uploads it.
 
-This script:
-1. Runs make_timelapse.py to create the daily video and keogram
-2. Uploads the video, thumbnail, keogram, and images to the configured webserver
+1. Runs raspilapse.cli.timelapse over the 05:00 -> 05:00 window, which also
+   produces the keogram and slitscan.
+2. Uploads video, keogram and slitscan when video_upload is configured,
+   queueing them for retry on failure.
 
-Designed to be run via cron at 5 AM daily.
+Runs from raspilapse-daily-video.timer at 05:00; --date renders another day.
 """
 
 import argparse
@@ -49,16 +50,19 @@ def _find_dated_file(video_dir: Path, patterns: list, date_str: str) -> Path:
 
 
 def _dated_patterns(prefix: str, project_name: str, date_str: str, suffix: str) -> list:
-    """Build the nested-then-flat glob list for a prefixed, date-stamped file."""
+    """Build the glob list for a prefixed, date-stamped file.
+
+    Anchored on prefix, project and date. `**/` also matches the directory
+    itself, so these cover flat and nested layouts alike. No loose fallback:
+    every generated name carries the window's END date too, so a pattern like
+    `keogram*2026-08-08*` happily matches *yesterday's*
+    `keogram_..._2026-08-07_0500_to_2026-08-08_0500.jpg` — and a night where
+    the keogram failed would silently upload the previous day's file.
+    """
     stem = f"{prefix}_{project_name}_{date_str}" if prefix else f"{project_name}_{date_str}"
-    loose = f"{prefix}*{date_str}" if prefix else f"{project_name}_{date_str}"
     return [
         f"**/{stem}_*{suffix}",
         f"**/{stem}*{suffix}",
-        f"**/{loose}*{suffix}",
-        f"{stem}_*{suffix}",
-        f"{stem}*{suffix}",
-        f"{loose}*{suffix}",
     ]
 
 
@@ -163,7 +167,16 @@ Examples:
         if e.errno not in (errno.EACCES, errno.EAGAIN):
             print(f"Error: could not acquire {lock_path}: {e}")
             return 1
-        print("Another daily video run is already in progress; leaving it to finish.")
+        # Say how long the holder has been at it: "in progress" for nine hours
+        # is a wedged run, and this line is the only place that becomes visible.
+        try:
+            held_min = (datetime.now().timestamp() - lock_path.stat().st_mtime) / 60
+            print(
+                "Another daily video run is already in progress "
+                f"(lock held ~{held_min:.0f} min); leaving it to finish."
+            )
+        except OSError:
+            print("Another daily video run is already in progress; leaving it to finish.")
         # Deliberately 0, not 1. A second invocation is not a failure, and
         # exiting non-zero would drop the unit into 'failed' -- which is
         # exactly the misleading signal this whole change set is about.
@@ -236,12 +249,23 @@ Examples:
             print(f"Would run: {' '.join(make_timelapse_cmd)}")
         else:
             logger.info(f"Running: {' '.join(make_timelapse_cmd)}")
-            result = subprocess.run(make_timelapse_cmd, cwd=PROJECT_ROOT)
+            # A day of 4K takes ~25 minutes; ten times that means ffmpeg is
+            # wedged, and an unbounded wait here leaves this Type=oneshot unit
+            # 'activating' forever -- the timer merges into the running job and
+            # no video is ever built again, with nothing marked failed.
+            try:
+                result = subprocess.run(make_timelapse_cmd, cwd=PROJECT_ROOT, timeout=4 * 3600)
+            except subprocess.TimeoutExpired:
+                logger.error("Timelapse renderer exceeded 4 hours; killed")
+                print("Error: timelapse renderer exceeded 4 hours and was killed")
+                return 1
 
-            # Exit 2 from make_timelapse.py means "no images for this date".
-            # That is a normal outcome (camera was off, fresh install), not a
-            # failure - return 0 so the systemd unit does not go to failed.
-            if result.returncode == 2:
+            # EXIT_NO_IMAGES (10) from the renderer means "no images for this
+            # date" - a normal outcome (camera was off, fresh install), not a
+            # failure - so return 0 and the systemd unit stays clean. Argparse
+            # usage errors exit 2, which used to carry this meaning and made a
+            # broken invocation report nightly success.
+            if result.returncode == 10:
                 msg = f"No images for {target_date.strftime('%Y-%m-%d')} - nothing to do"
                 logger.warning(msg)
                 print(msg)
