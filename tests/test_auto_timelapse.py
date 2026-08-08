@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -650,14 +651,17 @@ class TestTheLoopIsWiredToTheGrid:
         timelapse._database = None
         timelapse._record = MagicMock()
         timelapse._read_capture_metadata = MagicMock(return_value=None)
+        # Two frames, then the loop's own limit ends it. Not test_mode: --test
+        # now skips the pre-loop grid alignment on purpose, and that alignment
+        # is half of what this harness asserts.
+        timelapse.config["adaptive_timelapse"]["num_frames"] = 2
 
         def capture(*args, **kwargs):
             """Stand in for capture_frame, counter included.
 
-            test_mode stops the loop via `frame_count >= num_frames`, and
-            frame_count is incremented inside capture_frame -- so a mock that
-            only returns a path leaves the loop spinning forever. This cost a
-            hung test run to find.
+            The frame limit reads frame_count, and frame_count is incremented
+            inside capture_frame -- so a mock that only returns a path leaves
+            the loop spinning forever. This cost a hung test run to find.
             """
             timelapse.frame_count += 1
             return ("frame.jpg", None)
@@ -666,7 +670,7 @@ class TestTheLoopIsWiredToTheGrid:
 
         calls = []
 
-        def advance_stub(current_slot, interval):
+        def advance_stub(current_slot, interval, should_continue=None):
             """Record the reschedule, and stop the loop independently of it.
 
             The bound is deliberately not the loop's own exit condition: a
@@ -686,8 +690,13 @@ class TestTheLoopIsWiredToTheGrid:
             ) as advance,
         ):
             if init_side_effect:
-                camera.return_value.initialize_camera.side_effect = init_side_effect
-            timelapse.run(test_mode=True)
+                # Pad with successes: the camera is re-opened every frame, so
+                # a two-frame run needs more init calls than the failure
+                # script itself lists.
+                camera.return_value.initialize_camera.side_effect = (
+                    list(init_side_effect) + [None] * max_iterations
+                )
+            timelapse.run()
 
         assert len(calls) < max_iterations, "the loop did not stop on its own"
         return advance, sleep
@@ -752,6 +761,7 @@ class TestSeedingAcrossARestart:
                 "analogue_gain": 1.1228070259094238,
                 "brightness_mean": 119.9,
                 "mode": LightMode.DAY,
+                "unix_timestamp": time.time(),
             },
         )
         assert required == pytest.approx(
@@ -775,6 +785,7 @@ class TestSeedingAcrossARestart:
                 "analogue_gain": 5.98830413818359,
                 "brightness_mean": 120.0,
                 "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time(),
             },
         )
         assert required == pytest.approx(19.999994 * 5.98830413818359, rel=1e-6), (
@@ -797,9 +808,43 @@ class TestSeedingAcrossARestart:
                 "analogue_gain": 3.1,
                 "brightness_mean": 120.0,
                 "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time(),
             },
         )
         assert required == pytest.approx(62.0, rel=1e-6)
+
+    def test_a_sensor_floor_gain_at_the_ceiling_is_not_trusted(self, test_config_file):
+        """At the ceiling, a reported gain at the sensor's 1.1228 floor is
+        ambiguous -- the ladder may have commanded anything in [1.0, 1.1228)
+        -- and seeding the floor re-imports the same 12% step the dusk-seeding
+        removal fixed. Below 1.2, gain 1.0 is the safer read."""
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 20_000_000,
+                "analogue_gain": 1.1228070259094238,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time(),
+            },
+        )
+        assert required == pytest.approx(20.0, rel=1e-6)
+
+    def test_a_stale_row_is_not_seeded_at_all(self, test_config_file):
+        """A night row seeded into a bright morning costs ~24 pure-white
+        frames -- worse than the cold start it was meant to prevent. Past 20
+        intervals the seed is skipped."""
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 20_000_000,
+                "analogue_gain": 5.9,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time() - 12 * 3600,
+            },
+        )
+        assert required is None, "a 12-hour-old row was seeded as though fresh"
 
 
 class TestPolarAwareness:

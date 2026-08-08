@@ -7,6 +7,7 @@ including stars and aurora activity.
 
 import json
 import math
+import os
 import signal
 import sys
 import time
@@ -234,6 +235,22 @@ class AdaptiveTimelapse:
                 logger.debug("[Startup] No previous capture found in database")
                 return
 
+            # A seed is a win after 10 seconds of downtime and a liability
+            # after 10 hours: the newest row after a night-long outage is a
+            # 20 s night frame, and seeding it into a bright morning costs
+            # ~24 pure-white frames before the ramp catches up. Past 20
+            # intervals, cold start is the better guess.
+            interval = self.config.get("adaptive_timelapse", {}).get("interval", 30)
+            row_ts = last_capture.get("unix_timestamp")
+            row_age = time.time() - row_ts if row_ts else None
+            if row_age is None or row_age > 20 * interval:
+                age_min = f"{row_age / 60:.0f} min old" if row_age else "of unknown age"
+                logger.info(
+                    f"[Startup] Last capture is {age_min}; "
+                    "cold-starting instead of seeding stale exposure"
+                )
+                return
+
             # Extract exposure settings from last capture
             exposure_us = last_capture.get("exposure_time_us")
             analogue_gain = last_capture.get("analogue_gain")
@@ -285,7 +302,14 @@ class AdaptiveTimelapse:
             at_the_ceiling = has_exposure and seed_exposure >= self.exposure.max_shutter * (
                 1 - CEILING_TOLERANCE
             )
-            seed_gain = analogue_gain if (has_gain and at_the_ceiling) else None
+            # One more guard at the ceiling: for commanded gains in
+            # [1.0, 1.1228) the sensor still reports its 1.1228 floor, so a
+            # row in that band re-imports the same 12% step the dusk-seeding
+            # removal fixed. Below 1.2 the commanded value cannot be far from
+            # 1.0, so seeding 1.0 is wrong by at most that same 12% -- and
+            # never by more, which trusting the floor cannot promise.
+            trustworthy_gain = has_gain and at_the_ceiling and analogue_gain > 1.2
+            seed_gain = analogue_gain if trustworthy_gain else None
 
             self.exposure.seed_from_capture(
                 exposure_time=seed_exposure,
@@ -461,43 +485,49 @@ class AdaptiveTimelapse:
         # Test shots are only for measuring light levels, not part of timelapse
         self.camera_config.config["system"]["save_metadata"] = False
 
-        # Create metadata directory (files get overwritten, not accumulated)
-        metadata_dir = Path(self.config.get("system", {}).get("metadata_folder", "metadata"))
-        metadata_dir.mkdir(exist_ok=True)
-
-        # Capture test image (overwritten each time - no timestamps)
-        # Since save_metadata=False, this won't create timestamped metadata files
+        # The restore below is in a finally because the camera being busy is an
+        # ordinary event here (the reference shot runs right after a teardown).
+        # Without it, one failed open left save_metadata=False for the rest of
+        # the process: every later DB row lost its exposure columns, and every
+        # later restart seeded from a row written before the failure.
         metadata = {}
-        with ImageCapture(self.camera_config) as capture:
-            test_path = metadata_dir / "test_shot.jpg"
+        try:
+            # Create metadata directory (files get overwritten, not accumulated)
+            metadata_dir = Path(self.config.get("system", {}).get("metadata_folder", "metadata"))
+            metadata_dir.mkdir(exist_ok=True)
 
-            # Capture test image using capture_request to get metadata directly
-            import json
+            # Capture test image (overwritten each time - no timestamps)
+            # Since save_metadata=False, this won't create timestamped metadata files
+            with ImageCapture(self.camera_config) as capture:
+                test_path = metadata_dir / "test_shot.jpg"
 
-            try:
-                request = capture.picam2.capture_request()
+                # Capture test image using capture_request to get metadata directly
+                import json
+
                 try:
-                    # Save image
-                    request.save("main", str(test_path))
-                    # Get metadata from request
-                    metadata = request.get_metadata()
-                    # Save test shot metadata manually with fixed filename (overwritten each time)
-                    test_metadata_path = metadata_dir / "test_shot_metadata.json"
-                    with open(test_metadata_path, "w") as f:
-                        json.dump(metadata, f, indent=2, default=str)
-                    logger.debug(f"Test shot metadata saved: {test_metadata_path}")
-                finally:
-                    request.release()
-            except Exception as e:
-                logger.warning(f"Could not capture test shot with metadata: {e}")
-                metadata = {}
+                    request = capture.picam2.capture_request()
+                    try:
+                        # Save image
+                        request.save("main", str(test_path))
+                        # Get metadata from request
+                        metadata = request.get_metadata()
+                        # Save test shot metadata manually with fixed filename
+                        test_metadata_path = metadata_dir / "test_shot_metadata.json"
+                        with open(test_metadata_path, "w") as f:
+                            json.dump(metadata, f, indent=2, default=str)
+                        logger.debug(f"Test shot metadata saved: {test_metadata_path}")
+                    finally:
+                        request.release()
+                except Exception as e:
+                    logger.warning(f"Could not capture test shot with metadata: {e}")
+                    metadata = {}
 
-            # Set image_path for return value
-            image_path = str(test_path)
-
-        # Restore original settings
-        self.camera_config.config["camera"]["controls"] = original_controls
-        self.camera_config.config["system"]["save_metadata"] = original_save_metadata
+                # Set image_path for return value
+                image_path = str(test_path)
+        finally:
+            # Restore original settings
+            self.camera_config.config["camera"]["controls"] = original_controls
+            self.camera_config.config["system"]["save_metadata"] = original_save_metadata
 
         logger.debug(f"Test shot saved: {image_path}")
         return image_path, metadata
@@ -644,12 +674,15 @@ class AdaptiveTimelapse:
             symlink_path = Path(symlink_path)
             image_path = Path(image_path).resolve()  # Get absolute path
 
-            # Remove existing symlink/file if it exists
-            if symlink_path.exists() or symlink_path.is_symlink():
-                symlink_path.unlink()
-
-            # Create new symlink
-            symlink_path.symlink_to(image_path)
+            # Atomic swap: build the new link beside the old one and rename it
+            # into place. unlink-then-symlink leaves a window with no
+            # status.jpg at all, and a webserver polling it 2880 times a day
+            # finds that window.
+            tmp_link = symlink_path.with_name(f"{symlink_path.name}.tmp{os.getpid()}")
+            if tmp_link.is_symlink() or tmp_link.exists():
+                tmp_link.unlink()
+            tmp_link.symlink_to(image_path)
+            os.replace(tmp_link, symlink_path)
             logger.debug(f"Created symlink: {symlink_path} -> {image_path}")
 
         except PermissionError:
@@ -821,7 +854,7 @@ class AdaptiveTimelapse:
         return math.floor(after / interval) * interval + interval
 
     @staticmethod
-    def _sleep_until_next_slot(current_slot: float, interval: float) -> float:
+    def _sleep_until_next_slot(current_slot: float, interval: float, should_continue=None) -> float:
         """Advance one slot, skip any already in the past, and sleep to it.
 
         Every path that ends an iteration goes through here, including the one
@@ -829,6 +862,12 @@ class AdaptiveTimelapse:
         past the scheduling, so the retry fired the moment it succeeded rather
         than on a slot -- and a failure lasting longer than an interval left
         the grid behind without skipping the slots it had missed.
+
+        Args:
+            should_continue: Optional callable checked while sleeping. When
+                given, the sleep runs in one-second slices so a SIGTERM does
+                not wait out the rest of a slot before the loop notices --
+                time.sleep() resumes after a handled signal (PEP 475).
         """
         next_slot = current_slot + interval
         now = time.time()
@@ -843,8 +882,24 @@ class AdaptiveTimelapse:
                 f"interval; skipping {skipped} slot(s) to stay on the grid"
             )
             next_slot += skipped * interval
+        if next_slot - now > interval:
+            # The clock stepped backwards (NTP after a boot with no RTC).
+            # Without this the daemon sleeps out the whole step -- hours of no
+            # frames with nothing marked failed. Re-anchor on the new clock.
+            logger.warning(
+                f"Clock moved backwards ({next_slot - now:.0f}s to the next "
+                "slot); re-anchoring the capture grid"
+            )
+            next_slot = AdaptiveTimelapse._next_slot(interval, now)
         logger.debug(f"Sleeping until the next slot, {next_slot - now:.1f}s")
-        time.sleep(next_slot - now)
+        if should_continue is None:
+            time.sleep(next_slot - now)
+        else:
+            while should_continue():
+                remaining = next_slot - time.time()
+                if remaining <= 0:
+                    break
+                time.sleep(min(remaining, 1.0))
         return next_slot
 
     def _decide(self) -> Decision:
@@ -925,9 +980,15 @@ class AdaptiveTimelapse:
             return None
 
         try:
-            metrics = capture.last_brightness_metrics or self._analyze_image_brightness(image_path)
-            if metrics:
-                self.exposure.observe_frame(metrics)
+            metrics = capture.last_brightness_metrics
+            if not metrics:
+                # No disk fallback: by now the JPEG has the overlay burned in,
+                # and metering the info bar biases the loop toward
+                # overexposure. Given nothing, the controller holds its last
+                # measurement -- which is honest; a known-biased one is not.
+                logger.warning(f"No lores brightness for {image_path}; skipping feedback")
+                return None
+            self.exposure.observe_frame(metrics)
             return metrics
         except Exception as e:
             # Losing this means the controller reacts to a stale measurement
@@ -1012,10 +1073,19 @@ class AdaptiveTimelapse:
         capture = None
         last_mode = None
 
+        # Camera-init and decision failures are tolerated per slot, but not
+        # forever: every failed Picamera2() open leaks a pipe fd inside
+        # picamera2, so a camera that stays wedged would walk the process into
+        # RLIMIT_NOFILE after ~8 hours while systemd showed it healthy.
+        # Exiting instead hands Restart=always a clean process.
+        consecutive_failures = 0
+
         # Put the first frame on the grid too, so a restart does not leave one
-        # short interval behind it.
+        # short interval behind it -- except in test mode, where the single
+        # frame should come now and the grid does not matter.
         next_slot = self._next_slot(interval, time.time())
-        time.sleep(max(0.0, next_slot - time.time()))
+        if not test_mode:
+            time.sleep(max(0.0, next_slot - time.time()))
 
         try:
             while self.running:
@@ -1025,13 +1095,18 @@ class AdaptiveTimelapse:
 
                 # The reference shot opens its own context-managed camera, and
                 # libcamera will not have two, so the running one has to go
-                # first. This is why it is worth firing rarely.
-                if self._wants_reference_shot():
-                    if capture is not None:
-                        self._close_camera_fast(capture, last_mode)
-                        capture = None
-                        last_mode = None
-                    self._take_reference_shot()
+                # first. This is why it is worth firing rarely. The try also
+                # covers _wants_reference_shot itself, which used to sit
+                # outside every handler and could end the run on its own.
+                try:
+                    if self._wants_reference_shot():
+                        if capture is not None:
+                            self._close_camera_fast(capture, last_mode)
+                            capture = None
+                            last_mode = None
+                        self._take_reference_shot()
+                except Exception as e:
+                    logger.error(f"Reference-shot handling failed: {e}", exc_info=True)
 
                 try:
                     decision = self._decide()
@@ -1039,8 +1114,20 @@ class AdaptiveTimelapse:
                     # exc_info: _decide spans the feedback loop, the ladder, the
                     # handover seeding and white balance. Without a traceback
                     # the message alone cannot say which of them failed.
+                    # Tolerated like a failed frame: a transient here used to
+                    # end the loop -- with exit code 0 -- while the strictly
+                    # worse frame failure was retried.
                     logger.error(f"Exposure decision failed: {e}", exc_info=True)
-                    break
+                    consecutive_failures += 1
+                    if consecutive_failures >= 5:
+                        logger.critical(
+                            "Five consecutive decision failures; exiting for a clean restart"
+                        )
+                        break
+                    next_slot = self._sleep_until_next_slot(
+                        next_slot, interval, lambda: self.running
+                    )
+                    continue
 
                 # New settings mean a new camera. They can only be applied as
                 # it starts: pushing them to a running one with set_controls
@@ -1067,6 +1154,7 @@ class AdaptiveTimelapse:
                         capture = ImageCapture(self.camera_config, post_process=self._overlay)
                         capture.initialize_camera(manual_controls=decision.settings)
                         last_mode = decision.mode
+                        consecutive_failures = 0
                     except Exception as e:
                         # Tolerated like a failed frame rather than fatal. The
                         # camera is opened and closed once per frame now, so a
@@ -1075,12 +1163,21 @@ class AdaptiveTimelapse:
                         # it would reach the outer handler and stop the daemon.
                         logger.error(f"Camera initialisation failed: {e}", exc_info=True)
                         capture = None
+                        consecutive_failures += 1
+                        if consecutive_failures >= 5:
+                            logger.critical(
+                                "Camera unavailable for five consecutive slots; "
+                                "exiting so systemd restarts us with a clean fd table"
+                            )
+                            break
                         # Back onto the grid rather than a bare sleep. Retrying
                         # off-grid puts the recovered frame at an arbitrary
                         # offset, and a failure outlasting an interval used to
                         # leave the schedule behind without skipping what it
                         # had missed.
-                        next_slot = self._sleep_until_next_slot(next_slot, interval)
+                        next_slot = self._sleep_until_next_slot(
+                            next_slot, interval, lambda: self.running
+                        )
                         continue
 
                 try:
@@ -1108,7 +1205,17 @@ class AdaptiveTimelapse:
                 except Exception as e:
                     logger.error(f"Frame capture failed: {e}", exc_info=True)
 
-                next_slot = self._sleep_until_next_slot(next_slot, interval)
+                # Check the limit before sleeping, not only at the loop top:
+                # the old order slept out a full slot after the final frame
+                # before noticing it was done -- a --test run took ~55 s to do
+                # one frame's work.
+                if num_frames > 0 and self.frame_count >= num_frames:
+                    logger.info(f"Reached frame limit: {num_frames}")
+                    break
+                if not self.running:
+                    break
+
+                next_slot = self._sleep_until_next_slot(next_slot, interval, lambda: self.running)
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
@@ -1151,6 +1258,11 @@ def main():
         if args.test:
             logger.info("TEST MODE: Capturing single image then exiting")
             timelapse.run(test_mode=True)
+            if timelapse.frame_count == 0:
+                # The whole point of --test is a yes/no answer for scripts and
+                # install checks; "no frame" exiting 0 answered yes regardless.
+                logger.error("Test mode captured no frame")
+                return 1
         else:
             timelapse.run()
     except Exception as e:
