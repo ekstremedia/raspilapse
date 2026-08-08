@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-09
+
 The rest of the dusk step, and the reason the timelapse felt choppy — then a
 fresh install on a new camera put the whole path under audit: three
 correctness passes over the daemon, the video pipeline and the storage layer,
