@@ -73,6 +73,7 @@ class WeatherData:
 
     @property
     def _entry(self) -> _CacheEntry:
+        """This endpoint's slot in the process-wide cache, created on demand."""
         endpoint = self.weather_config.get("endpoint") or ""
         return _CACHE.setdefault(endpoint, _CacheEntry())
 
@@ -80,18 +81,22 @@ class WeatherData:
     # keep working now that the storage moved to module level.
     @property
     def _cached_data(self) -> Optional[Dict]:
+        """The endpoint's last successfully fetched payload, if any."""
         return self._entry.data
 
     @_cached_data.setter
     def _cached_data(self, value: Optional[Dict]) -> None:
+        """Store a payload in the shared per-endpoint cache."""
         self._entry.data = value
 
     @property
     def _cache_time(self) -> Optional[datetime]:
+        """When the cached payload was fetched, if ever."""
         return self._entry.fetched_at
 
     @_cache_time.setter
     def _cache_time(self, value: Optional[datetime]) -> None:
+        """Record the fetch time in the shared per-endpoint cache."""
         self._entry.fetched_at = value
 
     def get_weather_data(self) -> Optional[Dict]:

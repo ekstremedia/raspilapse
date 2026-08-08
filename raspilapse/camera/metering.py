@@ -152,10 +152,12 @@ class Meter:
 
     @property
     def brightness(self) -> Optional[float]:
+        """The last observed mean brightness, or None before the first frame."""
         return self._brightness
 
     @property
     def p95(self) -> Optional[float]:
+        """The last observed 95th-percentile brightness (the highlight level)."""
         return self._p95
 
     def observe(self, metrics: Dict) -> None:
@@ -203,6 +205,7 @@ class Meter:
 
     @property
     def base_target(self) -> int:
+        """The configured brightness_target.base, before any boost or scaling."""
         return self._base_target
 
     @property
@@ -334,10 +337,12 @@ class Meter:
 
     @property
     def overexposed(self) -> bool:
+        """Whether the last frame tripped the overexposure flag."""
         return self._over
 
     @property
     def underexposed(self) -> bool:
+        """Whether the last frame tripped the underexposure flag."""
         return self._under
 
     def _check_overexposure(self, metrics: Dict) -> bool:
