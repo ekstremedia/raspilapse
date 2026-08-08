@@ -12,6 +12,15 @@ WorkingDirectory=@PROJECT_DIR@
 # Type=oneshot runs these in order: expired images off disk, then the videos
 # made from them, then expired rows out of the database. All three are no-ops
 # when their retention is disabled.
+#
+# Image retention lives in cleanup_old_images.sh (default: keep 7 days).
+# Override it without editing anything tracked by git:
+#   sudo systemctl edit raspilapse-cleanup.service
+#     [Service]
+#     Environment=RASPILAPSE_KEEP_DAYS=14
+# The drop-in survives re-runs of scripts/install.sh, which rewrites only this
+# file. Video and database retention are video.retention_days and
+# database.retention_days in config.yml, read by the two commands below.
 ExecStart=/bin/bash @PROJECT_DIR@/scripts/cleanup_old_images.sh
 ExecStart=@PYTHON@ -m raspilapse.cli.prune_videos
 ExecStart=@PYTHON@ -m raspilapse.cli.db --prune
@@ -22,6 +31,3 @@ SyslogIdentifier=raspilapse-cleanup
 # Housekeeping must never compete with the capture loop for I/O.
 Nice=10
 IOSchedulingClass=idle
-
-[Install]
-WantedBy=multi-user.target
