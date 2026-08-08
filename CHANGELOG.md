@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Shadows crushed against protected highlights are the price of deciding one
+exposure per frame. This release adds four opt-in ways past that limit, one
+config key to choose between them, and a tool that shoots them side by side.
+
+### Added
+
+- `adaptive_timelapse.dynamic_range.method` — selectable dynamic-range
+  methods, all off by default: `fusion` (2–3 exposure brackets merged with
+  Mertens fusion at full resolution; the spread narrows continuously to zero
+  as exposures lengthen, so night frames are exactly the plain single-shot
+  path), `tone_map` (blended luminance CLAHE on the captured frame, fading
+  out on dark frames; combinable with any method), `sensor_hdr` (the
+  imx708's on-chip HDR by day at 2304×1296, upscaled back to the configured
+  size so the video pipeline never sees mixed frame sizes) and `raw`
+  (develop the sensor's 10-bit DNG with its own embedded colour matrices;
+  the ISP JPEG stays as the always-there fallback).
+- `raspilapse-drtest` — captures the same scene with each method back to
+  back into labelled files, with a timing/brightness summary table. Also
+  measures the numbers the daemon's slot-budget guards assume.
+- `output.dng_sidecar` — keep every Nth frame's raw negative beside its
+  JPEG for hand-developing, pruned oldest-first past `max_files`. Ships
+  disabled.
+- `{dr_method}` overlay placeholder and a `dr_method` database column
+  (schema v7), so trial frames are labelled on the image and comparable
+  with a WHERE clause.
+- OpenCV and rawpy in `requirements.txt` (CI-only, as ever): the pixel
+  paths are tested in CI rather than skipped. On a Pi they come from apt:
+  `sudo apt install python3-opencv python3-rawpy`.
+
+### Changed
+
+- While fusion is active, `highlight_protection` defaults off: the under
+  bracket buys about two stops of highlight headroom against the half stop
+  the protection floor could, without darkening the base frame. An explicit
+  `enabled: true` still wins.
+
+### Removed
+
+- `adaptive_timelapse.hdr` — it set libcamera's `HdrMode` control, which
+  the Pi 4's sensor never acts on; the block was dormant on every camera.
+  Configs that still carry it get one warning pointing at `dynamic_range`.
+
 ## [1.6.0] - 2026-08-09
 
 The rest of the dusk step, and the reason the timelapse felt choppy — then a

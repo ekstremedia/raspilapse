@@ -165,6 +165,19 @@ without astral the column is empty and the camera behaves identically.
 
 See [docs/EXPOSURE.md](docs/EXPOSURE.md) for the details.
 
+### More dynamic range
+
+A single exposure cannot hold both a bright sky and dark ground, which is why
+highlight protection exists at all. `adaptive_timelapse.dynamic_range` offers
+four opt-in ways past that limit — `fusion` (exposure brackets merged at full
+resolution, converging to the plain single shot at night), `tone_map` (gentle
+CLAHE on the frame you already took), `sensor_hdr` (the Camera Module 3's
+on-chip HDR, at reduced resolution) and `raw` (develop the sensor's DNG
+on-Pi). Fusion and tone_map need `sudo apt install python3-opencv`; raw also
+needs `python3-rawpy`. Compare them on your own scene with
+`raspilapse-drtest`, and see the `dynamic_range` block in
+[docs/CONFIG-REFERENCE.yml](docs/CONFIG-REFERENCE.yml) for the trade-offs.
+
 ## Usage
 
 ```bash
