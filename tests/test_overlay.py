@@ -259,6 +259,29 @@ class TestImageOverlay:
         ), "overlaid frame is not world-readable; a webserver serves these"
         os.unlink(output_path)
 
+    def test_a_failed_save_reports_none_and_leaves_no_temp(
+        self, test_overlay_config, test_image, test_metadata
+    ):
+        """ENOSPC mid-encode must not leave a half-written frame -- that used
+        to get symlinked, recorded and uploaded as if it were a capture --
+        and must not litter the image directory with temp files either."""
+        from unittest.mock import patch
+
+        overlay = ImageOverlay(test_overlay_config)
+        output_path = test_image.replace(".jpg", "_fail.jpg")
+
+        with patch.object(Image.Image, "save", side_effect=OSError("No space left on device")):
+            result = overlay.apply_overlay(
+                test_image, test_metadata, mode="day", output_path=output_path
+            )
+
+        assert result is None
+        assert not os.path.exists(output_path)
+        leftovers = [
+            f for f in os.listdir(os.path.dirname(output_path)) if f.startswith(".overlay-")
+        ]
+        assert leftovers == [], "a failed save left its temp file behind"
+
     def test_apply_overlay_topbar_mode(self, test_overlay_config, test_image, test_metadata):
         """Test overlay with top-bar position."""
         test_overlay_config["overlay"]["position"] = "top-bar"

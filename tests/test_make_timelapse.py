@@ -317,6 +317,20 @@ class TestCreateVideoCodecHandling:
         assert "-framerate" not in cmd, "the concat demuxer has no -framerate option"
 
     @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_a_wedged_ffmpeg_is_killed_and_reported(self, mock_run, temp_images, temp_output):
+        """Past the 3h cap ffmpeg is wedged, not slow -- the measured 4K day
+        is ~25 minutes. An unbounded wait here sat inside a Type=oneshot unit
+        whose next timer merged into the stuck job: no video ever again,
+        nothing marked failed."""
+        import subprocess as _subprocess
+
+        from raspilapse.video.timelapse import create_video
+
+        mock_run.side_effect = _subprocess.TimeoutExpired(cmd="ffmpeg", timeout=3 * 3600)
+
+        assert create_video(temp_images, temp_output, fps=25, codec="libx264") is False
+
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_libx264_uses_crf_preset_threads(self, mock_run, temp_images, temp_output):
         """Test that libx264 codec uses CRF, preset, and threads."""
         from raspilapse.video.timelapse import create_video

@@ -154,11 +154,18 @@ Examples:
     #
     # The lock is held for all of main(), upload included, and released when
     # the process exits however it exits.
+    #
+    # "a", not "w": a contender must not truncate the holder's lock file, and
+    # "w" also re-stamps mtime on every attempt -- which made the holder-age
+    # report below measure the contender's own open() instead of the holder.
     lock_path = PROJECT_ROOT / "data" / "daily.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_file = open(lock_path, "w")  # noqa: SIM115 -- must outlive this scope
+    lock_file = open(lock_path, "a")  # noqa: SIM115 -- must outlive this scope
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Stamp acquisition time; the contender branch reads it back as the
+        # holder's age.
+        os.utime(lock_path, None)
     except OSError as e:
         # Contention is EACCES or EAGAIN depending on the platform; anything
         # else (ENOLCK on a filesystem without lock support, EIO) means we do

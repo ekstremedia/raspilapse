@@ -629,6 +629,31 @@ class TestSlotRecovery:
             assert returned > 300.0 + late, f"{late}s late returned a slot already gone"
             assert slept and slept[0] > 0
 
+    def test_a_backward_clock_step_reanchors_instead_of_sleeping_it_out(self):
+        """No RTC: fake-hwclock plus a late NTP sync can move `now` *behind*
+        the anchor. Sleeping next_slot - now would sleep out the whole step --
+        hours of no frames with nothing marked failed -- so the grid
+        re-anchors on the new clock instead."""
+        returned, slept = self._advance(300.0, 30, now=100.0)
+        assert returned == 120.0, "the grid did not re-anchor on the stepped-back clock"
+        assert slept == [20.0]
+
+    def test_a_should_continue_that_goes_false_stops_the_sleep(self):
+        """SIGTERM sets running=False mid-sleep; the sliced sleep must notice
+        within one slice rather than waiting out the rest of the slot
+        (PEP 475 resumes a plain sleep after a handled signal)."""
+        answers = iter([True, False])
+        slept = []
+        with (
+            patch("raspilapse.daemon.time.time", return_value=305.0),
+            patch("raspilapse.daemon.time.sleep", side_effect=slept.append),
+        ):
+            returned = AdaptiveTimelapse._sleep_until_next_slot(
+                300.0, 30, should_continue=lambda: next(answers)
+            )
+        assert returned == 330.0
+        assert slept == [1.0], "the sleep did not run in interruptible slices"
+
 
 class TestTheLoopIsWiredToTheGrid:
     """The scheduling helpers are unit-tested above; this is the wiring.
@@ -728,6 +753,37 @@ class TestTheLoopIsWiredToTheGrid:
             f"init failed once and the loop rescheduled {advance.call_count} time(s); "
             f"the failure path skipped the grid"
         )
+
+    def test_a_camera_that_stays_wedged_ends_the_process(self, test_config_file):
+        """Every failed Picamera2() open leaks a pipe fd inside picamera2;
+        retrying forever walks the daemon into RLIMIT_NOFILE after ~8 hours
+        while systemd shows it healthy. Five consecutive failures must end
+        the loop -- Restart=always hands back a clean fd table -- and no
+        frame may be captured on the way."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._database = None
+        timelapse._record = MagicMock()
+        timelapse._read_capture_metadata = MagicMock(return_value=None)
+        timelapse.capture_frame = MagicMock()
+
+        calls = []
+
+        def advance_stub(current_slot, interval, should_continue=None):
+            calls.append(current_slot)
+            if len(calls) >= 12:
+                timelapse.running = False
+            return 999.0
+
+        with (
+            patch("raspilapse.daemon.ImageCapture") as camera,
+            patch("raspilapse.daemon.time.sleep"),
+            patch.object(AdaptiveTimelapse, "_sleep_until_next_slot", side_effect=advance_stub),
+        ):
+            camera.return_value.initialize_camera.side_effect = RuntimeError("device busy")
+            timelapse.run()
+
+        assert len(calls) < 12, "the loop retried past five consecutive camera failures"
+        timelapse.capture_frame.assert_not_called()
 
 
 class TestSeedingAcrossARestart:
