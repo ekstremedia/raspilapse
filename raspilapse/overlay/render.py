@@ -928,6 +928,10 @@ class ImageOverlay:
             # half-written file.
             out_dir = os.path.dirname(str(output_path)) or "."
             tmp_fd, tmp_path = tempfile.mkstemp(prefix=".overlay-", dir=out_dir)
+            # mkstemp creates 0600 by design and os.replace carries that mode
+            # onto the final frame -- which a webserver answers 403 for.
+            # Restore the 0644 an ordinary open() would have produced.
+            os.fchmod(tmp_fd, 0o644)
             os.close(tmp_fd)
             try:
                 img.save(tmp_path, format="JPEG", quality=output_quality)

@@ -236,6 +236,29 @@ class TestImageOverlay:
         # Cleanup
         os.unlink(output_path)
 
+    def test_apply_overlay_output_is_world_readable(
+        self, test_overlay_config, test_image, test_metadata
+    ):
+        """The saved frame must be 0644, not mkstemp's 0600.
+
+        The atomic save goes through tempfile.mkstemp, which creates 0600 by
+        design, and os.replace carries that mode onto the final frame. The
+        first deployment of that save answered 403 for every frame the
+        webserver was asked for.
+        """
+        overlay = ImageOverlay(test_overlay_config)
+        output_path = test_image.replace(".jpg", "_perms.jpg")
+
+        result = overlay.apply_overlay(
+            test_image, test_metadata, mode="day", output_path=output_path
+        )
+
+        assert result == output_path
+        assert (
+            os.stat(result).st_mode & 0o777 == 0o644
+        ), "overlaid frame is not world-readable; a webserver serves these"
+        os.unlink(output_path)
+
     def test_apply_overlay_topbar_mode(self, test_overlay_config, test_image, test_metadata):
         """Test overlay with top-bar position."""
         test_overlay_config["overlay"]["position"] = "top-bar"
