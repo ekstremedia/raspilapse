@@ -333,15 +333,15 @@ adaptive_timelapse:
     critical_rampup_speed: 0.70
 
 
-  # === HDR MODE ===
-  # Enables ISP tone-mapped HDR (SingleExposure mode) during daytime.
-  # On Pi 5 (pisp): enables real HDR with ISP tone mapping for better dynamic range.
-  # On Pi 4 (vc4): effectively a no-op (logged but ignored by hardware).
-  # Night mode always uses HDR Off to preserve aurora/star captures.
-  hdr:
-    enabled: true    # code default: false
-    day_mode: "SingleExposure"    # HDR mode for day/transition (SingleExposure or Off)
-    night_mode: "Off"             # HDR mode for night (always Off for long exposures)
+  # === DYNAMIC RANGE ===
+  # Gives the pipeline more range than a single exposure holds; without it,
+  # high-contrast scenes trade crushed shadows for protected highlights.
+  # Methods are opt-in and trialable per camera (compare them side by side
+  # with raspilapse-drtest); a method whose optional dependency (OpenCV,
+  # rawpy) is missing logs one warning and runs as "off".
+  # Replaces the old `hdr:` block, which set a control this sensor ignored.
+  dynamic_range:
+    method: off    # off | fusion | sensor_hdr | raw | tone_map
 
   # === CONTRAST-AWARE BRIGHTNESS TARGET (Overcast Boost) ===
   # On overcast days, images have low contrast (low std deviation) and look

@@ -39,8 +39,8 @@ from raspilapse.camera.exposure import (  # noqa: F401
     highlight_factor,
 )
 from raspilapse.config import merge_defaults
+from raspilapse.dynrange import DynamicRange
 from raspilapse.logging_setup import configure_logging, get_logger
-from raspilapse.overlay import build_overlay
 from raspilapse.overlay.sources.weather import WeatherData
 from raspilapse.storage.database import CaptureDatabase
 from raspilapse.system import SystemMonitor
@@ -150,9 +150,12 @@ class AdaptiveTimelapse:
         # instances, one HTTP request.
         self._weather = WeatherData(self.config)
 
-        # None unless the overlay is switched on, and Pillow is only imported
-        # in the case where it is.
-        self._overlay = build_overlay(self.config)
+        # Which dynamic-range method runs, and the post-process chain it
+        # implies. With everything off the chain is exactly build_overlay's
+        # callable: None unless the overlay is switched on, and Pillow is
+        # only imported in the case where it is.
+        self._dr = DynamicRange.from_config(self.config)
+        self._overlay = self._dr.build_post_process(self.config)
 
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -710,7 +713,8 @@ class AdaptiveTimelapse:
         logger.info(f"Capturing frame #{self.frame_count} in {mode} mode...")
 
         # Prepare extra metadata with calculated lux (overrides camera's unreliable estimate)
-        extra_metadata = {}
+        # and the dynamic-range method, so every sidecar records what made the frame.
+        extra_metadata = {"dr_method": self._dr.label()}
         if calculated_lux is not None:
             extra_metadata["Lux"] = calculated_lux
 
