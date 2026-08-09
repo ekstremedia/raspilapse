@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-09
+
 Shadows crushed against protected highlights are the price of deciding one
 exposure per frame. This release adds four opt-in ways past that limit, one
 config key to choose between them, and a tool that shoots them side by side.
+Every method was validated live on camera hardware — night and daylight —
+before this release, and the field tuning is folded into the docs.
 
 ### Added
 
