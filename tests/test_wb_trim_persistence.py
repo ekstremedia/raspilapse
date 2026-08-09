@@ -62,16 +62,12 @@ def make_timelapse(tmp_path, enabled=True, state=None):
 
 class TestSeeding:
     def test_a_saved_trim_is_restored(self, tmp_path):
-        timelapse, _ = make_timelapse(
-            tmp_path, state={"wb_trim_r": 1.05, "wb_trim_b": 0.95}
-        )
+        timelapse, _ = make_timelapse(tmp_path, state={"wb_trim_r": 1.05, "wb_trim_b": 0.95})
         assert timelapse.exposure.wb_trim == (1.05, 0.95)
 
     def test_restoration_clamps_to_the_current_max_trim(self, tmp_path):
         """The file may hold a trim from a config with a wider max_trim."""
-        timelapse, _ = make_timelapse(
-            tmp_path, state={"wb_trim_r": 0.5, "wb_trim_b": 1.5}
-        )
+        timelapse, _ = make_timelapse(tmp_path, state={"wb_trim_r": 0.5, "wb_trim_b": 1.5})
         assert timelapse.exposure.wb_trim == (0.88, 1.12)
 
     def test_no_file_means_the_configured_gains_exactly(self, tmp_path):
