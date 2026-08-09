@@ -287,6 +287,18 @@ adaptive_timelapse:
     # Comment out to learn from camera's AWB instead
     # fixed_colour_gains: [2.5, 1.6]
 
+    # Closed-loop trim on the day white point. Measures near-neutral pixels
+    # (grey cloud, grey water) on every day frame's lores stream and nudges
+    # the rendered white point toward neutral; the fixed/learned gains above
+    # are the anchor it trims around. Off by default. Night and aurora colour
+    # are never touched; the trim survives restarts in data/wb_trim.json.
+    # See docs/EXPOSURE.md, "White balance".
+    # wb_feedback:
+    #   enabled: true
+    #   strength: 0.05              # per-frame step: exponent on the measured ratio
+    #   max_trim: 0.12              # hard clamp around the anchor gains (+/- 12%)
+    #   min_neutral_fraction: 0.02  # skip frames with less grey than this
+
     # Use auto white balance in day mode
     awb_enable: true
 

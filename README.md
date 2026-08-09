@@ -155,7 +155,10 @@ White balance is manual in every condition — AWB drifting between frames is th
 main cause of colour flicker in a timelapse — and cross-fades along the ladder
 between a daylight white point and the configured night gains. The daylight end
 is `day_mode.fixed_colour_gains` where that is set, and otherwise a reference
-the camera learns for itself.
+the camera learns for itself. An optional feedback loop (`day_mode.wb_feedback`)
+trims that white point in small bounded steps toward whatever makes the
+scene's grey pixels render grey, so daylight colour tracks the weather
+without AWB's flicker; night and aurora colour are never touched.
 Optional highlight protection lowers the brightness target when the top of the
 histogram nears clipping, so bright skies keep detail.
 

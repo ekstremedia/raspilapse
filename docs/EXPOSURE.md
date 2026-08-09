@@ -161,6 +161,27 @@ AWB off, so their `ColourGains` are the ones the controller just chose;
 learning from them makes the reference its own input, and it drifts instead
 of correcting.
 
+Either source is only the *anchor*. With `day_mode.wb_feedback` enabled, a
+closed loop trims the daylight white point around it, steered by what the
+frames actually render. Every day frame's lores stream is scanned for
+near-neutral pixels — overcast cloud, grey water, the scene's own grey card —
+and the trim steps toward whatever makes them render grey, clamped to
+`max_trim` (default ±12%) around the anchor. A single step is the measured
+ratio raised to `strength`: at the defaults, a real weather cast of a few
+percent moves the trim about 0.1% per frame, and even a broken reading —
+the input is clamped at 2:1 — cannot move it more than ~3.5%, still below
+the cross-fade's own smoothing.
+
+The loop exists because a better fixed number cannot: libcamera infers a
+colour temperature from the manual gains and swaps its colour matrix as that
+estimate moves, so rendered colour responds super-linearly to a gain change,
+and the right gains differ with the weather. Measured on the camera this was
+built for (2026-08-09): the same fixed gains that suited clear sky rendered
+overcast grey as khaki, and a 16% red-gain cut moved the rendered red by 27%.
+The trim is day-only — at night there is nothing neutral to meter, and an
+aurora must never be white-balanced away — and it survives restarts in
+`data/wb_trim.json`.
+
 ## Recovery
 
 Two symmetric mechanisms handle a scene changing faster than the normal ramp:
@@ -186,6 +207,7 @@ Symptoms and the setting to reach for:
 | Shadows crushed against a bright sky | `dynamic_range.method: fusion`, then tune `fusion.ev_spread` |
 | Colour shifting between frames | lower `wb_transition_speed` |
 | Daylight colour drifting over days | set `day_mode.fixed_colour_gains` |
+| A cast over daylight frames (grey clouds render khaki or teal) | enable `day_mode.wb_feedback`; or re-tune `fixed_colour_gains` against a grey reference |
 
 Highlight protection and crushed shadows are two faces of one limit: a single
 exposure per frame. The `adaptive_timelapse.dynamic_range` block (see

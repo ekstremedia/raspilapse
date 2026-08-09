@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `adaptive_timelapse.day_mode.wb_feedback` — a closed-loop trim on the day
+  white point, off by default. Every day frame's lores buffer already holds
+  the U/V chroma planes; near-neutral pixels (grey cloud, grey water) are
+  selected there and the day gains are nudged toward whatever makes them
+  render grey — about 0.1% per frame against a real cast at the default
+  strength, at most ~3.5% against a reading the 2:1 input clamp has already
+  flagged as broken, and never past ±`max_trim` around the configured
+  anchor. Fixed gains alone cannot do this: libcamera swaps its
+  colour matrix as the colour temperature implied by the manual gains moves,
+  so the same gains render differently in different weather — measured live,
+  one fixed white point rendered overcast grey as khaki while a 16% red-gain
+  cut moved rendered red 27%. Night and aurora colour are never touched: the
+  trim rides the day endpoint of the existing cross-fade only, and updates
+  are gated to day frames. Survives restarts via `data/wb_trim.json`;
+  `wb_trim_r`/`wb_trim_b` appear in the metadata diagnostics once it moves.
+
 ## [1.7.0] - 2026-08-09
 
 Shadows crushed against protected highlights are the price of deciding one

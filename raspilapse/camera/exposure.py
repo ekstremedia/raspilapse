@@ -92,6 +92,17 @@ class ExposureController:
         self._last_colour_gains: Optional[Tuple[float, float]] = None
         self._wb_speed = transition.get("wb_transition_speed", 0.15)
 
+        # Closed-loop trim on the day white point, steered by the neutral-pixel
+        # ratios the lores stream measures on every frame. (1.0, 1.0) means
+        # "render the configured gains exactly"; see _update_wb_trim.
+        wb_feedback = adaptive.get("day_mode", {}).get("wb_feedback") or {}
+        self._wb_feedback_enabled = bool(wb_feedback.get("enabled", False))
+        self._wb_feedback_strength = float(wb_feedback.get("strength", 0.05))
+        self._wb_max_trim = float(wb_feedback.get("max_trim", 0.12))
+        self._wb_min_neutral = float(wb_feedback.get("min_neutral_fraction", 0.02))
+        self._wb_trim: Tuple[float, float] = (1.0, 1.0)
+        self._wb_trim_logged: Tuple[float, float] = (1.0, 1.0)
+
         # Lux is no longer an input to anything. It is measured, smoothed and
         # recorded because the overlay shows it and the graphs plot it.
         self._smoothed_lux: Optional[float] = None
@@ -107,6 +118,7 @@ class ExposureController:
         """Record what the camera actually produced."""
         self.meter.set_dark_end(self._mode == LightMode.NIGHT)
         self.meter.observe(brightness_metrics)
+        self._update_wb_trim(brightness_metrics)
 
     def seed_from_capture(
         self,
@@ -116,6 +128,7 @@ class ExposureController:
         brightness: Optional[float] = None,
         lux: Optional[float] = None,
         mode: Optional[str] = None,
+        wb_trim: Optional[tuple] = None,
     ) -> None:
         """
         Prime the controller from a previous run's last good capture.
@@ -142,6 +155,15 @@ class ExposureController:
             self._smoothed_lux = lux
         if mode is not None:
             self._mode = mode
+        if wb_trim is not None and len(wb_trim) >= 2:
+            # Clamp on the way in: the file may hold a trim from a config
+            # with a wider max_trim than the current one.
+            low, high = 1.0 - self._wb_max_trim, 1.0 + self._wb_max_trim
+            self._wb_trim = (
+                min(high, max(low, float(wb_trim[0]))),
+                min(high, max(low, float(wb_trim[1]))),
+            )
+            self._wb_trim_logged = self._wb_trim
 
     # Read-only views for the capture loop and the metadata diagnostics.
     @property
@@ -180,6 +202,9 @@ class ExposureController:
             data["applied_exposure_ms"] = round(self._shutter * 1000, 2)
         if self._gain is not None:
             data["applied_gain"] = round(self._gain, 3)
+        if self._wb_trim != (1.0, 1.0):
+            data["wb_trim_r"] = round(self._wb_trim[0], 4)
+            data["wb_trim_b"] = round(self._wb_trim[1], 4)
         return data
 
     def smooth_lux(self, raw_lux: Optional[float]) -> Optional[float]:
@@ -328,6 +353,74 @@ class ExposureController:
             f"[WB] Daylight reference: R={gains[0]:.2f} B={gains[1]:.2f}",
         )
 
+    def _update_wb_trim(self, metrics: Dict) -> None:
+        """Steer the day white point toward what the frames actually render.
+
+        Why a closed loop and not a better number: the ISP's colour matrix is
+        not constant. libcamera infers a colour temperature from the manual
+        gains and swaps its CCM as that estimate moves, so the response of the
+        rendered colour to a gain change is super-linear -- measured on this
+        camera on 2026-08-09, a 16% cut in red gain moved the rendered red by
+        27%. Any fixed gains are therefore right for exactly one CCM regime
+        and one weather; a loop that watches the output is right for all of
+        them, and the whole reason the daylight render sat khaki for months
+        was that nothing watched the output.
+
+        wb_gr and wb_gb are the linear-domain G/R and G/B of the frame's
+        near-neutral pixels (see ImageCapture._wb_stats_from_lores): 1.0 means
+        the greys rendered grey. Each frame multiplies the trim by the
+        measured ratio raised to `strength`, so the correction is proportional
+        on the log scale, needs no calibration of the CCM's slope, and cannot
+        oscillate while strength x slope stays well under 1 (0.05 x ~1.7
+        here). The trim is clamped to +/-max_trim around the configured gains:
+        the loop is meant to absorb weather and CCM drift, not to fight a
+        sunset -- a golden evening pulls at most max_trim, slowly, and
+        overnight the clamp is what it starts the morning from.
+
+        Day frames only, same policy as update_day_wb_reference: at night
+        there is nothing neutral to meter -- and an aurora is the one thing
+        this loop must never be allowed to white-balance away.
+        """
+        if not self._wb_feedback_enabled:
+            return
+        if self._mode != LightMode.DAY:
+            return
+        gr, gb = metrics.get("wb_gr"), metrics.get("wb_gb")
+        fraction = metrics.get("wb_neutral_fraction")
+        if gr is None or gb is None or not fraction:
+            return
+        if fraction < self._wb_min_neutral:
+            return
+
+        # A reading beyond 2:1 is not weather, it is a broken measurement.
+        gr = min(2.0, max(0.5, float(gr)))
+        gb = min(2.0, max(0.5, float(gb)))
+
+        strength = self._wb_feedback_strength
+        low, high = 1.0 - self._wb_max_trim, 1.0 + self._wb_max_trim
+        self._wb_trim = (
+            min(high, max(low, self._wb_trim[0] * gr**strength)),
+            min(high, max(low, self._wb_trim[1] * gb**strength)),
+        )
+
+        # One INFO line per accumulated 1% of movement, not one per frame:
+        # readable in the log at exactly the rate the colour actually changes.
+        moved = max(
+            abs(self._wb_trim[0] - self._wb_trim_logged[0]),
+            abs(self._wb_trim[1] - self._wb_trim_logged[1]),
+        )
+        if moved >= 0.01:
+            logger.info(
+                f"[WB] Feedback trim: R x{self._wb_trim[0]:.3f}, "
+                f"B x{self._wb_trim[1]:.3f} (neutral {fraction * 100:.0f}%)"
+            )
+            self._wb_trim_logged = self._wb_trim
+
+    @property
+    def wb_trim(self) -> Tuple[float, float]:
+        """The current day white-point trim, for persistence across restarts."""
+        return self._wb_trim
+
     def _wb_position(self, position: float) -> float:
         """Where in the day-to-night colour cross-fade this ladder position sits.
 
@@ -408,6 +501,11 @@ class ExposureController:
 
         fixed = adaptive.get("day_mode", {}).get("fixed_colour_gains")
         day = list(fixed) if fixed else list(self._day_wb_reference or (2.5, 1.6))
+
+        # The feedback trim rides on the day endpoint only, so the night end
+        # of the cross-fade -- and everything an aurora needs -- is exactly
+        # the configured value, always.
+        day = [day[0] * self._wb_trim[0], day[1] * self._wb_trim[1]]
 
         into = self._wb_position(position)
         return (
