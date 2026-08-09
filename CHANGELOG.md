@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-09
+
+A camera that never looks at its own colours will drift, and this one's
+daylight sat green-tinged khaki for months on gains that suited different
+weather. The fix is the same idea the exposure loop has always used, applied
+to white balance: measure the frame that was just taken, correct the next
+one, gently.
+
 ### Added
 
 - `adaptive_timelapse.day_mode.wb_feedback` — a closed-loop trim on the day

@@ -1,6 +1,6 @@
 """Version information for Raspilapse."""
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 __author__ = "Terje Nesthus"
 __email__ = "terje@ekstremedia.no"
 __license__ = "MIT"
@@ -8,6 +8,9 @@ __description__ = "Continuous adaptive timelapse capture for the Raspberry Pi ca
 __url__ = "https://github.com/ekstremedia/raspilapse"
 
 # Version history:
+# 1.8.0 - White-balance feedback: opt-in closed loop that keeps daylight greys grey,
+#         steered by the lores stream's neutral pixels, clamped around the configured
+#         gains; night and aurora colour untouched
 # 1.7.0 - Dynamic range: opt-in exposure fusion, tone mapping, sensor HDR and raw
 #         develop, with drtest for side-by-side trials and per-frame method labels
 # 1.6.0 - Fresh-install audit: overlay defaults, midnight/DST filing, ffmpeg timeouts,
