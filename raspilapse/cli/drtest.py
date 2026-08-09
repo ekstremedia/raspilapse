@@ -7,6 +7,10 @@ one directory, labelled by method. Compare the files, read the timing table,
 pick your method. Also the measurement harness for the numbers the daemon's
 budget guards assume (bracket settle frames, fusion time, develop time).
 
+Run it in steady light. Methods shoot sequentially, ~30 seconds apart, so
+fast-changing conditions -- fog burning off, gaps in driving cloud -- put a
+different scene in front of each method and the comparison lies.
+
 The daemon owns the camera; stop it first:
 
     sudo systemctl stop raspilapse
@@ -231,7 +235,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     """Entry point for raspilapse-drtest."""
     parser = argparse.ArgumentParser(
         description="Capture the same scene with each dynamic-range method, side by side.",
-        epilog="Stop the daemon first: sudo systemctl stop raspilapse",
+        epilog="Stop the daemon first (sudo systemctl stop raspilapse), "
+        "and run in steady light -- methods shoot sequentially.",
     )
     parser.add_argument("-c", "--config", default="config/config.yml", help="Config file path")
     parser.add_argument(

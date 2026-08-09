@@ -365,6 +365,13 @@ adaptive_timelapse:
     # protection floor could, without darkening the base frame.
     fusion:
       brackets: 3              # 3 = under/base/over, 2 = base/under
+      # ev_spread is THE shadow dial, and it is continuous: it decides how
+      # well-exposed the shadows arrive before any blending. Field-tested on
+      # dark foliage against an overcast sky: 2.0 left shadows near-black,
+      # 3.0 opened them dramatically (a touch bright for some tastes), 2.7
+      # sat right -- tune in tenths. At very short base exposures the -3 EV
+      # under-bracket can brush the sensor's minimum exposure and deliver
+      # slightly less protection than commanded; harmless.
       ev_spread: 2.0           # +/- EV at full spread (clamped to 0..4)
       single_shot_above_s: 0.5 # base exposure at/above this -> single shot
 

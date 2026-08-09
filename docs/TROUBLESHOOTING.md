@@ -78,7 +78,19 @@ change.
 
 **Blown-out skies.** Highlight protection is on by default; lower
 `adaptive_timelapse.highlight_protection.min_scale` for more of it, or check
-it was not disabled.
+it was not disabled. Protection works by underexposing, which costs shadows —
+if you find yourself wanting more of both ends, that is what
+`dynamic_range.method: fusion` is for (the under-bracket protects the sky
+without darkening the frame).
+
+**Shadows too dark while the sky looks right.** One exposure cannot hold
+both; enable `adaptive_timelapse.dynamic_range.method: fusion` and tune
+`fusion.ev_spread` — it is a continuous dial, and it moves shadows far more
+than any post-processing: 2.0 is conservative, 3.0 opens dark foliage
+dramatically, and tenths in between are real steps. Add
+`tone_map: {enabled: true}` for local contrast on top. Compare recipes on
+your own scene with `raspilapse-drtest` (in steady light — sequential shots
+in fast-changing weather are not comparable).
 
 **Colour shifting frame to frame.** Every frame is taken with manual white
 balance, so this is not AWB running — it is the cross-fade moving. Lower
