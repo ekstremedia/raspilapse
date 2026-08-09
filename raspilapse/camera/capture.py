@@ -392,6 +392,8 @@ class ImageCapture:
                 "overexposed_percent": round(overexposed, 2),
             }
 
+            metrics.update(self._wb_stats_from_lores(lores_array, gray, lores_w, lores_h))
+
             logger.debug(
                 f"Lores brightness: mean={mean_brightness:.1f}, median={median_brightness:.1f}"
             )
@@ -399,6 +401,106 @@ class ImageCapture:
 
         except Exception as e:
             logger.warning(f"Could not compute brightness from lores: {e}")
+            return {}
+
+    # Near-neutral selection for the white-balance statistics. Chroma within
+    # +/-12 of the 128 midpoint is roughly a 10% channel spread after
+    # conversion -- tight enough that vegetation and rust never pass, loose
+    # enough that overcast cloud and grey water always do. The luma window
+    # drops shadows the sensor renders noisy and highlights near clipping,
+    # where the cast information is gone.
+    WB_CHROMA_LIMIT = 12.0
+    WB_LUMA_MIN = 30.0
+    WB_LUMA_MAX = 215.0
+    WB_MIN_SAMPLES = 64
+
+    def _wb_stats_from_lores(self, lores_array, gray, lores_w: int, lores_h: int) -> Dict:
+        """White-balance statistics from the same lores buffer, for free.
+
+        The brightness metrics above use the Y plane; the U and V planes sit
+        right below it in the same I420 buffer, and they are the cheapest
+        colour measurement this camera can produce: 160x120 chroma samples,
+        taken before the overlay is burned in, costing no disk read.
+
+        Near-neutral pixels -- low chroma, mid luminance -- are the scene's
+        own grey card. On them, any distance from (U, V) = (128, 128) is cast,
+        not subject colour. The mean R:G:B of that selection is reported as
+        two linear-domain ratios, wb_gr = G/R and wb_gb = G/B, which read 1.0
+        on a neutral render. The exposure controller steers its day trim on
+        them; ExposureController._update_wb_trim explains why that has to be
+        a closed loop.
+
+        Returns {} rather than raising or guessing when the buffer does not
+        match the packed planar I420 layout this slicing assumes (Y rows,
+        then quarter-height U and V, all at the configured width). The
+        controller simply holds its trim that frame -- the same policy the
+        brightness metrics take when the lores stream is missing.
+        """
+        try:
+            import numpy as np
+
+            half_h, half_w = lores_h // 2, lores_w // 2
+            chroma_rows = lores_h // 4
+            # Packed planar layout only: with stride padding, the
+            # quarter-height planes fold at the wrong width and U bleeds
+            # into V.
+            if lores_array.ndim != 2 or lores_array.shape[1] != lores_w:
+                return {}
+            if lores_array.shape[0] < lores_h + 2 * chroma_rows:
+                return {}
+
+            u = (
+                lores_array[lores_h : lores_h + chroma_rows, :]
+                .reshape(half_h, half_w)
+                .astype(np.float32)
+            )
+            v = (
+                lores_array[lores_h + chroma_rows : lores_h + 2 * chroma_rows, :]
+                .reshape(half_h, half_w)
+                .astype(np.float32)
+            )
+            # Luma at chroma resolution: a plain 2x2 mean of the Y plane.
+            y = gray[: half_h * 2, : half_w * 2].reshape(half_h, 2, half_w, 2).mean(axis=(1, 3))
+
+            cb, cr = u - 128.0, v - 128.0
+            neutral = (
+                (np.abs(cb) < self.WB_CHROMA_LIMIT)
+                & (np.abs(cr) < self.WB_CHROMA_LIMIT)
+                & (y > self.WB_LUMA_MIN)
+                & (y < self.WB_LUMA_MAX)
+            )
+            samples = int(neutral.sum())
+            fraction = samples / neutral.size
+            if samples < self.WB_MIN_SAMPLES:
+                # Not enough grey to read anything, but the fraction itself is
+                # the controller's evidence for skipping the frame.
+                return {"wb_neutral_fraction": round(fraction, 4)}
+
+            # Means first: YCbCr->RGB is affine, so the mean of the converted
+            # pixels equals the conversion of the means (BT.601 full range,
+            # the same matrix the ISP encodes JPEGs with).
+            ym = float(y[neutral].mean())
+            cbm = float(cb[neutral].mean())
+            crm = float(cr[neutral].mean())
+            r = ym + 1.402 * crm
+            g = ym - 0.344136 * cbm - 0.714136 * crm
+            b = ym + 1.772 * cbm
+
+            def linear(c: float) -> float:
+                # sRGB inverse transfer, on values clamped away from zero so a
+                # pathological reading cannot divide by it downstream.
+                c = min(255.0, max(1.0, c)) / 255.0
+                return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+            rl, gl, bl = linear(r), linear(g), linear(b)
+            return {
+                "wb_gr": round(gl / rl, 4),
+                "wb_gb": round(gl / bl, 4),
+                "wb_neutral_fraction": round(fraction, 4),
+            }
+
+        except Exception as e:
+            logger.debug(f"Could not compute WB stats from lores: {e}")
             return {}
 
     def update_controls(self, controls: Dict):

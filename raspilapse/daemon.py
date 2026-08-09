@@ -132,6 +132,12 @@ class AdaptiveTimelapse:
         self._database = None
         self._init_database()
 
+        # The white-balance feedback trim survives restarts in a state file:
+        # one line of JSON against re-learning the same correction after
+        # every restart.
+        self._persisted_wb_trim: Optional[Tuple[float, float]] = None
+        self._seed_wb_trim()
+
         # System monitor for CPU temp and load (for database storage)
         self._system_monitor = None
         if SystemMonitor is not None:
@@ -340,6 +346,62 @@ class AdaptiveTimelapse:
 
         except Exception as e:
             logger.warning(f"[Startup] Failed to seed from last capture: {e}")
+
+    # Where the white-balance feedback trim is kept between runs. Relative,
+    # like logs/ and metadata/: the service runs with the project root as its
+    # working directory.
+    WB_TRIM_STATE = Path("data/wb_trim.json")
+
+    def _wb_feedback_on(self) -> bool:
+        wbf = self.config.get("adaptive_timelapse", {}).get("day_mode", {}).get("wb_feedback") or {}
+        return bool(wbf.get("enabled", False))
+
+    def _seed_wb_trim(self):
+        """Restore the white-balance feedback trim from the last run.
+
+        The trim is the loop's memory of what the configured day gains missed.
+        Losing it at a restart is not a flash like losing the exposure seed --
+        the configured gains are close -- but it is the same slow colour drift
+        and re-learn, ten minutes of it, after every restart.
+
+        No staleness check, deliberately: however old the file, the value is
+        clamped to +/-max_trim of the configured gains on the way in and the
+        loop corrects it within minutes of the first day frames, which is
+        never worse than starting from nothing.
+        """
+        if not self._wb_feedback_on():
+            return
+        try:
+            with open(self.WB_TRIM_STATE) as f:
+                data = json.load(f)
+            trim = (float(data["wb_trim_r"]), float(data["wb_trim_b"]))
+        except FileNotFoundError:
+            return
+        except Exception as e:
+            logger.debug(f"[WB] Unreadable trim state ({e}); starting from the configured gains")
+            return
+        self.exposure.seed_from_capture(wb_trim=trim)
+        seeded = self.exposure.wb_trim
+        self._persisted_wb_trim = seeded
+        logger.info(f"[Startup] Seeded WB trim: R x{seeded[0]:.3f}, B x{seeded[1]:.3f}")
+
+    def _persist_wb_trim(self):
+        """Write the trim when it has moved a visible amount; atomic replace."""
+        if not self._wb_feedback_on():
+            return
+        trim = self.exposure.wb_trim
+        last = self._persisted_wb_trim
+        if last is not None and max(abs(trim[0] - last[0]), abs(trim[1] - last[1])) < 0.002:
+            return
+        try:
+            self.WB_TRIM_STATE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.WB_TRIM_STATE.with_suffix(".json.tmp")
+            with open(tmp, "w") as f:
+                json.dump({"wb_trim_r": round(trim[0], 4), "wb_trim_b": round(trim[1], 4)}, f)
+            os.replace(tmp, self.WB_TRIM_STATE)
+            self._persisted_wb_trim = trim
+        except Exception as e:
+            logger.debug(f"[WB] Could not persist trim: {e}")
 
     def _get_sun_elevation(self) -> Optional[float]:
         """
@@ -1039,6 +1101,10 @@ class AdaptiveTimelapse:
             )
 
         capture_metadata = self._read_capture_metadata(metadata_path)
+
+        # Before the database guard: the trim is worth keeping on a camera
+        # with no database at all.
+        self._persist_wb_trim()
 
         if self._database is None:
             return

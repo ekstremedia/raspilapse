@@ -296,6 +296,104 @@ class TestWhiteBalance:
         assert controller._day_wb_reference is None
 
 
+def wb_feedback_config(**overrides):
+    feedback = {"enabled": True}
+    feedback.update(overrides)
+    return make_config(day_mode={"fixed_colour_gains": [2.5, 1.6], "wb_feedback": feedback})
+
+
+def wb_metrics(gr, gb, fraction=0.5):
+    """What the lores stream reports: linear G/R and G/B of the grey pixels."""
+    return {
+        "mean_brightness": 120.0,
+        "std_brightness": 50.0,
+        "wb_gr": gr,
+        "wb_gb": gb,
+        "wb_neutral_fraction": fraction,
+    }
+
+
+class TestWbFeedback:
+    """The closed loop that keeps daylight greys grey.
+
+    Open-loop gains cannot do it: libcamera swaps its colour matrix as the
+    implied colour temperature moves, so the same gains render differently in
+    different weather. These tests feed measurements straight to
+    observe_frame, the same seam the lores stream uses.
+    """
+
+    def day_controller(self, config=None):
+        controller = ExposureController(config or wb_feedback_config())
+        converge(controller, 500_000.0)
+        return controller
+
+    def test_off_by_default(self):
+        controller = self.day_controller(make_config())
+        controller.observe_frame(wb_metrics(0.9, 1.1))
+        assert controller.wb_trim == (1.0, 1.0)
+
+    def test_it_moves_toward_the_measured_grey(self):
+        controller = self.day_controller()
+        controller.observe_frame(wb_metrics(0.9, 1.1))
+        assert controller.wb_trim[0] == pytest.approx(0.9**0.05)
+        assert controller.wb_trim[1] == pytest.approx(1.1**0.05)
+
+    def test_the_trim_reaches_the_rendered_gains(self):
+        controller = self.day_controller()
+        controller.observe_frame(wb_metrics(0.9, 1.1))
+        trim = controller.wb_trim
+        settings = converge(controller, 500_000.0)
+        assert settings["ColourGains"][0] == pytest.approx(2.5 * trim[0], rel=0.01)
+        assert settings["ColourGains"][1] == pytest.approx(1.6 * trim[1], rel=0.01)
+
+    def test_the_night_end_is_never_touched(self):
+        """An aurora is the one thing this loop must not white-balance away."""
+        controller = self.day_controller()
+        for _ in range(200):
+            controller.observe_frame(wb_metrics(0.8, 1.3))
+        settings = converge(controller, 0.5, frames=200)
+        assert settings["ColourGains"][0] == pytest.approx(1.83, rel=0.1)
+        assert settings["ColourGains"][1] == pytest.approx(2.02, rel=0.1)
+
+    def test_a_sunset_cannot_walk_it_past_the_clamp(self):
+        controller = self.day_controller()
+        for _ in range(500):
+            controller.observe_frame(wb_metrics(0.8, 1.3))
+        assert controller.wb_trim[0] == pytest.approx(0.88)
+        assert controller.wb_trim[1] == pytest.approx(1.12)
+
+    def test_night_frames_never_move_it(self):
+        controller = ExposureController(wb_feedback_config())
+        converge(controller, 0.5, frames=200)
+        controller.observe_frame(wb_metrics(0.9, 1.1))
+        assert controller.wb_trim == (1.0, 1.0)
+
+    def test_a_frame_with_no_grey_is_skipped(self):
+        controller = self.day_controller()
+        controller.observe_frame(wb_metrics(0.9, 1.1, fraction=0.01))
+        assert controller.wb_trim == (1.0, 1.0)
+
+    def test_a_broken_reading_is_bounded(self):
+        controller = self.day_controller()
+        controller.observe_frame(wb_metrics(5.0, 0.01))
+        assert controller.wb_trim[0] == pytest.approx(2.0**0.05)
+        assert controller.wb_trim[1] == pytest.approx(0.5**0.05)
+
+    def test_a_seed_restores_it_clamped(self):
+        controller = ExposureController(wb_feedback_config())
+        controller.seed_from_capture(wb_trim=(0.5, 1.5))
+        assert controller.wb_trim == (0.88, 1.12)
+
+    def test_diagnostics_expose_it_once_it_moves(self):
+        controller = self.day_controller()
+        assert "wb_trim_r" not in controller.diagnostics()
+        controller.observe_frame(wb_metrics(0.9, 1.1))
+        controller.decide()
+        diagnostics = controller.diagnostics()
+        assert diagnostics["wb_trim_r"] == pytest.approx(0.9**0.05, abs=0.001)
+        assert diagnostics["wb_trim_b"] == pytest.approx(1.1**0.05, abs=0.001)
+
+
 class TestSeeding:
     def test_a_full_row_primes_everything(self, controller):
         controller.seed_from_capture(
