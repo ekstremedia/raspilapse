@@ -1,5 +1,6 @@
 """Tests for status display module."""
 
+import json
 import shutil
 import tempfile
 from datetime import datetime, timedelta
@@ -216,6 +217,161 @@ def test_print_configuration(temp_config, capsys):
     assert "CONFIGURATION" in captured.out
     assert "1920x1080" in captured.out
     assert "30s" in captured.out
+
+
+def test_wb_trim_state_path_matches_daemon():
+    """status.py duplicates the trim path; this is what stops it drifting.
+
+    The duplication is deliberate (importing the daemon costs picamera2), so
+    the cost of that choice has to be paid by a test that fails the moment
+    the daemon moves the file and this command starts reading nothing.
+    """
+    from raspilapse.cli.status import WB_TRIM_STATE
+    from raspilapse.daemon import AdaptiveTimelapse
+
+    assert WB_TRIM_STATE == AdaptiveTimelapse.WB_TRIM_STATE
+
+
+def test_read_wb_trim_missing_file(temp_config, tmp_path):
+    """A camera that has never run with feedback on reports nothing, not an error."""
+    config_path, _ = temp_config
+    status = StatusDisplay(config_path)
+
+    with patch("raspilapse.cli.status.WB_TRIM_STATE", tmp_path / "absent.json"):
+        assert status._read_wb_trim() is None
+
+
+def test_read_wb_trim_malformed(temp_config, tmp_path):
+    """A half-written or hand-edited trim file is a fresh start, not a crash."""
+    config_path, _ = temp_config
+    status = StatusDisplay(config_path)
+
+    state = tmp_path / "wb_trim.json"
+    state.write_text('{"wb_trim_r": 0.9')  # truncated mid-write
+
+    with patch("raspilapse.cli.status.WB_TRIM_STATE", state):
+        assert status._read_wb_trim() is None
+
+
+def test_print_adaptive_status_reports_fusion(temp_config, capsys):
+    """The fusion bracket and the brightness setpoint both reach the display."""
+    config_path, _ = temp_config
+    status = StatusDisplay(config_path)
+
+    status.config["adaptive_timelapse"].update(
+        {
+            "dynamic_range": {
+                "method": "fusion",
+                "fusion": {"ev_spread": 3.5},
+                "tone_map": {"enabled": True, "strength": 0.7},
+            },
+            "brightness_target": {"base": 132, "overcast_boost": 15, "max_target": 152},
+        }
+    )
+
+    # cv2 is absent in CI, and DynamicRange would honestly downgrade to 'off'.
+    # Pretend it is installed so this test covers the fusion branch either way.
+    with patch("importlib.util.find_spec", return_value=object()):
+        status.print_adaptive_status()
+
+    captured = capsys.readouterr()
+    assert "ADAPTIVE EXPOSURE" in captured.out
+    assert "fusion+tm" in captured.out
+    assert "3 brackets" in captured.out
+    assert "3.5 EV" in captured.out
+    assert "11.3x" in captured.out  # 2^3.5, the ratio that means something
+    assert "strength 0.70" in captured.out
+    assert "132 base" in captured.out
+
+
+def test_print_adaptive_status_reports_degraded_method(temp_config, capsys):
+    """A method that could not load is shown as what runs, plus what was asked for."""
+    config_path, _ = temp_config
+    status = StatusDisplay(config_path)
+
+    status.config["adaptive_timelapse"]["dynamic_range"] = {"method": "fusion"}
+
+    # find_spec returning None is exactly how DynamicRange detects missing cv2.
+    with patch("importlib.util.find_spec", return_value=None):
+        status.print_adaptive_status()
+
+    captured = capsys.readouterr()
+    assert "config asked for fusion" in captured.out
+
+
+def test_print_adaptive_status_disabled(temp_config, capsys):
+    """Nothing about the pipeline is claimed when adaptive capture is off."""
+    config_path, _ = temp_config
+    status = StatusDisplay(config_path)
+    status.config["adaptive_timelapse"]["enabled"] = False
+
+    status.print_adaptive_status()
+    captured = capsys.readouterr()
+    assert "Disabled" in captured.out
+    assert "Fusion" not in captured.out
+
+
+def test_print_white_balance_shows_effective_gains(temp_config, capsys, tmp_path):
+    """The learned trim is applied to the anchor, since that product is the render."""
+    config_path, _ = temp_config
+    status = StatusDisplay(config_path)
+
+    status.config["adaptive_timelapse"]["day_mode"] = {
+        "fixed_colour_gains": [2.26, 1.73],
+        "wb_feedback": {"enabled": True},
+    }
+
+    state = tmp_path / "wb_trim.json"
+    state.write_text(json.dumps({"wb_trim_r": 0.5, "wb_trim_b": 2.0}))
+
+    with patch("raspilapse.cli.status.WB_TRIM_STATE", state):
+        status.print_white_balance_status()
+
+    captured = capsys.readouterr()
+    assert "WHITE BALANCE" in captured.out
+    assert "R 2.26" in captured.out
+    assert "x0.500" in captured.out
+    assert "R 1.13" in captured.out  # 2.26 * 0.5
+    assert "B 3.46" in captured.out  # 1.73 * 2.0
+
+
+def test_print_white_balance_flags_pinned_trim(temp_config, capsys, tmp_path):
+    """A trim sitting on its clamp is the anchor being wrong, and says so."""
+    config_path, _ = temp_config
+    status = StatusDisplay(config_path)
+
+    status.config["adaptive_timelapse"]["day_mode"] = {
+        "fixed_colour_gains": [2.6, 1.73],
+        "wb_feedback": {"enabled": True, "max_trim": 0.12},
+    }
+
+    state = tmp_path / "wb_trim.json"
+    state.write_text(json.dumps({"wb_trim_r": 0.88, "wb_trim_b": 0.95}))
+
+    with patch("raspilapse.cli.status.WB_TRIM_STATE", state):
+        status.print_white_balance_status()
+
+    captured = capsys.readouterr()
+    assert "pinned" in captured.out
+    assert "R trim" in captured.out or "R/" in captured.out
+    assert "B trim" not in captured.out  # 0.95 is well inside the clamp
+
+
+def test_print_white_balance_feedback_off(temp_config, capsys):
+    """With feedback off there is no trim to report and none is invented."""
+    config_path, _ = temp_config
+    status = StatusDisplay(config_path)
+
+    status.config["adaptive_timelapse"]["day_mode"] = {
+        "fixed_colour_gains": [2.26, 1.73],
+        "wb_feedback": {"enabled": False},
+    }
+
+    status.print_white_balance_status()
+    captured = capsys.readouterr()
+    assert "off" in captured.out
+    assert "Learned" not in captured.out
+    assert "Effective" not in captured.out
 
 
 def test_print_overlay_status_enabled(temp_config, capsys):

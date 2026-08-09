@@ -4,16 +4,22 @@
 Shows service status, configuration, and recent captures with beautiful colored output.
 """
 
+import json
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 
 from raspilapse.config import merge_defaults
 from raspilapse.console import Colors
+
+# Duplicated from AdaptiveTimelapse.WB_TRIM_STATE rather than imported: that
+# import pulls in picamera2, which costs seconds and needs a camera stack this
+# command should run without. test_status.py asserts the two stay equal.
+WB_TRIM_STATE = Path("data/wb_trim.json")
 
 
 class StatusDisplay:
@@ -230,6 +236,202 @@ class StatusDisplay:
 
         print()
 
+    def _read_wb_trim(self) -> Optional[Tuple[float, float, datetime]]:
+        """The trim the daemon last persisted, as (r, b, when written).
+
+        None when the file is absent (a camera that has never run with
+        feedback on) or unreadable -- the same tolerance _seed_wb_trim has,
+        for the same reason: a missing trim is a fresh start, not an error.
+        """
+        try:
+            with open(WB_TRIM_STATE, "r") as f:
+                data = json.load(f)
+            mtime = datetime.fromtimestamp(WB_TRIM_STATE.stat().st_mtime)
+            return float(data["wb_trim_r"]), float(data["wb_trim_b"]), mtime
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def print_adaptive_status(self):
+        """Print the adaptive exposure pipeline: dynamic range, target, fusion."""
+        print(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}🌗 ADAPTIVE EXPOSURE{Colors.RESET}")
+        print(f"{Colors.DIM}{'─' * 60}{Colors.RESET}")
+
+        adaptive = self.config["adaptive_timelapse"]
+
+        if not adaptive.get("enabled", True):
+            print(f"  {Colors.YELLOW}○ Disabled{Colors.RESET}\n")
+            return
+
+        # Ask DynamicRange what is actually running rather than reading
+        # method straight from the file: it reports the degraded reality (a
+        # config asking for fusion without cv2 installed runs as 'off'), and
+        # that is the thing worth seeing on a camera that looks wrong.
+        block = adaptive.get("dynamic_range") or {}
+        try:
+            from raspilapse.dynrange import DynamicRange
+
+            dynamic_range = DynamicRange(self.config)
+            label = dynamic_range.label()
+            method = dynamic_range.method
+            tone_strength = dynamic_range._tone_map_strength
+            tone_on = dynamic_range.tone_map_enabled
+            ev_spread = dynamic_range._fusion_ev_spread
+            brackets = dynamic_range._fusion_brackets
+            single_shot_above = dynamic_range._fusion_single_shot_above_s
+            configured = str(block.get("method", "off")).lower()
+            degraded = method != configured and configured != "tone_map"
+        except Exception as e:  # pragma: no cover - defensive, never seen
+            print(f"  {Colors.RED}Could not read dynamic_range: {e}{Colors.RESET}\n")
+            return
+
+        colour = Colors.YELLOW if degraded else Colors.BRIGHT_GREEN
+        note = f" {Colors.DIM}(config asked for {configured}){Colors.RESET}" if degraded else ""
+        print(
+            f"  {Colors.BRIGHT_BLUE}Pipeline:{Colors.RESET}    {colour}{label}{Colors.RESET}{note}"
+        )
+
+        if method == "fusion":
+            # 2^spread is the ratio between neighbouring brackets, which is
+            # the number that means something when looking at a frame: how
+            # much more shadow and highlight the merge has to work with.
+            ratio = 2.0**ev_spread
+            print(
+                f"  {Colors.BRIGHT_BLUE}Fusion:{Colors.RESET}      "
+                f"{brackets} brackets, ±{ev_spread:.1f} EV "
+                f"{Colors.DIM}(±{ratio:.1f}x exposure){Colors.RESET}"
+            )
+            # The spread is not constant: it ramps to zero as the ladder
+            # climbs, so a night frame is a single shot however this is set.
+            print(
+                f"  {Colors.DIM}               full spread below 1/20s, "
+                f"single shot above {single_shot_above:g}s{Colors.RESET}"
+            )
+
+        if tone_on:
+            print(
+                f"  {Colors.BRIGHT_BLUE}Tone Map:{Colors.RESET}    "
+                f"{Colors.GREEN}✓{Colors.RESET} strength {tone_strength:.2f} "
+                f"{Colors.DIM}(fades out below L=45){Colors.RESET}"
+            )
+        else:
+            print(f"  {Colors.BRIGHT_BLUE}Tone Map:{Colors.RESET}    {Colors.DIM}off{Colors.RESET}")
+
+        # The brightness setpoint. This is what the loop actually drives at,
+        # measured on the lores stream before tone mapping and the overlay.
+        target = adaptive.get("brightness_target") or {}
+        print(
+            f"  {Colors.BRIGHT_BLUE}Target:{Colors.RESET}      "
+            f"{target.get('base', 120)} base "
+            f"{Colors.DIM}(+{target.get('overcast_boost', 15)} overcast, "
+            f"max {target.get('max_target', 140)}){Colors.RESET}"
+        )
+        print(
+            f"  {Colors.BRIGHT_BLUE}Damping:{Colors.RESET}     "
+            f"{adaptive.get('brightness_damping', 0.5):.2f} "
+            f"{Colors.DIM}(correction toward target per frame){Colors.RESET}"
+        )
+
+        highlight = adaptive.get("highlight_protection") or {}
+        if highlight.get("enabled"):
+            night = "on" if highlight.get("apply_in_night") else "day only"
+            print(
+                f"  {Colors.BRIGHT_BLUE}Highlights:{Colors.RESET}  {Colors.GREEN}✓{Colors.RESET} "
+                f"p95 {highlight.get('safe_p95', 200)}/"
+                f"{highlight.get('warning_p95', 220)}/"
+                f"{highlight.get('critical_p95', 240)} "
+                f"{Colors.DIM}(floor {highlight.get('min_scale', 0.70):.2f}, {night}){Colors.RESET}"
+            )
+        else:
+            print(
+                f"  {Colors.BRIGHT_BLUE}Highlights:{Colors.RESET}  "
+                f"{Colors.DIM}unprotected{Colors.RESET}"
+            )
+
+        print()
+
+    def print_white_balance_status(self):
+        """Print the day/night white point and the feedback loop's learned trim."""
+        print(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}🎨 WHITE BALANCE{Colors.RESET}")
+        print(f"{Colors.DIM}{'─' * 60}{Colors.RESET}")
+
+        adaptive = self.config["adaptive_timelapse"]
+        day = adaptive.get("day_mode") or {}
+        night = adaptive.get("night_mode") or {}
+
+        fixed = day.get("fixed_colour_gains")
+        if fixed:
+            print(
+                f"  {Colors.BRIGHT_BLUE}Day gains:{Colors.RESET}   "
+                f"R {fixed[0]:.2f}  B {fixed[1]:.2f} "
+                f"{Colors.DIM}(fixed; wins over the learned reference){Colors.RESET}"
+            )
+        else:
+            print(
+                f"  {Colors.BRIGHT_BLUE}Day gains:{Colors.RESET}   "
+                f"{Colors.DIM}learned from the test shot{Colors.RESET}"
+            )
+
+        night_gains = night.get("colour_gains")
+        if night_gains:
+            print(
+                f"  {Colors.BRIGHT_BLUE}Night gains:{Colors.RESET} "
+                f"R {night_gains[0]:.2f}  B {night_gains[1]:.2f} "
+                f"{Colors.DIM}(dark end of the cross-fade){Colors.RESET}"
+            )
+
+        feedback = day.get("wb_feedback") or {}
+        if not feedback.get("enabled"):
+            print(f"  {Colors.BRIGHT_BLUE}Feedback:{Colors.RESET}    {Colors.DIM}off{Colors.RESET}")
+            print()
+            return
+
+        max_trim = float(feedback.get("max_trim", 0.12))
+        print(
+            f"  {Colors.BRIGHT_BLUE}Feedback:{Colors.RESET}    {Colors.GREEN}✓{Colors.RESET} "
+            f"strength {float(feedback.get('strength', 0.05)):.2f}, "
+            f"max trim ±{max_trim * 100:.0f}%"
+        )
+
+        trim = self._read_wb_trim()
+        if trim is None:
+            print(
+                f"  {Colors.BRIGHT_BLUE}Learned:{Colors.RESET}     "
+                f"{Colors.DIM}no trim stored yet ({WB_TRIM_STATE}){Colors.RESET}"
+            )
+            print()
+            return
+
+        trim_r, trim_b, written = trim
+        # A trim sitting on its clamp means the loop wants a white point the
+        # configured gains cannot reach -- the anchor is wrong, not the loop.
+        pinned = [
+            axis
+            for axis, value in (("R", trim_r), ("B", trim_b))
+            if abs(abs(1.0 - value) - max_trim) < 0.001
+        ]
+        print(
+            f"  {Colors.BRIGHT_BLUE}Learned:{Colors.RESET}     "
+            f"R x{trim_r:.3f}  B x{trim_b:.3f} "
+            f"{Colors.DIM}({self._format_time_ago(written)}){Colors.RESET}"
+        )
+        if fixed:
+            print(
+                f"  {Colors.BRIGHT_BLUE}Effective:{Colors.RESET}   "
+                f"R {fixed[0] * trim_r:.2f}  B {fixed[1] * trim_b:.2f} "
+                f"{Colors.DIM}(what daylight frames actually render at){Colors.RESET}"
+            )
+        if pinned:
+            print(
+                f"  {Colors.YELLOW}⚠ {'/'.join(pinned)} trim is pinned at the ±"
+                f"{max_trim * 100:.0f}% clamp{Colors.RESET}"
+            )
+            print(
+                f"    {Colors.DIM}The loop wants a white point fixed_colour_gains "
+                f"cannot reach; move the anchor.{Colors.RESET}"
+            )
+
+        print()
+
     def print_overlay_status(self):
         """Print overlay configuration."""
         print(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}🖼️  OVERLAY{Colors.RESET}")
@@ -389,6 +591,8 @@ class StatusDisplay:
         self.print_header()
         self.print_service_status()
         self.print_configuration()
+        self.print_adaptive_status()
+        self.print_white_balance_status()
         self.print_overlay_status()
         self.print_recent_captures()
         self.print_symlink_status()
