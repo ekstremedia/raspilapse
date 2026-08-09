@@ -51,6 +51,31 @@ class TestMethodParsing:
         config = {"adaptive_timelapse": {"dynamic_range": None}}
         assert DynamicRange.from_config(config).method == "off"
 
+    def test_scalar_block_degrades_with_a_warning(self, dynrange_logs):
+        """`dynamic_range: fusion` is a natural typo for `method: fusion` --
+        it must degrade, not crash construction with AttributeError."""
+        config = {"adaptive_timelapse": {"dynamic_range": "fusion"}}
+        assert DynamicRange.from_config(config).method == "off"
+        assert any("mapping" in r.message for r in dynrange_logs.records)
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"adaptive_timelapse": "everything on please"},
+            {"adaptive_timelapse": {"dynamic_range": ["fusion", "raw"]}},
+            {"adaptive_timelapse": {"dynamic_range": {"tone_map": True}}},
+            {"adaptive_timelapse": {"dynamic_range": {"fusion": 3}}},
+            {"camera": {"resolution": "4k"}},
+            {"output": "images"},
+            {"output": {"dng_sidecar": True}},
+        ],
+    )
+    def test_no_malformed_shape_crashes_construction(self, config):
+        """The never-raises contract covers malformed YAML shapes, not just
+        wrong values: every sub-block read must survive a scalar or a list
+        where a mapping belongs."""
+        DynamicRange.from_config(config)
+
     def test_explicit_off(self):
         assert DynamicRange.from_config(make_config(method="off")).method == "off"
 

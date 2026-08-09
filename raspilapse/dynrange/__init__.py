@@ -25,12 +25,32 @@ HDR is switched through V4L2, before the camera opens).
 """
 
 import importlib.util
+from collections.abc import Mapping
 from typing import Callable, Dict, Optional
 
 from raspilapse.logging_setup import get_logger
 from raspilapse.overlay import build_overlay
 
 logger = get_logger("dynrange")
+
+
+def _mapping(value, name: str) -> Dict:
+    """A config sub-block as a dict, whatever the YAML actually held.
+
+    ``dynamic_range: fusion`` is a natural typo for ``method: fusion`` and
+    arrives as a string; construction must degrade with a warning, never
+    crash on it -- the never-raises contract covers malformed shapes too.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        logger.warning(
+            f"{name} must be a mapping of settings, not "
+            f"{type(value).__name__} {value!r}; ignoring it"
+        )
+        return {}
+    return dict(value)
+
 
 __all__ = ["DynamicRange", "METHODS"]
 
@@ -57,14 +77,14 @@ class DynamicRange:
     """
 
     def __init__(self, config: Dict):
-        adaptive = config.get("adaptive_timelapse", {}) or {}
+        adaptive = _mapping(config.get("adaptive_timelapse"), "adaptive_timelapse")
         if "hdr" in adaptive:
             logger.warning(
                 "adaptive_timelapse.hdr is gone -- it set a control this "
                 "sensor never acted on. Use adaptive_timelapse.dynamic_range."
             )
 
-        block = adaptive.get("dynamic_range", {}) or {}
+        block = _mapping(adaptive.get("dynamic_range"), "adaptive_timelapse.dynamic_range")
         method = str(block.get("method", "off")).lower()
         if method not in METHODS:
             logger.warning(
@@ -76,21 +96,20 @@ class DynamicRange:
         # Tone mapping is a post-process stage, not a capture method, so it
         # combines with any of the others. `method: tone_map` is sugar for
         # `method: off` plus `tone_map.enabled: true`.
-        tone_map = block.get("tone_map", {}) or {}
+        tone_map = _mapping(block.get("tone_map"), "dynamic_range.tone_map")
         tone_map_enabled = bool(tone_map.get("enabled", False)) or method == "tone_map"
         if method == "tone_map":
             method = "off"
         strength = tone_map.get("strength", 0.5)
         self._tone_map_strength = min(max(float(strength), 0.0), 1.0)
 
-        fusion_cfg = block.get("fusion", {}) or {}
+        fusion_cfg = _mapping(block.get("fusion"), "dynamic_range.fusion")
         self._fusion_brackets = min(max(int(fusion_cfg.get("brackets", 3)), 2), 3)
         self._fusion_ev_spread = min(max(float(fusion_cfg.get("ev_spread", 2.0)), 0.0), 4.0)
         self._fusion_single_shot_above_s = max(
             float(fusion_cfg.get("single_shot_above_s", 0.5)), 0.01
         )
         self._interval_s = float(adaptive.get("interval", 30))
-        self._quality = int((config.get("output", {}) or {}).get("quality", 85))
 
         # Frames a bracket discards while its controls land, seeded with the
         # figure measured on a running camera and refined from what the
@@ -114,7 +133,7 @@ class DynamicRange:
             )
             tone_map_enabled = False
 
-        hdr_cfg = block.get("sensor_hdr", {}) or {}
+        hdr_cfg = _mapping(block.get("sensor_hdr"), "dynamic_range.sensor_hdr")
         self._sensor_hdr_day_only = bool(hdr_cfg.get("day_only", True))
         if method == "sensor_hdr":
             from raspilapse.dynrange import sensor_hdr
@@ -126,8 +145,8 @@ class DynamicRange:
                 )
                 method = "off"
 
-        camera = config.get("camera", {}) or {}
-        resolution = camera.get("resolution", {}) or {}
+        camera = _mapping(config.get("camera"), "camera")
+        resolution = _mapping(camera.get("resolution"), "camera.resolution")
         self._resolution = (
             int(resolution.get("width", 1920)),
             int(resolution.get("height", 1080)),
@@ -137,8 +156,9 @@ class DynamicRange:
         # negative is kept beside its JPEG for hand-developing, retention-
         # capped. Inert under sensor_hdr, whose binned merged mode produces
         # nothing worth calling a negative.
-        output_cfg = config.get("output", {}) or {}
-        sidecar_cfg = output_cfg.get("dng_sidecar", {}) or {}
+        output_cfg = _mapping(config.get("output"), "output")
+        self._quality = int(output_cfg.get("quality", 85))
+        sidecar_cfg = _mapping(output_cfg.get("dng_sidecar"), "output.dng_sidecar")
         self._sidecar_enabled = bool(sidecar_cfg.get("enabled", False))
         self._sidecar_every_n = int(sidecar_cfg.get("every_n_frames", 20))
         self._sidecar_max_files = int(sidecar_cfg.get("max_files", 200))
