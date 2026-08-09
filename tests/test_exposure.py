@@ -43,7 +43,6 @@ def make_config(**overrides):
             },
             "brightness_target": {"base": 120, "overcast_boost": 15, "max_target": 140},
             "highlight_protection": {"enabled": False},
-            "hdr": {"enabled": False},
         }
     }
     config["adaptive_timelapse"].update(overrides)
@@ -423,14 +422,3 @@ class TestDiagnostics:
         """The diagnostics used to re-run the whole exposure calculation."""
         converge(controller, 5000.0, frames=10)
         assert controller.diagnostics() == controller.diagnostics()
-
-
-class TestHdr:
-    def test_absent_when_disabled(self, controller):
-        assert "HdrMode" not in controller.decide()
-
-    def test_absent_when_libcamera_does_not_expose_it(self):
-        """Pi 4 and vc4 have no HdrModeEnum; the setting must be a no-op."""
-        controller = ExposureController(make_config(hdr={"enabled": True}))
-        controller._hdr_enum = None
-        assert "HdrMode" not in controller.decide()

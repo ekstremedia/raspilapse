@@ -39,8 +39,8 @@ from raspilapse.camera.exposure import (  # noqa: F401
     highlight_factor,
 )
 from raspilapse.config import merge_defaults
+from raspilapse.dynrange import DynamicRange
 from raspilapse.logging_setup import configure_logging, get_logger
-from raspilapse.overlay import build_overlay
 from raspilapse.overlay.sources.weather import WeatherData
 from raspilapse.storage.database import CaptureDatabase
 from raspilapse.system import SystemMonitor
@@ -150,9 +150,12 @@ class AdaptiveTimelapse:
         # instances, one HTTP request.
         self._weather = WeatherData(self.config)
 
-        # None unless the overlay is switched on, and Pillow is only imported
-        # in the case where it is.
-        self._overlay = build_overlay(self.config)
+        # Which dynamic-range method runs, and the post-process chain it
+        # implies. With everything off the chain is exactly build_overlay's
+        # callable: None unless the overlay is switched on, and Pillow is
+        # only imported in the case where it is.
+        self._dr = DynamicRange.from_config(self.config)
+        self._overlay = self._dr.build_post_process(self.config)
 
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -694,7 +697,11 @@ class AdaptiveTimelapse:
             logger.error(f"Failed to create symlink: {e}")
 
     def capture_frame(
-        self, capture: ImageCapture, mode: str, calculated_lux: float = None
+        self,
+        capture: ImageCapture,
+        mode: str,
+        calculated_lux: float = None,
+        settings: Optional[Dict] = None,
     ) -> Tuple[str, Optional[str]]:
         """
         Capture a single frame with the camera's current settings.
@@ -703,6 +710,8 @@ class AdaptiveTimelapse:
             capture: ImageCapture instance with initialized camera
             mode: Light mode
             calculated_lux: Calculated lux value to use in overlay (overrides camera's estimate)
+            settings: The decision's camera controls, so the dynamic-range
+                dispatcher can plan brackets around the commanded exposure
 
         Returns:
             Tuple of (image_path, metadata_path)
@@ -710,14 +719,15 @@ class AdaptiveTimelapse:
         logger.info(f"Capturing frame #{self.frame_count} in {mode} mode...")
 
         # Prepare extra metadata with calculated lux (overrides camera's unreliable estimate)
-        extra_metadata = {}
+        # and the dynamic-range method, so every sidecar records what made the frame.
+        extra_metadata = {"dr_method": self._dr.label()}
         if calculated_lux is not None:
             extra_metadata["Lux"] = calculated_lux
 
-        # Capture the image (controls were set during initialization)
-        # Pass mode so overlay knows the light mode, and calculated lux for accurate display
-        image_path, metadata_path = capture.capture(
-            mode=mode, extra_metadata=extra_metadata if extra_metadata else None
+        # Capture through the dynamic-range dispatcher; with method off this
+        # is exactly capture.capture() with the controls set at initialization.
+        image_path, metadata_path = self._dr.capture_frame(
+            capture, mode=mode, settings=settings, extra_metadata=extra_metadata
         )
 
         # Create symlink to latest image if enabled
@@ -1108,6 +1118,9 @@ class AdaptiveTimelapse:
                             self._close_camera_fast(capture, last_mode)
                             capture = None
                             last_mode = None
+                        # The reference shot captures at full resolution,
+                        # which the sensor's HDR mode cannot deliver.
+                        self._dr.pre_reference_shot()
                         self._take_reference_shot()
                 except Exception as e:
                     logger.error(f"Reference-shot handling failed: {e}", exc_info=True)
@@ -1156,7 +1169,13 @@ class AdaptiveTimelapse:
                     try:
                         logger.debug("Initializing camera for timelapse...")
                         capture = ImageCapture(self.camera_config, post_process=self._overlay)
-                        capture.initialize_camera(manual_controls=decision.settings)
+                        # The dynamic-range method may need the sensor
+                        # reconfigured (sensor_hdr) or the capture size
+                        # adjusted -- both only possible while it is closed.
+                        capture.initialize_camera(
+                            manual_controls=decision.settings,
+                            **self._dr.pre_open(decision.mode),
+                        )
                         last_mode = decision.mode
                         consecutive_failures = 0
                     except Exception as e:
@@ -1186,7 +1205,7 @@ class AdaptiveTimelapse:
 
                 try:
                     image_path, metadata_path = self.capture_frame(
-                        capture, decision.mode, decision.lux
+                        capture, decision.mode, decision.lux, decision.settings
                     )
                     logger.info(f"Frame captured: {image_path}")
 
@@ -1229,6 +1248,10 @@ class AdaptiveTimelapse:
             if capture is not None:
                 logger.info("Closing camera...")
                 self._close_camera_fast(capture, last_mode)
+
+            # Leave the sensor as the plain pipeline expects to find it
+            # (sensor_hdr's wide_dynamic_range flag outlives the process).
+            self._dr.shutdown()
 
             logger.info(f"=== Adaptive Timelapse Stopped ({self.frame_count} frames) ===")
 

@@ -101,20 +101,6 @@ class ExposureController:
         # calculation never runs twice per frame.
         self._last_decision: Dict = {}
 
-        hdr = adaptive.get("hdr", {})
-        self._hdr_enabled = hdr.get("enabled", False)
-        self._hdr_bright = hdr.get("day_mode", "SingleExposure")
-        self._hdr_dark = hdr.get("night_mode", "Off")
-        self._hdr_enum = None
-        if self._hdr_enabled:
-            try:
-                import libcamera
-
-                self._hdr_enum = libcamera.controls.HdrModeEnum
-                logger.info(f"[HDR] Enabled: bright={self._hdr_bright}, dark={self._hdr_dark}")
-            except (ImportError, AttributeError):
-                logger.info("[HDR] HdrModeEnum not available (Pi 4/vc4) - HDR controls are no-op")
-
     # ---------------------------------------------------------------- state --
 
     def observe_frame(self, brightness_metrics: Dict) -> None:
@@ -240,7 +226,6 @@ class ExposureController:
             "AnalogueGain": gain,
         }
         colour_gains = self._apply_wb(settings, position)
-        self._apply_hdr(settings, mode)
 
         self._last_decision = {
             "required_exposure": round(required, 6),
@@ -453,13 +438,3 @@ class ExposureController:
         settings["AwbEnable"] = 0
         settings["ColourGains"] = applied
         return applied
-
-    def _apply_hdr(self, settings: Dict, mode: str) -> None:
-        """Set HdrMode where libcamera exposes it. No-op on Pi 4 / vc4."""
-        if not self._hdr_enabled or self._hdr_enum is None:
-            return
-        name = self._hdr_dark if mode == LightMode.NIGHT else self._hdr_bright
-        try:
-            settings["HdrMode"] = getattr(self._hdr_enum, name)
-        except AttributeError:
-            logger.debug(f"[HDR] Unknown mode {name!r}, leaving HDR unset")

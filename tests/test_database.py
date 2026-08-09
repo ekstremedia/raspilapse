@@ -946,7 +946,9 @@ class TestSchemaSingleSource:
                 "SELECT system_cpu_temp, network_up FROM captures WHERE image_path='/old.jpg'"
             ).fetchone()
 
-        assert version == 6
+        # The chain runs to the current version, not just to 6 -- a legacy
+        # database picks up every later migration in the same open.
+        assert version == CaptureDatabase.SCHEMA_VERSION
         assert {
             "system_mem_used_mb",
             "system_mem_percent",
@@ -960,6 +962,64 @@ class TestSchemaSingleSource:
         # The rows that were already there keep their data and get NULL, not 0,
         # for the columns nobody could have measured at the time.
         assert tuple(preserved) == (44.5, None)
+
+    def test_migration_7_adds_dr_method_to_an_existing_database(self, tmp_path):
+        path = tmp_path / "legacy_v6.db"
+        # A v6 database: the DDL as it stood before dr_method existed.
+        ddl = CAPTURES_DDL.replace("        dr_method TEXT,\n", "")
+        assert "dr_method" not in ddl
+
+        with sqlite3.connect(path) as conn:
+            conn.execute(ddl)
+            conn.execute(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT)"
+            )
+            conn.execute("INSERT INTO schema_version (version) VALUES (6)")
+            conn.execute(
+                "INSERT INTO captures (timestamp, unix_timestamp, camera_id, image_path)"
+                " VALUES ('2026-08-06T00:00:00', 1786000000.0, 'cam', '/old.jpg')"
+            )
+            conn.commit()
+
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(path)},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(captures)")}
+            version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+            preserved = conn.execute(
+                "SELECT dr_method FROM captures WHERE image_path='/old.jpg'"
+            ).fetchone()
+
+        assert version == 7
+        assert "dr_method" in columns
+        # Old frames predate the trial: NULL, not a fabricated "off".
+        assert tuple(preserved) == (None,)
+
+    def test_dr_method_round_trips_from_metadata(self, db_config, sample_metadata):
+        db = CaptureDatabase(db_config)
+        # A distinct timestamp: INSERT OR REPLACE keys on (timestamp,
+        # camera_id) and two stores of the same second would collapse.
+        db.store_capture(
+            image_path="/test/fused.jpg",
+            metadata={
+                **sample_metadata,
+                "capture_timestamp": "2025-01-10T15:30:30",
+                "dr_method": "fusion+tm",
+            },
+            mode="day",
+        )
+        db.store_capture(
+            image_path="/test/plain.jpg",
+            metadata=sample_metadata,
+            mode="day",
+        )
+        with db._get_connection() as conn:
+            rows = dict(conn.execute("SELECT image_path, dr_method FROM captures").fetchall())
+        assert rows == {"/test/fused.jpg": "fusion+tm", "/test/plain.jpg": None}
 
     def test_upload_service_creates_the_v4_index(self, tmp_path):
         # UploadService used to carry its own DDL that predated migration v4,

@@ -222,6 +222,7 @@ class TestEveryDocumentedPlaceholder:
             "tide",
             "tide_level",
             "tide_trend",
+            "dr_method",
         ],
     )
     def test_placeholder_is_defined_with_everything_switched_off(self, placeholder):
@@ -233,3 +234,23 @@ class TestEveryDocumentedPlaceholder:
         ):
             data = overlay._prepare_overlay_data(METADATA, "day")
         assert placeholder in data
+
+
+class TestDrMethodField:
+    """{dr_method}: which dynamic-range method produced the frame."""
+
+    def _data(self, metadata):
+        overlay = make_overlay(tide=False, ships=False, aurora=False)
+        with (
+            patch.object(overlay.system_monitor, "get_all_metrics", return_value={}),
+            patch.object(overlay.weather, "get_weather_data", return_value=None),
+        ):
+            return overlay._prepare_overlay_data(metadata, "day")
+
+    def test_reports_the_method_that_made_the_frame(self):
+        assert self._data(dict(METADATA, dr_method="fusion+tm"))["dr_method"] == "fusion+tm"
+
+    def test_defaults_to_off_for_callers_that_do_not_inject_it(self):
+        """Test shots and older sidecars carry no dr_method; the placeholder
+        must still substitute rather than KeyError the whole overlay away."""
+        assert self._data(METADATA)["dr_method"] == "off"

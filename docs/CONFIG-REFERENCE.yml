@@ -102,6 +102,16 @@ output:
     enabled: true
     path: "/var/www/html/status.jpg"
 
+  # Keep every Nth frame's raw negative (.dng, ~15 MB) beside its JPEG, for
+  # hand-developing special frames in a desktop raw workflow. The cap prunes
+  # the oldest negatives so the collection plateaus at max_files. Works with
+  # any dynamic_range.method except sensor_hdr (its merged binned mode has
+  # no true negative) and skips fused frames.
+  dng_sidecar:
+    enabled: false
+    every_n_frames: 20    # at a 30s interval: one negative every 10 minutes
+    max_files: 200        # ~3 GB plateau
+
 # Video Output Settings
 video:
   # Base directory for generated timelapse videos
@@ -333,15 +343,66 @@ adaptive_timelapse:
     critical_rampup_speed: 0.70
 
 
-  # === HDR MODE ===
-  # Enables ISP tone-mapped HDR (SingleExposure mode) during daytime.
-  # On Pi 5 (pisp): enables real HDR with ISP tone mapping for better dynamic range.
-  # On Pi 4 (vc4): effectively a no-op (logged but ignored by hardware).
-  # Night mode always uses HDR Off to preserve aurora/star captures.
-  hdr:
-    enabled: true    # code default: false
-    day_mode: "SingleExposure"    # HDR mode for day/transition (SingleExposure or Off)
-    night_mode: "Off"             # HDR mode for night (always Off for long exposures)
+  # === DYNAMIC RANGE ===
+  # Gives the pipeline more range than a single exposure holds; without it,
+  # high-contrast scenes trade crushed shadows for protected highlights.
+  # Methods are opt-in and trialable per camera (compare them side by side
+  # with raspilapse-drtest); a method whose optional dependency (OpenCV,
+  # rawpy) is missing logs one warning and runs as "off".
+  # Replaces the old `hdr:` block, which set a control this sensor ignored.
+  dynamic_range:
+    method: off    # off | fusion | sensor_hdr | raw | tone_map
+
+    # Exposure fusion: bracket each slot 2-3 times and merge with Mertens
+    # exposure fusion at full resolution -- shadows and highlights from the
+    # exposures that held them, no "HDR look". The spread narrows smoothly to
+    # zero as exposures lengthen (log ramp from 0.05s), so by
+    # single_shot_above_s the plan IS the plain single shot: the day-night
+    # transition has no seam and long night exposures are untouched. A slot
+    # budget guard drops brackets (over first) sooner than overrun the grid.
+    # While fusion is active, highlight_protection defaults off -- the under
+    # bracket buys ~2 stops of highlight headroom against the ~0.5 the
+    # protection floor could, without darkening the base frame.
+    fusion:
+      brackets: 3              # 3 = under/base/over, 2 = base/under
+      # ev_spread is THE shadow dial, and it is continuous: it decides how
+      # well-exposed the shadows arrive before any blending. Field-tested on
+      # dark foliage against an overcast sky: 2.0 left shadows near-black,
+      # 3.0 opened them dramatically (a touch bright for some tastes), 2.7
+      # sat right -- tune in tenths. At very short base exposures the -3 EV
+      # under-bracket can brush the sensor's minimum exposure and deliver
+      # slightly less protection than commanded; harmless.
+      ev_spread: 2.0           # +/- EV at full spread (clamped to 0..4)
+      single_shot_above_s: 0.5 # base exposure at/above this -> single shot
+
+    # method: raw develops the sensor's 10-bit DNG on the Pi (rawpy, with
+    # the camera's own embedded WB and colour matrices) instead of keeping
+    # the ISP's 8-bit JPEG -- about two extra stops of shadow latitude. The
+    # ISP JPEG is captured alongside as the always-there fallback: night
+    # frames and any failed develop keep it, so expect an ISP-vs-developed
+    # look shift at the nightly handover. No knobs; the fallback rules are
+    # automatic. Needs python3-rawpy and python3-opencv.
+
+    # The imx708's on-chip HDR (Camera Module 3). Zero CPU cost, but the
+    # sensor merges in a binned mode: frames arrive at 2304x1296 and are
+    # upscaled back to the configured size before the overlay -- expect
+    # soft detail relative to a native 4K frame. day_only keeps it off in
+    # transition and night, where the ladder commands exposures the HDR
+    # mode would silently cap (that fight is also why HDR nights are
+    # noisy: the sensor compensates with gain). Switching costs nothing:
+    # the camera reopens every frame. Pi 4 note: this is the V4L2
+    # wide_dynamic_range control, not libcamera's HdrMode.
+    sensor_hdr:
+      day_only: true    # false = HDR through transition/night (exposures cap)
+
+    # Post-process tone mapping: luminance-only CLAHE blended into the frame.
+    # Lifts shadows and adds local contrast without shifting colours; fades
+    # smoothly to nothing on dark frames so night noise is not amplified and
+    # twilight never flickers across an on/off edge. Combines with any capture
+    # method (`method: tone_map` is shorthand for off + enabled).
+    tone_map:
+      enabled: false
+      strength: 0.5    # 0..1 blend of the mapped image into the original
 
   # === CONTRAST-AWARE BRIGHTNESS TARGET (Overcast Boost) ===
   # On overcast days, images have low contrast (low std deviation) and look
@@ -492,6 +553,7 @@ overlay:
   #   {load_5min} - 5-minute load average (e.g., "0.48")
   #   {load_15min} - 15-minute load average (e.g., "0.45")
   #   {uptime} - System uptime (e.g., "2d 5h 30m")
+  #   {dr_method} - Dynamic-range method that produced the frame (e.g., "fusion")
   content:
     # Line 1 - Left side
     line_1_left: "{camera_name}"

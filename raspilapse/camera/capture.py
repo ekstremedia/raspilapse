@@ -125,15 +125,31 @@ class ImageCapture:
         # Store last brightness metrics from lores stream (avoids disk I/O)
         self.last_brightness_metrics: Optional[Dict] = None
 
+        # Frames discarded waiting for each bracket's exposure to land in the
+        # last capture_bracketed call; the fusion planner reads this to keep
+        # its slot-budget estimate honest.
+        self.last_settle_frames: list = []
+
         logger.debug("ImageCapture instance created")
 
-    def initialize_camera(self, manual_controls: Optional[Dict] = None):
+    def initialize_camera(
+        self,
+        manual_controls: Optional[Dict] = None,
+        main_size_override: Optional[Tuple[int, int]] = None,
+        enable_raw: bool = False,
+    ):
         """
         Initialize and configure the camera.
 
         Args:
             manual_controls: Optional dict of controls to apply during configuration.
                            These override config file controls.
+            main_size_override: Capture size to request instead of the
+                configured resolution. Used while sensor HDR is active,
+                whose binned mode cannot deliver the configured size.
+            enable_raw: Configure the raw Bayer stream alongside main and
+                lores, so capture(save_dng=True) can write DNGs. Off by
+                default -- the stream costs memory and per-frame time.
         """
         logger.debug("Initializing camera...")
 
@@ -154,6 +170,8 @@ class ImageCapture:
 
             # Create camera configuration
             resolution = self.config.get_resolution()
+            if main_size_override is not None:
+                resolution = (int(main_size_override[0]), int(main_size_override[1]))
             logger.debug(f"Setting camera resolution to {resolution[0]}x{resolution[1]}")
 
             # Prepare controls - merge manual_controls with config controls
@@ -181,9 +199,7 @@ class ImageCapture:
                         frame_duration_us,
                         frame_duration_us,
                     )
-                    # Don't disable noise reduction when HDR is active (ISP NR needed)
-                    if "HdrMode" not in controls_to_apply:
-                        controls_to_apply["NoiseReductionMode"] = 0  # Keep pipeline light
+                    controls_to_apply["NoiseReductionMode"] = 0  # Keep pipeline light
                     logger.debug(
                         f"Set FrameDurationLimits to {frame_duration_us}µs for {exposure_us}µs exposure"
                     )
@@ -193,7 +209,8 @@ class ImageCapture:
                     main={"size": resolution, "format": "RGB888"},
                     # Low-res stream for fast brightness measurement (avoids disk I/O)
                     lores={"size": (320, 240), "format": "YUV420"},
-                    raw=None,  # Disable RAW for performance
+                    # RAW disabled for performance unless a DNG was asked for
+                    raw={} if enable_raw else None,
                     buffer_count=3,  # CRITICAL: prevents frame queuing delays
                     queue=False,  # Ensures fresh frame after request
                     display=None,
@@ -310,12 +327,6 @@ class ImageCapture:
         if "ExposureValue" in controls:
             control_map["ExposureValue"] = controls["ExposureValue"]
 
-        # HDR mode support (snake_case and PascalCase)
-        if "hdr_mode" in controls:
-            control_map["HdrMode"] = controls["hdr_mode"]
-        if "HdrMode" in controls:
-            control_map["HdrMode"] = controls["HdrMode"]
-
         return control_map
 
     def _compute_brightness_from_lores(self, request) -> Dict:
@@ -413,9 +424,7 @@ class ImageCapture:
             exposure_us = control_map["ExposureTime"]
             frame_duration_us = exposure_us + 100_000
             control_map["FrameDurationLimits"] = (frame_duration_us, frame_duration_us)
-            # Don't disable noise reduction when HDR is active (ISP NR needed)
-            if "HdrMode" not in control_map:
-                control_map["NoiseReductionMode"] = 0  # Keep pipeline light
+            control_map["NoiseReductionMode"] = 0  # Keep pipeline light
             logger.debug(
                 f"Updated FrameDurationLimits to {frame_duration_us}µs for {exposure_us}µs exposure"
             )
@@ -424,11 +433,56 @@ class ImageCapture:
             logger.debug(f"Applying controls to camera: {control_map}")
             self.picam2.set_controls(control_map)
 
+    def _resolve_output_path(self, timestamp, output_path: Optional[str] = None) -> Path:
+        """Where this capture's image belongs, directories created.
+
+        Shared by every capture flavour so the date-subdirectory, filename
+        and DST-collision rules cannot drift apart between them.
+        """
+        if output_path is not None:
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            return output_path
+
+        output_dir = Path(self.config.get_output_directory())
+
+        # Add date subdirectories if organize_by_date is enabled
+        if self.config.should_organize_by_date():
+            date_subdir = timestamp.strftime(self.config.get_date_format())
+            output_dir = output_dir / date_subdir
+            logger.debug(f"Date-organized directory: {output_dir}")
+
+        if self.config.should_create_directories():
+            output_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Output directory: {output_dir}")
+
+        filename = self.config.get_filename_pattern().format(
+            name=self.config.get_project_name(),
+            counter=f"{self._counter:04d}",
+            timestamp=timestamp.isoformat(),
+        )
+        # Support strftime formatting
+        filename = timestamp.strftime(filename)
+        output_path = output_dir / filename
+        if output_path.exists():
+            # Only reachable when local wall time repeats (the DST
+            # fall-back hour): the second pass would silently
+            # overwrite the first. A _dst suffix keeps both files;
+            # the video renderer skips the suffixed name (its
+            # trailing fields no longer parse as a timestamp), so the
+            # repeated hour is absent from the video but not from disk.
+            logger.warning(f"{output_path} already exists; keeping both")
+            output_path = output_path.with_name(f"{output_path.stem}_dst{output_path.suffix}")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        return output_path
+
     def capture(
         self,
         output_path: Optional[str] = None,
         mode: Optional[str] = None,
         extra_metadata: Optional[Dict] = None,
+        save_dng: bool = False,
     ) -> Tuple[str, Optional[str]]:
         """
         Capture an image.
@@ -437,6 +491,11 @@ class ImageCapture:
             output_path: Optional custom output path. If None, uses config pattern.
             mode: Optional light mode (day/night/transition) for overlay display
             extra_metadata: Optional dict of extra metadata to merge (e.g., calculated lux)
+            save_dng: Also write the frame's raw data as ``<image>.dng.tmp``
+                beside the JPEG. Requires initialize_camera(enable_raw=True).
+                The dynamic-range post-process develops or promotes it; the
+                .tmp suffix means a crash leaves nothing that looks like a
+                finished negative.
 
         Returns:
             Tuple of (image_path, metadata_path)
@@ -448,9 +507,6 @@ class ImageCapture:
         logger.debug(f"Starting image capture #{self._counter}")
 
         try:
-            # Prepare output directory
-            output_dir = Path(self.config.get_output_directory())
-
             # One timestamp for the date subdirectory, the filename and the
             # metadata sidecar. Separate now() calls let a frame straddling
             # midnight land in yesterday's directory under today's filename,
@@ -459,45 +515,7 @@ class ImageCapture:
             # DST fall-back hour a naive string repeats, and the database's
             # INSERT OR REPLACE destroyed the first pass's rows.
             timestamp = datetime.now().astimezone()
-
-            # Add date subdirectories if organize_by_date is enabled
-            if self.config.should_organize_by_date():
-                date_subdir = timestamp.strftime(self.config.get_date_format())
-                output_dir = output_dir / date_subdir
-                logger.debug(f"Date-organized directory: {output_dir}")
-
-            if self.config.should_create_directories():
-                output_dir.mkdir(parents=True, exist_ok=True)
-                logger.debug(f"Output directory: {output_dir}")
-
-            # Generate filename
-            if output_path is None:
-                filename = self.config.get_filename_pattern().format(
-                    name=self.config.get_project_name(),
-                    counter=f"{self._counter:04d}",
-                    timestamp=timestamp.isoformat(),
-                )
-                # Support strftime formatting
-                filename = timestamp.strftime(filename)
-                output_path = output_dir / filename
-                if output_path.exists():
-                    # Only reachable when local wall time repeats (the DST
-                    # fall-back hour): the second pass would silently
-                    # overwrite the first. A _dst suffix keeps both files;
-                    # the video renderer skips the suffixed name (its
-                    # trailing fields no longer parse as a timestamp), so the
-                    # repeated hour is absent from the video but not from disk.
-                    logger.warning(f"{output_path} already exists; keeping both")
-                    output_path = output_path.with_name(
-                        f"{output_path.stem}_dst{output_path.suffix}"
-                    )
-            else:
-                output_path = Path(output_path)
-
-            logger.debug(f"Output path: {output_path}")
-
-            # Ensure output directory exists
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path = self._resolve_output_path(timestamp, output_path)
 
             # Use capture_request() to get both image and metadata without blocking
             # This avoids the 20-second delay from capture_metadata() with long exposures
@@ -510,6 +528,10 @@ class ImageCapture:
                 # Save the image
                 request.save("main", str(output_path))
                 logger.info(f"Image captured successfully: {output_path}")
+
+                if save_dng:
+                    request.save_dng(f"{output_path}.dng.tmp")
+                    logger.debug(f"Raw data saved: {output_path}.dng.tmp")
 
                 # Get metadata from request (always, for overlay)
                 metadata_dict = request.get_metadata()
@@ -547,6 +569,133 @@ class ImageCapture:
 
         except Exception as e:
             logger.error(f"Failed to capture image: {e}")
+            raise
+
+    def _capture_at_exposure(self, exposure_us: int, settle_frames_max: int):
+        """One frame after the commanded exposure has actually landed.
+
+        set_controls on a running camera takes effect frames later, so
+        requests are discarded until the sensor reports an ExposureTime
+        within 10% of the command -- whole-line quantisation means an exact
+        match never happens. The cap turns a sensor that never settles into
+        a warning and a slightly-off bracket instead of a stuck loop.
+
+        Returns:
+            Tuple of (frame array, frames discarded while settling)
+        """
+        discarded = 0
+        while True:
+            request = self.picam2.capture_request()
+            try:
+                reported = request.get_metadata().get("ExposureTime", 0)
+                close_enough = abs(reported - exposure_us) <= exposure_us * 0.1
+                if close_enough or discarded >= settle_frames_max:
+                    if not close_enough:
+                        logger.warning(
+                            f"Bracket never settled: commanded {exposure_us}us, sensor "
+                            f"reports {reported}us after {discarded} discarded frames"
+                        )
+                    return request.make_array("main"), discarded
+                discarded += 1
+            finally:
+                request.release()
+
+    def capture_bracketed(
+        self,
+        bracket_exposures_us: list,
+        fuse_fn: Callable[[list], bytes],
+        mode: Optional[str] = None,
+        extra_metadata: Optional[Dict] = None,
+        settle_frames_max: int = 10,
+    ) -> Tuple[str, Optional[str]]:
+        """Capture a bracket of exposures and save their fusion as the frame.
+
+        The base exposure -- the one the exposure loop commanded -- comes
+        first: its lores metrics and metadata are the frame's, so metering,
+        lux and the database keep describing the exposure that was actually
+        decided, untouched by fusion. The remaining brackets only differ in
+        ExposureTime; gain is never changed mid-bracket.
+
+        fuse_fn turns the list of frame arrays into encoded JPEG bytes.
+        Injected so this module needs neither cv2 nor Pillow -- the caller
+        (the dynrange package) owns the pixel mathematics.
+
+        Args:
+            bracket_exposures_us: Exposure times in microseconds, base first
+            fuse_fn: Callable merging the captured arrays into JPEG bytes
+            mode: Light mode, passed through to post-processing
+            extra_metadata: Extra keys merged into the metadata sidecar
+            settle_frames_max: Discard cap per bracket while controls land
+
+        Returns:
+            Tuple of (image_path, metadata_path)
+        """
+        if self.picam2 is None:
+            logger.error("Camera not initialized. Call initialize_camera() first.")
+            raise RuntimeError("Camera not initialized. Call initialize_camera() first.")
+        if len(bracket_exposures_us) < 2:
+            raise ValueError("capture_bracketed needs at least two exposures")
+
+        logger.debug(
+            f"Starting bracketed capture #{self._counter}: "
+            f"{[int(e) for e in bracket_exposures_us]}us"
+        )
+        self.last_settle_frames = []
+
+        try:
+            # Same timestamp discipline as capture(): one clock reading for
+            # directory, filename and sidecar.
+            timestamp = datetime.now().astimezone()
+            output_path = self._resolve_output_path(timestamp)
+
+            # Base shot first, straight off the already-settled camera.
+            request = self.picam2.capture_request()
+            try:
+                self.last_brightness_metrics = self._compute_brightness_from_lores(request)
+                frames = [request.make_array("main")]
+                metadata_dict = request.get_metadata()
+            finally:
+                request.release()
+
+            for exposure_us in bracket_exposures_us[1:]:
+                self.update_controls({"ExposureTime": int(exposure_us)})
+                frame, discarded = self._capture_at_exposure(int(exposure_us), settle_frames_max)
+                frames.append(frame)
+                self.last_settle_frames.append(discarded)
+
+            encoded = fuse_fn(frames)
+            bracket_count = len(frames)
+            # Release ~25 MB per 4K bracket before post-processing decodes
+            # the JPEG on top of them.
+            del frames
+
+            with open(output_path, "wb") as f:
+                f.write(encoded)
+            logger.info(
+                f"Image captured successfully: {output_path} ({bracket_count} brackets fused)"
+            )
+
+            if extra_metadata:
+                metadata_dict.update(extra_metadata)
+
+            metadata_path = None
+            if self.config.should_save_metadata():
+                metadata_path = self._save_metadata_from_dict(output_path, metadata_dict, timestamp)
+                logger.debug(f"Metadata saved: {metadata_path}")
+
+            if self.post_process is not None and metadata_dict is not None:
+                logger.debug(f"Post-processing {output_path} (mode: {mode})...")
+                if self.post_process(str(output_path), metadata_dict, mode):
+                    logger.debug("Post-processing applied")
+                else:
+                    logger.warning("Post-processing returned nothing")
+
+            self._counter += 1
+
+            return str(output_path), metadata_path
+
+        except Exception as e:
+            logger.error(f"Failed to capture bracketed image: {e}")
             raise
 
     def _save_metadata_from_dict(

@@ -80,6 +80,7 @@ CAPTURES_DDL = """
         lux REAL,
         mode TEXT,
         sun_elevation REAL,
+        dr_method TEXT,
 
         -- Brightness metrics
         brightness_mean REAL,
@@ -239,7 +240,7 @@ class CaptureDatabase:
         SCHEMA_VERSION: Current database schema version
     """
 
-    SCHEMA_VERSION = 6  # Bumped for the memory, disk, uptime, RSS and network columns
+    SCHEMA_VERSION = 7  # Bumped for the dynamic-range method column
 
     # Migration definitions: version -> (description, SQL statements)
     MIGRATIONS = {
@@ -325,6 +326,17 @@ class CaptureDatabase:
                 # merely recording it.
                 "ALTER TABLE captures ADD COLUMN network_up INTEGER",
                 "ALTER TABLE captures ADD COLUMN network_signal_dbm INTEGER",
+            ],
+        ),
+        7: (
+            "Add dr_method column for the dynamic-range trial",
+            [
+                # Which dynamic_range method produced each frame, so trial
+                # periods can be compared with a WHERE clause instead of
+                # cross-referencing config-change timestamps against frame
+                # times. TEXT with a handful of distinct values; no index,
+                # per migration 5's arithmetic.
+                "ALTER TABLE captures ADD COLUMN dr_method TEXT",
             ],
         ),
     }
@@ -526,6 +538,7 @@ class CaptureDatabase:
                 "lux": lux,
                 "mode": mode,
                 "sun_elevation": sun_elevation,
+                "dr_method": metadata.get("dr_method"),
                 "brightness_mean": b.get("mean_brightness"),
                 "brightness_median": b.get("median_brightness"),
                 "brightness_std": b.get("std_brightness"),

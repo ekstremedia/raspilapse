@@ -125,8 +125,16 @@ class Meter:
         self._contrast_high = target_config.get("contrast_threshold_high", 40)
 
         # Highlight protection. See highlight_factor.
+        #
+        # Under exposure fusion the default flips off: protection exists to
+        # buy highlight headroom by underexposing (its floor is worth about
+        # half a stop), and fusion's under-bracket buys two full stops of the
+        # same headroom without darkening the base frame. Metering the base
+        # honestly at target is what keeps fused mid-tones where the ladder
+        # expects them. An explicit `enabled:` in the config still wins.
         protection = adaptive.get("highlight_protection", {})
-        self._p95_enabled = protection.get("enabled", True)
+        fusion_active = (adaptive.get("dynamic_range", {}) or {}).get("method") == "fusion"
+        self._p95_enabled = protection.get("enabled", not fusion_active)
         self._p95_safe = protection.get("safe_p95", 200)
         self._p95_warning = protection.get("warning_p95", 220)
         self._p95_critical = protection.get("critical_p95", 240)

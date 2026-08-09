@@ -28,10 +28,9 @@ OUT_DIR = Path(__file__).parent / "sequences"
 # read from config/config.yml so the fixtures stay reproducible when that file
 # is edited -- and because config.yml is gitignored and holds API keys.
 #
-# hdr.enabled is false here on purpose: _apply_hdr's output depends on whether
-# libcamera exposes HdrModeEnum, which differs between a Pi 4 and a Pi 5. A
-# golden file that changes with the host it runs on is worthless. HDR is
-# covered by a unit test instead.
+# The stored sequence files still carry a dead "hdr" key in their configs from
+# when they were recorded; ExposureController ignores unknown keys, so they
+# replay unchanged.
 REPLAY_CONFIG = {
     "location": {
         "latitude": 68.7,
@@ -85,7 +84,6 @@ REPLAY_CONFIG = {
             "lux_change_threshold": 3,
             "ev_safety_clamp_enabled": True,
         },
-        "hdr": {"enabled": False, "day_mode": "SingleExposure", "night_mode": "Off"},
         "brightness_target": {
             "base": 120,
             "overcast_boost": 15,

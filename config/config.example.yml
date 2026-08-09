@@ -50,6 +50,11 @@ adaptive_timelapse:
   # darker; an overcast-sky boost is added on top automatically.
   brightness_target:
     base: 120
+  # High-contrast scenes (bright sky, dark ground) can get more range than
+  # one exposure holds: see dynamic_range in docs/CONFIG-REFERENCE.yml and
+  # compare the methods on your own scene with `raspilapse-drtest`.
+  # dynamic_range:
+  #   method: fusion
 
 video:
   # The 05:00 timer renders yesterday (05:00 -> 05:00) into this directory.

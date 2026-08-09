@@ -183,8 +183,14 @@ Symptoms and the setting to reach for:
 | Brightness oscillating frame to frame | lower `brightness_damping` |
 | Slow to recover after a light change | raise `brightness_damping`, or the ramp speeds |
 | Blown-out skies | lower `highlight_protection.min_scale` (or check it wasn't disabled) |
+| Shadows crushed against a bright sky | `dynamic_range.method: fusion`, then tune `fusion.ev_spread` |
 | Colour shifting between frames | lower `wb_transition_speed` |
 | Daylight colour drifting over days | set `day_mode.fixed_colour_gains` |
+
+Highlight protection and crushed shadows are two faces of one limit: a single
+exposure per frame. The `adaptive_timelapse.dynamic_range` block (see
+CONFIG-REFERENCE.yml) is the way past it — exposure fusion captures the ends
+of the range in their own brackets instead of trading one against the other.
 
 Watch what it is actually doing:
 
