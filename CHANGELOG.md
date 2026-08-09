@@ -12,9 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `adaptive_timelapse.day_mode.wb_feedback` — a closed-loop trim on the day
   white point, off by default. Every day frame's lores buffer already holds
   the U/V chroma planes; near-neutral pixels (grey cloud, grey water) are
-  selected there and the day gains are nudged, well under 1% per frame and
-  clamped to ±`max_trim` around the configured anchor, toward whatever makes
-  them render grey. Fixed gains alone cannot do this: libcamera swaps its
+  selected there and the day gains are nudged toward whatever makes them
+  render grey — about 0.1% per frame against a real cast at the default
+  strength, at most ~3.5% against a reading the 2:1 input clamp has already
+  flagged as broken, and never past ±`max_trim` around the configured
+  anchor. Fixed gains alone cannot do this: libcamera swaps its
   colour matrix as the colour temperature implied by the manual gains moves,
   so the same gains render differently in different weather — measured live,
   one fixed white point rendered overcast grey as khaki while a 16% red-gain

@@ -166,8 +166,11 @@ closed loop trims the daylight white point around it, steered by what the
 frames actually render. Every day frame's lores stream is scanned for
 near-neutral pixels — overcast cloud, grey water, the scene's own grey card —
 and the trim steps toward whatever makes them render grey, clamped to
-`max_trim` (default ±12%) around the anchor and moving well under 1% per
-frame, far below the cross-fade's own smoothing.
+`max_trim` (default ±12%) around the anchor. A single step is the measured
+ratio raised to `strength`: at the defaults, a real weather cast of a few
+percent moves the trim about 0.1% per frame, and even a broken reading —
+the input is clamped at 2:1 — cannot move it more than ~3.5%, still below
+the cross-fade's own smoothing.
 
 The loop exists because a better fixed number cannot: libcamera infers a
 colour temperature from the manual gains and swaps its colour matrix as that
