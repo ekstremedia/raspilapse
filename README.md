@@ -8,6 +8,10 @@
 
 A Python library for creating timelapses with Raspberry Pi Camera. Supports adaptive day/night exposure, image overlays, and optimized long exposures up to 20 seconds.
 
+![Day to night transition in Spjutvika, Norway — sunset into long-exposure night](demo_images/day_to_night_01.gif)
+
+*Day-to-night transition from a production camera in Spjutvika, Norway: adaptive exposure ramps from daylight sunset into long-exposure night.*
+
 ## Requirements
 
 - Raspberry Pi (any model with CSI port)
