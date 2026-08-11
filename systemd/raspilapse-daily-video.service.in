@@ -1,0 +1,63 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Daily Timelapse Video Generation
+Documentation=https://github.com/ekstremedia/raspilapse
+After=network.target
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=@PYTHON@ -m raspilapse.cli.daily
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raspilapse-daily-video
+
+Environment="PYTHONUNBUFFERED=1"
+RemainAfterExit=no
+
+# Encoding a day of 4K frames takes ~25 minutes; 4h is ~10x that. Not
+# infinity: a Type=oneshot start that never returns never *fails* either --
+# the next morning's timer merges into the still-"activating" job, so one
+# wedged ffmpeg silently ends daily videos forever. (The renderer also caps
+# its own ffmpeg at 3h; this is the backstop.)
+TimeoutStartSec=4h
+
+# ...but never at the expense of the capture loop, which runs every 30s.
+Nice=10
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+# Nice alone does not hold back a multi-threaded encode: three x264 threads at
+# nice 10 still crowd out one capture process. CPUWeight is the cgroup-level
+# version of the same intent, and costs nothing while the machine is otherwise
+# idle at 05:00.
+CPUWeight=20
+
+# A backstop, not a fix for anything observed. Measured on this camera's 4K
+# frames: 1021 MB at the current veryfast/crf20/3-thread settings, against
+# 1399 MB for the fast/crf25/2-thread config that preceded them. Nothing has
+# ever come near OOM. This is here so a future change (someone setting
+# preset: slow, a filter wedging) degrades slowly instead of taking the
+# capture loop down with it. MemoryHigh throttles and reclaims; MemoryMax is
+# the kill line, well clear of the real peak.
+#
+# NOTE: Raspberry Pi OS ships with the memory cgroup controller disabled, so on
+# a stock Pi these two are accepted by systemd and then silently do nothing --
+# `cat /proc/cgroups` shows no memory row and `systemctl show -p MemoryMax`
+# reports infinity. To actually arm them, append to /boot/firmware/cmdline.txt
+# (one line, no newlines) and reboot:
+#
+#     cgroup_enable=memory cgroup_memory=1
+#
+# They are left here regardless: they are correct, they cost nothing when
+# inert, and they take effect the moment the controller is enabled. CPUWeight
+# above needs only the cpu controller, which IS enabled by default, so the
+# protection that matters day to day is already live.
+MemoryAccounting=yes
+MemoryHigh=1800M
+MemoryMax=2400M
+
+# No [Install] section on purpose. This service is triggered by
+# raspilapse-daily-video.timer; without [Install] it cannot be enabled at all,
+# which is exactly the intent.

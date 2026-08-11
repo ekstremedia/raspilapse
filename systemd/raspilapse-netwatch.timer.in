@@ -1,0 +1,18 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Network Watchdog Timer
+Documentation=https://github.com/ekstremedia/raspilapse
+# No Requires= here on purpose: a timer already starts the service of the same
+# name. Adding Requires= makes systemd pull the service in the moment the
+# *timer* starts, i.e. immediately on every boot.
+
+[Timer]
+# Let the wifi associate normally after a boot before judging it.
+OnBootSec=3min
+# Two minutes, against an outage that lasted eight and a half hours. With
+# GRACE_CHECKS=2 nothing is touched for the first ~4 minutes, so an access
+# point rebooting rides out untouched, and the full ladder is spent by ~12.
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

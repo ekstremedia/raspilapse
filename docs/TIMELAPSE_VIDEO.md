@@ -1,10 +1,11 @@
 # Timelapse Video Generation
 
-Generate timelapse videos from captured images using the `make_timelapse.py` script.
+Generate timelapse videos from captured images with
+`python3 -m raspilapse.cli.timelapse`.
 
 ## Overview
 
-The timelapse video generator (`src/make_timelapse.py`) creates smooth timelapse videos from images captured by the Raspilapse system. It supports:
+The timelapse video generator (`raspilapse/video/timelapse.py`) creates smooth timelapse videos from images captured by the Raspilapse system. It supports:
 
 - **Time-based selection** - Select images by start/end time
 - **Automatic file finding** - Searches date-organized directories
@@ -20,35 +21,35 @@ The timelapse video generator (`src/make_timelapse.py`) creates smooth timelapse
 Create a 24-hour timelapse using default times from config (05:00 yesterday to 05:00 today):
 
 ```bash
-python3 src/make_timelapse.py
+python3 -m raspilapse.cli.timelapse
 ```
 
 ### Common Examples
 
 ```bash
 # Default: uses config times (05:00 yesterday to 05:00 today)
-python3 src/make_timelapse.py
+python3 -m raspilapse.cli.timelapse
 
 # Custom time range (20:00 yesterday to 08:00 today)
-python3 src/make_timelapse.py --start 20:00 --end 08:00
+python3 -m raspilapse.cli.timelapse --start 20:00 --end 08:00
 
 # Same-day timelapse (07:00 to 15:00 today)
-python3 src/make_timelapse.py --start 07:00 --end 15:00 --today
+python3 -m raspilapse.cli.timelapse --start 07:00 --end 15:00 --today
 
 # Specific date range
-python3 src/make_timelapse.py --start 07:00 --end 15:00 --start-date 2025-12-24 --end-date 2025-12-25
+python3 -m raspilapse.cli.timelapse --start 07:00 --end 15:00 --start-date 2025-12-24 --end-date 2025-12-25
 
 # Test with first 100 images only
-python3 src/make_timelapse.py --limit 100
+python3 -m raspilapse.cli.timelapse --limit 100
 
 # Custom framerate (30 fps instead of 25)
-python3 src/make_timelapse.py --fps 30
+python3 -m raspilapse.cli.timelapse --fps 30
 
 # Custom output filename
-python3 src/make_timelapse.py --output my_timelapse.mp4
+python3 -m raspilapse.cli.timelapse --output my_timelapse.mp4
 
 # Use custom config file
-python3 src/make_timelapse.py -c config/custom.yml
+python3 -m raspilapse.cli.timelapse -c config/custom.yml
 ```
 
 ## Configuration
@@ -62,16 +63,13 @@ video:
 
   # Create subdirectories by date (YEAR/MONTH structure)
   # When enabled, videos are organized as: directory/YYYY/MM/filename.mp4
-  # Example: /var/www/html/videos/2025/12/kringelen_nord_daily_2025-12-23.mp4
+  # Example: /var/www/html/videos/2025/12/kringelen_2025-12-22_0500_to_2025-12-23_0500.mp4
   organize_by_date: true
 
   # Date format for subdirectories (if organize_by_date is true)
   # %Y = 4-digit year, %m = 2-digit month
   date_format: "%Y/%m"
 
-  # Video filename pattern
-  # Available placeholders: {name}, {start_date}, {end_date}
-  filename_pattern: "{name}_{start_date}_to_{end_date}.mp4"
 
   # Video codec settings
   codec:
@@ -82,19 +80,19 @@ video:
     # Pixel format (yuv420p for maximum compatibility)
     pixel_format: "yuv420p"
 
-    # Preset for libx264 (affects speed vs quality vs memory)
-    # ultrafast = fastest, lowest memory, acceptable quality
-    # fast = good balance
-    # slow = best quality, highest memory (may OOM on 4K)
-    preset: "ultrafast"
+    # Preset for libx264. A preset does not set quality -- crf does. A faster
+    # preset reaches the same crf with a bigger file, and at 4K the cost is
+    # dominated by decode, scale and deflicker rather than bitrate, so a
+    # slower preset buys very little.
+    preset: "veryfast"
 
-    # Thread count (lower = less memory, slower encoding)
-    # 2 = safe for Pi with 4GB RAM doing 4K
-    threads: 2
+    # Thread count. 3 on a 4-core Pi leaves a core for the capture loop;
+    # 4 measured no faster here because the job is decode-bound.
+    threads: 3
 
     # Constant Rate Factor (0-51, lower = better quality)
-    # 18 = visually lossless, 23 = good quality, 28 = acceptable
-    crf: 23
+    # 18 = visually lossless, 20 = keeps 4K detail, 23 = good, 28 = acceptable
+    crf: 20
 
   # Frame rate (frames per second)
   # 25 fps = smooth European standard
@@ -130,14 +128,19 @@ video:
 ## Command-Line Arguments
 
 ```
-python3 src/make_timelapse.py [OPTIONS]
+python3 -m raspilapse.cli.timelapse [OPTIONS]
 
 Time Selection:
-  --start TIME        Start time in HH:MM format (default: from config or 05:00)
-  --end TIME          End time in HH:MM format (default: from config or 05:00)
+  --start TIME        Start time in HH:MM (default: video.default_start_time, 05:00)
+  --end TIME          End time in HH:MM (default: video.default_end_time, 05:00)
   --start-date DATE   Start date in YYYY-MM-DD format (default: auto-determined)
   --end-date DATE     End date in YYYY-MM-DD format (default: today)
   --today             Both start and end on today's date
+
+Output:
+  -hd, --hd           Scale output to 1080p (1920x1080)
+  -hw, --hw           Hardware H264 encoder (h264_v4l2m2m). Requires -hd: it
+                      cannot encode above 1920x1080 and the run fails without it.
 
 Optional:
   --limit N           Limit to first N images (0 = all, for testing)
@@ -149,7 +152,8 @@ Optional:
   --slitscan          Also generate slitscan image (full-width time-progression image)
   -c, --config FILE   Path to config file (default: config/config.yml)
 
-Keogram/Slitscan Options (standalone create_keogram.py):
+Keogram/Slitscan Options (standalone `python3 -m raspilapse.video.keogram`,
+which also needs --dir <image directory>):
   --crop-top PERCENT  Percentage to crop from top (default: 7% for overlay bar)
   --crop-bottom PCT   Percentage to crop from bottom (default: 0%)
   --no-crop           Disable automatic top cropping
@@ -183,55 +187,22 @@ The script searches for images:
 Uses `ffmpeg` to create the video:
 1. Creates temporary file list of all images
 2. Runs `ffmpeg` with concat demuxer
-3. Applies codec settings (H.264, CRF 20, yuv420p)
+3. Applies codec settings (H.264, CRF 25, yuv420p)
 4. Generates video at specified frame rate
 5. Saves to configured output directory
 
 ### 4. Output
 
-Example output:
+Example output, abridged (the tool prints sectioned progress with the same
+facts):
 
 ```
-══════════════════════════════════════════════════════════════════════
-  TIMELAPSE VIDEO GENERATOR
-══════════════════════════════════════════════════════════════════════
-
-Time Range
-──────────────────────────────────────────────────────────────────────
-  Start: 2025-11-05 20:00
-  End: 2025-11-06 08:00
-  Duration: 12.0 hours
-
-Configuration
-──────────────────────────────────────────────────────────────────────
-  Image directory: /var/www/html/images
-  Project name: kringelen
-  Video settings: 25 fps, libx264, CRF 20
-
-Searching for Images
-──────────────────────────────────────────────────────────────────────
-  Found 1440 images
-  First: kringelen_2025_11_05_20_00_18.jpg
-  Last:  kringelen_2025_11_06_07_59_55.jpg
-
-Generating Video
-──────────────────────────────────────────────────────────────────────
-  Images: 1440 frames
-  Frame rate: 25 fps
-  Codec: libx264 (CRF 20)
-  Pixel format: yuv420p
-  Video duration: 57.6s (0.96 minutes)
-
-Processing video with ffmpeg...
-   (This may take a few minutes for large timelapses)
-
-Video created successfully!
-  Output file: videos/kringelen_2025-11-05_to_2025-11-06.mp4
-  File size: 98.63 MB
-
-══════════════════════════════════════════════════════════════════════
-  TIMELAPSE VIDEO CREATED SUCCESSFULLY
-══════════════════════════════════════════════════════════════════════
+Time Range:      2025-11-05 20:00 -> 2025-11-06 08:00  (12.0 hours)
+Searching:       Found 1440 images
+Generating:      1440 frames, 25 fps, libx264 (CRF 20, preset veryfast, 3 threads)
+                 Deflicker: enabled (size=10 frames)
+Video duration:  57.6s (0.96 minutes)
+Output file:     videos/2025/11/kringelen_2025-11-05_2000_to_2025-11-06_0800.mp4
 ```
 
 ## Output Files
@@ -300,7 +271,7 @@ To test video generation quickly without processing all images:
 
 ```bash
 # Generate video from first 50 images only
-python3 src/make_timelapse.py --start 20:00 --end 08:00 --limit 50
+python3 -m raspilapse.cli.timelapse --start 20:00 --end 08:00 --limit 50
 ```
 
 This is useful for:
@@ -311,49 +282,17 @@ This is useful for:
 
 ## Performance
 
-### Processing Time
+### Processing time and memory
 
-Approximate processing time on Raspberry Pi 4/5:
-
-**1080p (1920x1080) with default settings:**
-| Images | Duration | Processing Time |
-|--------|----------|----------------|
-| 100    | 4s       | ~10 seconds    |
-| 500    | 20s      | ~45 seconds    |
-| 1440   | 58s      | ~2-3 minutes   |
-| 2880   | 115s     | ~5-6 minutes   |
-
-**4K (3840x2160) with ultrafast preset, 2 threads:**
-| Images | Duration | Processing Time |
-|--------|----------|----------------|
-| 100    | 4s       | ~2 minutes     |
-| 500    | 20s      | ~10 minutes    |
-| 1440   | 58s      | ~30 minutes    |
-| 2880   | 115s     | ~60-90 minutes |
+Measured on this camera (Pi 4, 4 GB): a full 4K day — ~2880 frames at
+veryfast / crf 20 / 3 threads — encodes in about 25 minutes, peaking around
+1.0 GB RSS; 1080p takes a few minutes. The systemd unit runs the encode at
+Nice=10 with idle I/O scheduling, so the capture loop never competes with it.
 
 ### File Sizes
 
-Expected output file sizes (CRF 23, 25 fps, ultrafast preset):
-
-| Resolution | Video Duration | Images | File Size |
-|------------|---------------|--------|-----------|
-| 1080p      | 1 minute      | 1500   | ~100 MB   |
-| 1080p      | 2 minutes     | 3000   | ~200 MB   |
-| 4K         | 1 minute      | 1500   | ~300 MB   |
-| 4K         | 2 minutes     | 3000   | ~600 MB   |
-
-### Memory Usage
-
-4K encoding requires significant RAM. Use these settings to avoid OOM:
-
-```yaml
-video:
-  codec:
-    preset: "ultrafast"  # ~500MB RAM
-    threads: 2           # Limits parallel memory usage
-```
-
-With these settings, 4K encoding uses ~1-1.5GB RAM (safe for 4GB Pi).
+At 4K / crf 20 a full day (~2880 frames, ~1m55s at 25 fps) lands around
+400-600 MB depending on scene detail; 1080p is roughly a quarter of that.
 
 ## Troubleshooting
 
@@ -387,13 +326,8 @@ With these settings, 4K encoding uses ~1-1.5GB RAM (safe for 4GB Pi).
 - Service fails with "exit-code" status
 
 **Solutions:**
-1. **Use memory-optimized settings** (recommended):
-   ```yaml
-   video:
-     codec:
-       preset: "ultrafast"  # Lowest memory usage
-       threads: 2           # Limit parallel processing
-   ```
+1. **Keep the shipped settings** — `veryfast` / `crf 20` / `threads: 3`
+   measured ~1.0 GB peak on a full 4K day. Still tight? Drop `threads` to 2.
 
 2. **Check current memory**:
    ```bash
@@ -420,9 +354,9 @@ With these settings, 4K encoding uses ~1-1.5GB RAM (safe for 4GB Pi).
 **Problem:** Video quality too low or file too large
 
 **Solutions:**
-- Increase quality: Lower CRF (20 → 18)
-- Reduce file size: Higher CRF (20 → 23)
-- Adjust in config or use custom config file
+- Increase quality: lower `crf` (20 → 18)
+- Reduce file size: raise it (20 → 23)
+- Adjust in config or use a custom config file
 
 ## Advanced Usage
 
@@ -435,13 +369,13 @@ video:
   codec:
     name: "libx265"      # H.265 for better compression
     pixel_format: "yuv420p"
-    crf: 23              # Slightly lower quality, much smaller files
+    crf: 25              # Slightly lower quality, much smaller files
   fps: 30                # Smoother playback
 ```
 
 Then use it:
 ```bash
-python3 src/make_timelapse.py --start 04:00 --end 04:00 -c config/custom.yml
+python3 -m raspilapse.cli.timelapse --start 04:00 --end 04:00 -c config/custom.yml
 ```
 
 ### Batch Processing
@@ -454,29 +388,32 @@ Generate multiple timelapses:
 
 for day in {0..6}; do
     date=$(date -d "$day days ago" +%Y-%m-%d)
-    python3 src/make_timelapse.py \
+    python3 -m raspilapse.cli.timelapse \
         --start 00:00 --end 23:59 \
         --output "daily_${date}.mp4"
 done
 ```
 
-### Scheduling with Cron
+### Scheduling
 
-Generate daily timelapse at 04:00:
+Don't. `raspilapse-daily-video.timer` already does this — installed by
+`./scripts/install.sh`, firing at 05:00 (plus up to 5 minutes of deliberate
+jitter), covering 05:00 yesterday to 05:00 today so a night's captures land
+in one video rather than being split across two.
+`systemctl list-timers 'raspilapse-*'` shows when it next runs.
 
-```bash
-# Edit crontab
-crontab -e
+### Retention
 
-# Add line:
-0 4 * * * cd /home/pi/raspilapse && python3 src/make_timelapse.py --start 04:00 --end 04:00
-```
+Videos, keograms and slitscans older than `video.retention_days` are deleted
+by the 02:00 cleanup timer (`python3 -m raspilapse.cli.prune_videos`;
+`--dry-run` to preview). 0 — the default — keeps everything. A file is never
+deleted while the upload queue holds it in any state other than `success`.
 
 ## Integration with Raspilapse
 
 The timelapse generator integrates with the main Raspilapse system:
 
-1. **Images** - Uses images from `auto_timelapse.py` captures
+1. **Images** - Uses the capture daemon's frames (`raspilapse.cli.capture`)
 2. **Config** - Shares same `config/config.yml` file
 3. **Logging** - Uses same logging configuration
 4. **Naming** - Uses project name from config
@@ -485,22 +422,32 @@ The timelapse generator integrates with the main Raspilapse system:
 
 ### Video Specifications
 
-Default output video:
+Output video, as the shipped example configures it:
 - **Codec:** H.264 (libx264)
 - **Pixel Format:** yuv420p (maximum compatibility)
-- **CRF:** 20 (excellent quality)
+- **CRF:** 20 (`video.codec.crf`; also the code's fallback when the key is
+  absent)
 - **Frame Rate:** 25 fps
-- **Resolution:** Matches source images (1920x1080)
+- **Resolution:** matches the source images — 3840x2160 with the example
+  `camera.resolution`
 
 ### ffmpeg Command
 
 The script generates an ffmpeg command like:
 
 ```bash
-ffmpeg -f concat -safe 0 -i /tmp/images.txt \
-    -r 25 -vcodec libx264 -pix_fmt yuv420p -crf 20 \
-    -y output.mp4
+ffmpeg -stats -loglevel info \
+    -r 25 -f concat -safe 0 -i /tmp/images.txt \
+    -vcodec libx264 -pix_fmt yuv420p \
+    -preset veryfast -threads 3 -crf 20 \
+    -vf deflicker=mode=pm:size=10 \
+    -movflags +faststart -y output.mp4
 ```
+
+`-r` sits **before** `-i` on purpose: there it declares the rate the input is
+read at, so frames in equals frames out. After `-i` it is an output option,
+and against a concat input that becomes a constant-rate conversion that
+duplicates or drops frames.
 
 ### Image List Format
 
@@ -529,22 +476,22 @@ A keogram displays an entire day's sky in a single image:
 
 By default, keograms crop 7% from the top to remove the overlay bar:
 - 7% of 2160px (4K) = 151px cropped
-- This removes the timestamp/camera info overlay
+- That clears the text; the last ~20px of the bar's fade survives the crop
 
 ### Standalone Keogram Generation
 
 ```bash
 # Create keogram from a day's images
-python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/
+python3 -m raspilapse.video.keogram --dir /var/www/html/images/2025/12/24/
 
 # Custom output location
-python3 src/create_keogram.py --dir /path/to/images --output keogram.jpg
+python3 -m raspilapse.video.keogram --dir /path/to/images --output keogram.jpg
 
 # Adjust crop (e.g., larger overlay)
-python3 src/create_keogram.py --dir /path/to/images --crop-top 10
+python3 -m raspilapse.video.keogram --dir /path/to/images --crop-top 10
 
 # No cropping (include overlay in keogram)
-python3 src/create_keogram.py --dir /path/to/images --no-crop
+python3 -m raspilapse.video.keogram --dir /path/to/images --no-crop
 ```
 
 ### Keogram Output
@@ -574,7 +521,7 @@ For example, with 1920px wide images and 960 frames:
 
 ```bash
 # Create video with both keogram and slitscan
-python3 src/make_timelapse.py --slitscan
+python3 -m raspilapse.cli.timelapse --slitscan
 
 # The slitscan is optional - by default only keogram is generated
 ```
@@ -583,13 +530,13 @@ python3 src/make_timelapse.py --slitscan
 
 ```bash
 # Create slitscan from a day's images
-python3 src/create_keogram.py --dir /var/www/html/images/2025/12/24/ --slitscan
+python3 -m raspilapse.video.keogram --dir /var/www/html/images/2025/12/24/ --slitscan
 
 # Custom output location
-python3 src/create_keogram.py --dir /path/to/images --slitscan --output slitscan_custom.jpg
+python3 -m raspilapse.video.keogram --dir /path/to/images --slitscan --output slitscan_custom.jpg
 
 # No cropping (include overlay in slitscan)
-python3 src/create_keogram.py --dir /path/to/images --slitscan --no-crop
+python3 -m raspilapse.video.keogram --dir /path/to/images --slitscan --no-crop
 ```
 
 ### Slitscan Output
@@ -599,14 +546,14 @@ Slitscans are saved alongside videos and keograms:
 
 ### Daily Timelapse with Slitscan
 
-The daily timelapse service (`src/daily_timelapse.py`) automatically generates slitscan along with keogram and uploads both to the server:
+The daily timelapse service (`raspilapse/video/daily.py`) automatically generates slitscan along with keogram and uploads both to the server:
 
 ```bash
 # Manual run (slitscan is generated by default)
-python3 src/daily_timelapse.py
+python3 -m raspilapse.cli.daily
 
 # Dry run to see what would be done
-python3 src/daily_timelapse.py --dry-run
+python3 -m raspilapse.cli.daily --dry-run
 ```
 
 The upload sends:
@@ -616,6 +563,6 @@ The upload sends:
 
 ## See Also
 
-- [CLAUDE.md](CLAUDE.md) - Main project documentation
-- [ADAPTIVE_TIMELAPSE_FLOW.md](ADAPTIVE_TIMELAPSE_FLOW.md) - Adaptive timelapse flow
-- [config/config.yml](config/config.yml) - Full configuration reference
+- [../README.md](../README.md) - Project overview
+- [EXPOSURE.md](EXPOSURE.md) - Exposure control and transitions
+- [docs/CONFIG-REFERENCE.yml](CONFIG-REFERENCE.yml) - Full configuration reference

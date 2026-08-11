@@ -1,17 +1,17 @@
 """Tests for auto_timelapse module."""
 
+import json
 import os
+import re
 import tempfile
+import time
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 import yaml
 
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.auto_timelapse import AdaptiveTimelapse, LightMode
+from raspilapse.daemon import AdaptiveTimelapse, LightMode
 
 
 @pytest.fixture
@@ -262,82 +262,6 @@ class TestAdaptiveTimelapse:
             os.unlink(test_image)
             os.rmdir(temp_dir)
 
-    def test_determine_light_mode(self, test_config_file):
-        """Test light mode determination."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Night
-        assert timelapse.determine_mode(5.0) == LightMode.NIGHT
-
-        # Day
-        assert timelapse.determine_mode(500.0) == LightMode.DAY
-
-        # Transition
-        assert timelapse.determine_mode(50.0) == LightMode.TRANSITION
-
-    def test_get_camera_settings_night(self, test_config_file):
-        """Test camera settings for night mode."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.get_camera_settings(LightMode.NIGHT, lux=5.0)
-
-        assert "ExposureTime" in settings
-        assert "AnalogueGain" in settings
-        assert "AeEnable" in settings
-        assert settings["AeEnable"] == 0  # Auto-exposure disabled
-        assert settings["AwbEnable"] == 0  # AWB disabled for night
-
-    def test_get_camera_settings_day(self, test_config_file):
-        """Test camera settings for day mode with smooth exposure transitions."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.get_camera_settings(LightMode.DAY, lux=500.0)
-
-        # Day mode now uses manual exposure with smooth transitions (prevents ISO jumps)
-        # smooth_exposure_in_day_mode defaults to True
-        assert "AeEnable" in settings
-        assert settings["AeEnable"] == 0  # Manual exposure control
-        assert "ExposureTime" in settings  # Calculated exposure
-        assert "AnalogueGain" in settings  # Calculated gain
-        # With smooth_wb_in_day_mode (default True), AWB is disabled
-        # and manual interpolated ColourGains are used instead
-        assert settings["AwbEnable"] == 0
-        assert "ColourGains" in settings
-
-    def test_get_camera_settings_transition(self, test_config_file):
-        """Test camera settings for transition mode."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.get_camera_settings(LightMode.TRANSITION, lux=50.0)
-
-        assert "ExposureTime" in settings
-        assert "AnalogueGain" in settings
-
-        # Transition should have intermediate values
-        night_gain = timelapse.config["adaptive_timelapse"]["night_mode"]["analogue_gain"]
-        assert settings["AnalogueGain"] <= night_gain
-
-    def test_get_camera_settings_transition_long_exposure(self, test_config_file):
-        """Test transition mode always uses manual WB for smooth transitions."""
-        # Add colour_gains to night_mode config
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["adaptive_timelapse"]["night_mode"]["colour_gains"] = [1.8, 1.5]
-
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Test long exposure (>1s) - should use manual WB
-        settings_long = timelapse.get_camera_settings(LightMode.TRANSITION, lux=15.0)
-        assert settings_long["AwbEnable"] == 0  # AWB disabled
-        assert "ColourGains" in settings_long  # Manual gains set
-
-        # Test short exposure (<1s) - should ALSO use manual WB
-        # (smooth transitions always use interpolated manual WB to prevent flickering)
-        settings_short = timelapse.get_camera_settings(LightMode.TRANSITION, lux=98.0)
-        assert settings_short["AwbEnable"] == 0  # AWB always disabled in transition
-        assert "ColourGains" in settings_short  # Interpolated gains used
-
     def test_signal_handler(self, test_config_file):
         """Test signal handler stops the timelapse."""
         timelapse = AdaptiveTimelapse(test_config_file)
@@ -349,8 +273,8 @@ class TestAdaptiveTimelapse:
 
     def test_take_test_shot(self, test_config_file):
         """Test taking a test shot."""
-        import tempfile
         import json
+        import tempfile
 
         # Create metadata file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -359,7 +283,7 @@ class TestAdaptiveTimelapse:
 
         try:
             # Mock ImageCapture class completely
-            with patch("src.auto_timelapse.ImageCapture") as mock_capture_class:
+            with patch("raspilapse.daemon.ImageCapture") as mock_capture_class:
                 # Mock the context manager
                 mock_instance = MagicMock()
                 mock_capture_class.return_value.__enter__.return_value = mock_instance
@@ -401,73 +325,6 @@ class TestAdaptiveTimelapse:
             assert isinstance(lux, float)
             assert lux > 0
 
-    def test_get_camera_settings_night_with_colour_gains(self, test_config_file):
-        """Test night mode applies manual colour gains."""
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["adaptive_timelapse"]["night_mode"]["colour_gains"] = [1.8, 1.5]
-
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.get_camera_settings(LightMode.NIGHT)
-
-        assert "ColourGains" in settings
-        assert settings["ColourGains"] == (1.8, 1.5)
-
-    def test_get_camera_settings_day_manual_exposure(self, test_config_file):
-        """Test day mode with manual exposure."""
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["adaptive_timelapse"]["day_mode"]["exposure_time"] = 0.01  # 10ms
-        config_data["adaptive_timelapse"]["day_mode"]["analogue_gain"] = 1.0
-
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.get_camera_settings(LightMode.DAY)
-
-        assert settings["AeEnable"] == 0  # Manual mode
-        assert "ExposureTime" in settings
-        assert "AnalogueGain" in settings
-
-    def test_get_camera_settings_day_with_brightness(self, test_config_file):
-        """Test day mode brightness adjustment."""
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["adaptive_timelapse"]["day_mode"]["brightness"] = 0.2
-
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.get_camera_settings(LightMode.DAY)
-
-        assert "Brightness" in settings
-        assert settings["Brightness"] == 0.2
-
-    def test_get_camera_settings_transition_no_smooth(self, test_config_file):
-        """Test transition mode without smooth transition."""
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["adaptive_timelapse"]["transition_mode"]["smooth_transition"] = False
-
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        settings = timelapse.get_camera_settings(LightMode.TRANSITION, lux=50.0)
-
-        # Should use fixed middle values
-        assert "ExposureTime" in settings
-        assert settings["ExposureTime"] == int(5.0 * 1_000_000)
-
     def test_close_camera_fast(self, test_config_file):
         """Test fast camera close method."""
         timelapse = AdaptiveTimelapse(test_config_file)
@@ -499,399 +356,6 @@ class TestAdaptiveTimelapse:
         lux = timelapse.calculate_lux("/nonexistent/image.jpg", metadata)
         assert isinstance(lux, float)
         assert lux > 0  # Should return fallback value
-
-
-class TestLuxSmoothing:
-    """Test lux smoothing (EMA) functionality."""
-
-    def test_smooth_lux_first_reading(self, test_config_file):
-        """Test first lux reading initializes smoothed value."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        assert timelapse._smoothed_lux is None
-
-        result = timelapse._smooth_lux(100.0)
-        assert result == 100.0
-        assert timelapse._smoothed_lux == 100.0
-
-    def test_smooth_lux_dampens_spikes(self, test_config_file):
-        """Test that EMA dampens sudden lux spikes."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Initialize with stable reading
-        timelapse._smooth_lux(100.0)
-
-        # Sudden spike should be dampened
-        result = timelapse._smooth_lux(500.0)
-        # With alpha=0.3: 0.3 * 500 + 0.7 * 100 = 150 + 70 = 220
-        assert result < 500.0
-        assert result > 100.0
-
-    def test_smooth_lux_converges(self, test_config_file):
-        """Test that smoothed lux converges to stable value."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        timelapse._smooth_lux(100.0)
-
-        # Apply same value repeatedly - should converge
-        for _ in range(20):
-            result = timelapse._smooth_lux(200.0)
-
-        # Should be very close to 200 after many iterations
-        assert abs(result - 200.0) < 1.0
-
-
-class TestHysteresis:
-    """Test mode change hysteresis."""
-
-    def test_hysteresis_first_mode(self, test_config_file):
-        """Test first mode is accepted immediately."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        result = timelapse._apply_hysteresis("night")
-        assert result == "night"
-        assert timelapse._last_mode == "night"
-
-    def test_hysteresis_same_mode(self, test_config_file):
-        """Test same mode resets counter."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        timelapse._apply_hysteresis("day")
-        timelapse._apply_hysteresis("day")
-        timelapse._apply_hysteresis("day")
-
-        assert timelapse._mode_hold_count == 0
-
-    def test_hysteresis_holds_mode(self, test_config_file):
-        """Test mode change is held until threshold reached."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._hysteresis_frames = 3
-
-        timelapse._apply_hysteresis("night")
-
-        # Request day mode - should be held
-        result1 = timelapse._apply_hysteresis("day")
-        assert result1 == "night"  # Still night
-        assert timelapse._mode_hold_count == 1
-
-        result2 = timelapse._apply_hysteresis("day")
-        assert result2 == "night"  # Still night
-        assert timelapse._mode_hold_count == 2
-
-        result3 = timelapse._apply_hysteresis("day")
-        assert result3 == "day"  # Now day
-        assert timelapse._mode_hold_count == 0
-
-    def test_hysteresis_resets_on_same_mode(self, test_config_file):
-        """Test counter resets when same mode as current is requested."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._hysteresis_frames = 3
-
-        timelapse._apply_hysteresis("night")
-        timelapse._apply_hysteresis("day")  # count=1 (different from night)
-        timelapse._apply_hysteresis("night")  # Same as current - resets counter
-
-        # Counter should reset to 0 when same mode requested
-        assert timelapse._mode_hold_count == 0
-        assert timelapse._last_mode == "night"
-
-    def test_hysteresis_counts_any_different_mode(self, test_config_file):
-        """Test any different mode increments counter."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._hysteresis_frames = 4  # Need 4 frames
-
-        timelapse._apply_hysteresis("night")  # accepted
-        timelapse._apply_hysteresis("day")  # count=1
-        timelapse._apply_hysteresis("transition")  # count=2 (still different from night)
-        timelapse._apply_hysteresis("day")  # count=3
-
-        # Still held at night since threshold not reached
-        assert timelapse._last_mode == "night"
-        assert timelapse._mode_hold_count == 3
-
-
-class TestInterpolation:
-    """Test interpolation methods for smooth transitions."""
-
-    def test_interpolate_colour_gains_first_frame(self, test_config_file):
-        """Test first frame accepts target gains."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        result = timelapse._interpolate_colour_gains((2.0, 1.5))
-        assert result == (2.0, 1.5)
-
-    def test_interpolate_colour_gains_gradual(self, test_config_file):
-        """Test gains change gradually."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        timelapse._interpolate_colour_gains((1.5, 2.0))
-        result = timelapse._interpolate_colour_gains((2.5, 1.0))
-
-        # Should move towards target but not reach it
-        assert result[0] > 1.5 and result[0] < 2.5
-        assert result[1] < 2.0 and result[1] > 1.0
-
-    def test_interpolate_gain_first_frame(self, test_config_file):
-        """Test first frame accepts target gain."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        result = timelapse._interpolate_gain(4.0)
-        assert result == 4.0
-
-    def test_interpolate_gain_gradual(self, test_config_file):
-        """Test gain changes gradually."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        timelapse._interpolate_gain(1.0)
-        result = timelapse._interpolate_gain(6.0)
-
-        assert result > 1.0 and result < 6.0
-
-    def test_interpolate_gain_clamps(self, test_config_file):
-        """Test gain is clamped to valid range."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        timelapse._interpolate_gain(1.0)
-        result = timelapse._interpolate_gain(0.1)  # Below min
-
-        assert result >= 1.0  # Clamped to min
-
-    def test_interpolate_exposure_first_frame(self, test_config_file):
-        """Test first frame accepts target exposure."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        result = timelapse._interpolate_exposure(5.0)
-        assert result == 5.0
-
-    def test_interpolate_exposure_logarithmic(self, test_config_file):
-        """Test exposure uses logarithmic interpolation."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        timelapse._interpolate_exposure(1.0)
-        result = timelapse._interpolate_exposure(10.0)
-
-        # Log interpolation: should be between 1 and 10
-        assert result > 1.0 and result < 10.0
-
-    def test_interpolate_exposure_clamps(self, test_config_file):
-        """Test exposure is clamped to valid range."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        timelapse._interpolate_exposure(1.0)
-        result = timelapse._interpolate_exposure(100.0)  # Above max
-
-        assert result <= 20.0  # Clamped to max
-
-
-class TestBrightnessFeedback:
-    """Test brightness feedback system for smooth transitions."""
-
-    def test_brightness_feedback_initial(self, test_config_file):
-        """Test initial correction factor is 1.0."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        assert timelapse._brightness_correction_factor == 1.0
-
-    def test_brightness_feedback_none_brightness(self, test_config_file):
-        """Test None brightness returns current factor."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        result = timelapse._apply_brightness_feedback(None)
-        assert result == 1.0
-
-    def test_brightness_feedback_within_tolerance(self, test_config_file):
-        """Test brightness within tolerance decays towards 1.0."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._brightness_correction_factor = 1.2  # Above 1.0
-
-        # Brightness within tolerance (120 ± 40)
-        timelapse._apply_brightness_feedback(120.0)
-
-        # Should decay towards 1.0
-        assert timelapse._brightness_correction_factor < 1.2
-
-    def test_brightness_feedback_too_bright(self, test_config_file):
-        """Test correction decreases when image too bright."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Image much too bright (200 vs target 120)
-        timelapse._apply_brightness_feedback(200.0)
-
-        # Correction should decrease (reduce exposure)
-        assert timelapse._brightness_correction_factor < 1.0
-
-    def test_brightness_feedback_too_dark(self, test_config_file):
-        """Test correction increases when image too dark."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Image too dark (50 vs target 120)
-        timelapse._apply_brightness_feedback(50.0)
-
-        # Correction should increase (boost exposure)
-        assert timelapse._brightness_correction_factor > 1.0
-
-    def test_brightness_feedback_clamps(self, test_config_file):
-        """Test correction factor is clamped to valid range."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Apply extreme dark correction repeatedly
-        for _ in range(50):
-            timelapse._apply_brightness_feedback(10.0)
-
-        # Should be clamped to max 4.0
-        assert timelapse._brightness_correction_factor <= 4.0
-
-        # Reset and apply extreme bright correction
-        timelapse._brightness_correction_factor = 1.0
-        for _ in range(50):
-            timelapse._apply_brightness_feedback(250.0)
-
-        # Should be clamped to min 0.25
-        assert timelapse._brightness_correction_factor >= 0.25
-
-
-class TestExposureCalculation:
-    """Test lux-based exposure and gain calculations."""
-
-    def test_calculate_target_exposure_inverse_relationship(self, test_config_file):
-        """Test exposure has inverse relationship with lux."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        exp_low_lux = timelapse._calculate_target_exposure_from_lux(10.0)
-        exp_high_lux = timelapse._calculate_target_exposure_from_lux(1000.0)
-
-        # Higher lux = shorter exposure
-        assert exp_high_lux < exp_low_lux
-
-    def test_calculate_target_exposure_clamps(self, test_config_file):
-        """Test exposure is clamped to config limits."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Very low lux - should clamp to max
-        exp_night = timelapse._calculate_target_exposure_from_lux(0.01)
-        assert exp_night <= 20.0
-
-        # Very high lux - should clamp to min
-        exp_bright = timelapse._calculate_target_exposure_from_lux(10000.0)
-        assert exp_bright >= 0.01
-
-    def test_calculate_target_exposure_applies_correction(self, test_config_file):
-        """Test brightness correction factor is applied."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Get base exposure
-        exp_base = timelapse._calculate_target_exposure_from_lux(100.0)
-
-        # Apply correction factor
-        timelapse._brightness_correction_factor = 2.0
-        exp_corrected = timelapse._calculate_target_exposure_from_lux(100.0)
-
-        # Corrected should be ~2x base (within clamping limits)
-        assert exp_corrected > exp_base
-
-    def test_calculate_target_gain_inverse_relationship(self, test_config_file):
-        """Test gain has inverse relationship with lux."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        gain_low_lux = timelapse._calculate_target_gain_from_lux(1.0)
-        gain_high_lux = timelapse._calculate_target_gain_from_lux(1000.0)
-
-        # Higher lux = lower gain
-        assert gain_high_lux < gain_low_lux
-
-    def test_calculate_target_gain_clamps(self, test_config_file):
-        """Test gain clamps at extremes."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Very low lux - should be night gain
-        gain_night = timelapse._calculate_target_gain_from_lux(0.1)
-        assert gain_night == 6.0  # Night mode gain from config
-
-        # Very high lux - should be day gain
-        gain_day = timelapse._calculate_target_gain_from_lux(10000.0)
-        assert gain_day == 1.0  # Default day gain
-
-
-class TestTargetColourGains:
-    """Test colour gain calculation for different modes."""
-
-    def test_target_colour_gains_night(self, test_config_file):
-        """Test night mode uses night gains."""
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-        config_data["adaptive_timelapse"]["night_mode"]["colour_gains"] = [1.8, 2.0]
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        gains = timelapse._get_target_colour_gains(LightMode.NIGHT)
-
-        assert gains == (1.8, 2.0)
-
-    def test_target_colour_gains_day(self, test_config_file):
-        """Test day mode uses day reference or default."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # No day reference learned yet - should use default
-        gains = timelapse._get_target_colour_gains(LightMode.DAY)
-        assert gains == (2.5, 1.6)  # Default day gains
-
-    def test_target_colour_gains_transition_interpolates(self, test_config_file):
-        """Test transition mode interpolates between night and day."""
-        with open(test_config_file, "r") as f:
-            config_data = yaml.safe_load(f)
-        config_data["adaptive_timelapse"]["night_mode"]["colour_gains"] = [1.0, 3.0]
-        with open(test_config_file, "w") as f:
-            yaml.dump(config_data, f)
-
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._day_wb_reference = (3.0, 1.0)
-
-        # Position 0.5 = midpoint
-        gains = timelapse._get_target_colour_gains(LightMode.TRANSITION, position=0.5)
-
-        # Should be midpoint between night [1.0, 3.0] and day [3.0, 1.0]
-        assert abs(gains[0] - 2.0) < 0.01
-        assert abs(gains[1] - 2.0) < 0.01
-
-
-class TestDayWBReference:
-    """Test day white balance reference learning."""
-
-    def test_update_day_wb_reference_bright(self, test_config_file):
-        """Test WB reference is updated in bright conditions."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        metadata = {
-            "ColourGains": [2.8, 1.5],
-            "Lux": 500,  # Bright enough
-        }
-
-        timelapse._update_day_wb_reference(metadata)
-        assert timelapse._day_wb_reference == (2.8, 1.5)
-
-    def test_update_day_wb_reference_too_dark(self, test_config_file):
-        """Test WB reference not updated when too dark."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        metadata = {
-            "ColourGains": [2.8, 1.5],
-            "Lux": 50,  # Too dark
-        }
-
-        timelapse._update_day_wb_reference(metadata)
-        assert timelapse._day_wb_reference is None
-
-    def test_update_day_wb_reference_invalid_gains(self, test_config_file):
-        """Test WB reference rejects invalid gains."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        metadata = {
-            "ColourGains": [0.5, 5.0],  # Out of valid range
-            "Lux": 500,
-        }
-
-        timelapse._update_day_wb_reference(metadata)
-        assert timelapse._day_wb_reference is None
 
 
 class TestBrightnessAnalysis:
@@ -966,6 +430,484 @@ class TestTimelapseCaptureFlow:
         assert timelapse.frame_count == 3
 
 
+class TestWhiteBalanceWiring:
+    """Which frame each white-balance input is allowed to come from.
+
+    The controller cannot check this for itself -- every value it is handed is
+    a plausible pair of gains -- so it has to be checked here, where the wiring
+    is. Both defects below shipped, and both were visible in the timelapse:
+    a one-frame colour step at dusk, and daylight colour that crept a little
+    every day instead of holding at the configured white point.
+    """
+
+    def test_the_daylight_reference_is_not_learned_from_an_ordinary_frame(self, test_config_file):
+        """An ordinary frame is taken with AWB off, so its ColourGains are the
+        ones the controller just chose. Learning from those makes the reference
+        its own input: it holds wherever it was pushed, and never corrects."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._database = None
+        timelapse.exposure.update_day_wb_reference = MagicMock()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"ColourGains": [2.9, 1.4], "ExposureTime": 10000}, f)
+            metadata_path = f.name
+
+        try:
+            decision = MagicMock()
+            decision.mode = LightMode.DAY
+            timelapse._record(decision, "frame.jpg", metadata_path, None)
+        finally:
+            os.unlink(metadata_path)
+
+        timelapse.exposure.update_day_wb_reference.assert_not_called()
+
+    def test_the_reference_shot_is_where_it_is_learned(self, test_config_file):
+        """The one frame taken with AWB on is the only honest source."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.exposure.update_day_wb_reference = MagicMock()
+        timelapse.take_test_shot = MagicMock(return_value=("shot.jpg", {"ColourGains": [2.2, 1.7]}))
+
+        timelapse._take_reference_shot()
+
+        timelapse.exposure.update_day_wb_reference.assert_called_once_with(
+            {"ColourGains": [2.2, 1.7]}
+        )
+
+    def test_a_reading_the_controller_rejects_does_not_end_the_timelapse(self, test_config_file):
+        """Learning the reference moved into the capture loop, whose only
+        handler is the one that ends the run. A malformed reading should cost
+        the frame's colour and a line in the log, not the timelapse."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse.exposure.update_day_wb_reference = MagicMock(
+            side_effect=ValueError("malformed ColourGains")
+        )
+        timelapse.take_test_shot = MagicMock(return_value=("shot.jpg", {"ColourGains": [2.2]}))
+        timelapse.frame_count = 40
+
+        timelapse._take_reference_shot()
+
+        # Recorded anyway, for the same reason the outer handler records it: a
+        # reading that fails every time must not leave _wants_reference_shot
+        # true and tear the camera down once per frame, forever.
+        assert timelapse._reference_frame == 40
+        assert timelapse._reference_position == timelapse.exposure.ladder_position
+
+    def test_deciding_leaves_the_controller_holding_what_it_decided(self, test_config_file):
+        """Nothing may rewrite the loop's state after decide() has run.
+
+        This is the test that fails if the day-to-transition seeding comes
+        back, in any spelling. _seed_across_mode_change ran immediately after
+        decide() and overwrote _required from the last daylight frame's camera
+        metadata -- whose AnalogueGain is the sensor's 1.1228 floor while the
+        ladder had commanded 1.0. The settings handed to the camera therefore
+        described one exposure and the controller's state described another
+        1.12x larger, and the next frame started from the wrong one. Nine
+        consecutive dusks in this camera's database show the resulting step:
+        200 043 -> 224 519 us, +8 to +11 points of mean brightness.
+
+        Asserting the equality rather than the absence catches a reseed however
+        it is written -- including one that does not go through a function
+        named `seed_*`.
+        """
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._database = None
+
+        # Walk down through the knee so a crossing actually happens, and check
+        # the invariant on every frame rather than only the one that flips.
+        knee = timelapse.exposure._max_shutter * 0.01
+        seen = set()
+        for _ in range(60):
+            decision = timelapse._decide()
+            seen.add(decision.mode)
+
+            settings = decision.settings
+            delivered = (settings["ExposureTime"] / 1e6) * settings["AnalogueGain"]
+            # abs=1e-5 is the floor, not slack: ExposureTime is int(shutter *
+            # 1e6), so the delivered product is quantised to a microsecond
+            # times the gain -- at most 6e-6 here. The step this guards against
+            # is 0.0246 in the same units, 2400x larger.
+            assert timelapse.exposure._required == pytest.approx(delivered, rel=1e-4, abs=1e-5), (
+                f"the controller holds {timelapse.exposure._required} but handed the "
+                f"camera {delivered} -- something rewrote the state after decide()"
+            )
+
+            brightness = max(0.0, min(255.0, (120.0 / knee) * delivered))
+            timelapse.exposure.observe_frame(
+                {"mean_brightness": brightness, "std_brightness": 50.0}
+            )
+
+        assert {LightMode.DAY, LightMode.TRANSITION} <= seen, (
+            f"never crossed the day/transition knee, so the invariant was "
+            f"never tested where it used to break (saw {sorted(seen)})"
+        )
+
+
+class TestTheCaptureGrid:
+    """Capture times land on multiples of the interval, not on the process.
+
+    The old arithmetic was `sleep = interval - (now - loop_start)`, clamped at
+    zero. That recovers from a frame that runs late *within* its slot, but an
+    iteration that overruns the whole interval sleeps zero and moves every
+    later frame by the overrun, forever -- the video plays at a constant speed
+    either side of a permanent seam.
+    """
+
+    def test_the_grid_is_absolute_not_relative_to_the_process(self):
+        """Two calls an arbitrary offset apart land on the same multiples, so a
+        restart resumes the previous process's phase instead of inventing one."""
+        assert AdaptiveTimelapse._next_slot(30, 1_000_000_003.7) == 1_000_000_020.0
+        assert AdaptiveTimelapse._next_slot(30, 1_000_000_019.9) == 1_000_000_020.0
+        assert AdaptiveTimelapse._next_slot(30, 1_000_000_020.0) == 1_000_000_050.0
+
+    def test_a_slot_boundary_advances_rather_than_returning_itself(self):
+        """Landing exactly on a boundary must give the *next* slot. Returning
+        the current one makes the loop sleep zero and spin."""
+        assert AdaptiveTimelapse._next_slot(30, 300.0) == 330.0
+
+    def test_an_overrun_costs_its_own_slots_and_no_more(self):
+        """The frame that overran is lost; the ones after it stay on the grid.
+
+        Simulated the way the loop does it: advance by one interval, and when
+        that is already in the past skip whole slots forward. Under the old
+        arithmetic the same overrun shifts the phase by 25s and never recovers.
+        """
+        interval, next_slot = 30, 300.0
+        emitted = []
+        for i, cost in enumerate([5, 5, 55, 5, 5]):  # one frame takes 55s
+            emitted.append(next_slot)
+            now = next_slot + cost
+            next_slot += interval
+            if now >= next_slot:
+                next_slot += (int((now - next_slot) // interval) + 1) * interval
+
+        assert emitted == [300.0, 330.0, 360.0, 420.0, 450.0]
+        gaps = {b - a for a, b in zip(emitted, emitted[1:])}
+        assert gaps <= {30.0, 60.0}, f"a gap off the grid: {sorted(gaps)}"
+
+
+class TestSlotRecovery:
+    """Every path that ends an iteration goes back onto the grid, including the
+    one that failed to open the camera.
+
+    That path used to `continue` straight past the scheduling, so a retry fired
+    the instant it succeeded rather than on a slot -- and a failure lasting
+    longer than an interval left the schedule behind without skipping the slots
+    it had missed. libcamera refusing a camera that is still closing is an
+    ordinary event here, because the camera is opened and closed once per
+    frame, so this is not a rare path.
+    """
+
+    @staticmethod
+    def _advance(current_slot, interval, now):
+        """_sleep_until_next_slot with the clock and the sleep stubbed out."""
+        slept = []
+        with (
+            patch("raspilapse.daemon.time.time", return_value=now),
+            patch("raspilapse.daemon.time.sleep", side_effect=slept.append),
+        ):
+            returned = AdaptiveTimelapse._sleep_until_next_slot(current_slot, interval)
+        return returned, slept
+
+    def test_an_ordinary_iteration_sleeps_to_the_next_slot(self):
+        """The baseline the two failure cases below are departures from: a
+        frame costing 5s of a 30s interval sleeps the remaining 25."""
+        returned, slept = self._advance(300.0, 30, now=305.0)
+        assert returned == 330.0
+        assert slept == [25.0]
+
+    def test_a_failure_outlasting_an_interval_skips_the_slots_it_missed(self):
+        """Recovery took 70s of a 30s interval. The next capture belongs on the
+        grid at 390, not 70s late at 330, and not immediately either."""
+        returned, slept = self._advance(300.0, 30, now=370.0)
+        assert returned == 390.0
+        assert slept == [20.0]
+
+    def test_it_never_returns_a_slot_in_the_past(self):
+        """A negative sleep is what an immediate off-grid retry looks like."""
+        for late in (0, 1, 29, 30, 31, 200):
+            returned, slept = self._advance(300.0, 30, now=300.0 + late)
+            assert returned > 300.0 + late, f"{late}s late returned a slot already gone"
+            assert slept and slept[0] > 0
+
+    def test_a_backward_clock_step_reanchors_instead_of_sleeping_it_out(self):
+        """No RTC: fake-hwclock plus a late NTP sync can move `now` *behind*
+        the anchor. Sleeping next_slot - now would sleep out the whole step --
+        hours of no frames with nothing marked failed -- so the grid
+        re-anchors on the new clock instead."""
+        returned, slept = self._advance(300.0, 30, now=100.0)
+        assert returned == 120.0, "the grid did not re-anchor on the stepped-back clock"
+        assert slept == [20.0]
+
+    def test_a_should_continue_that_goes_false_stops_the_sleep(self):
+        """SIGTERM sets running=False mid-sleep; the sliced sleep must notice
+        within one slice rather than waiting out the rest of the slot
+        (PEP 475 resumes a plain sleep after a handled signal)."""
+        answers = iter([True, False])
+        slept = []
+        with (
+            patch("raspilapse.daemon.time.time", return_value=305.0),
+            patch("raspilapse.daemon.time.sleep", side_effect=slept.append),
+        ):
+            returned = AdaptiveTimelapse._sleep_until_next_slot(
+                300.0, 30, should_continue=lambda: next(answers)
+            )
+        assert returned == 330.0
+        assert slept == [1.0], "the sleep did not run in interruptible slices"
+
+
+class TestTheLoopIsWiredToTheGrid:
+    """The scheduling helpers are unit-tested above; this is the wiring.
+
+    `_next_slot` and `_sleep_until_next_slot` can both be perfect while the
+    loop drops the returned value on the floor, calls the wrong one, or misses
+    a path entirely -- which is exactly how the camera-init branch came to skip
+    the schedule. These run one bounded iteration with the camera mocked and
+    assert the call actually happens.
+    """
+
+    @staticmethod
+    def _run_one(config_file, init_side_effect=None, max_iterations=6):
+        """Run the capture loop once with the camera mocked out.
+
+        Returns the stubbed `_sleep_until_next_slot` and `time.sleep` so the
+        caller can assert on what the loop actually reached.
+        """
+        timelapse = AdaptiveTimelapse(config_file)
+        timelapse._database = None
+        timelapse._record = MagicMock()
+        timelapse._read_capture_metadata = MagicMock(return_value=None)
+        # Two frames, then the loop's own limit ends it. Not test_mode: --test
+        # now skips the pre-loop grid alignment on purpose, and that alignment
+        # is half of what this harness asserts.
+        timelapse.config["adaptive_timelapse"]["num_frames"] = 2
+
+        def capture(*args, **kwargs):
+            """Stand in for capture_frame, counter included.
+
+            The frame limit reads frame_count, and frame_count is incremented
+            inside capture_frame -- so a mock that only returns a path leaves
+            the loop spinning forever. This cost a hung test run to find.
+            """
+            timelapse.frame_count += 1
+            return ("frame.jpg", None)
+
+        timelapse.capture_frame = MagicMock(side_effect=capture)
+
+        calls = []
+
+        def advance_stub(current_slot, interval, should_continue=None):
+            """Record the reschedule, and stop the loop independently of it.
+
+            The bound is deliberately not the loop's own exit condition: a
+            future change that breaks that condition should fail the assertion
+            below rather than hang the suite.
+            """
+            calls.append(current_slot)
+            if len(calls) >= max_iterations:
+                timelapse.running = False
+            return 999.0
+
+        with (
+            patch("raspilapse.daemon.ImageCapture") as camera,
+            patch("raspilapse.daemon.time.sleep") as sleep,
+            patch.object(
+                AdaptiveTimelapse, "_sleep_until_next_slot", side_effect=advance_stub
+            ) as advance,
+        ):
+            if init_side_effect:
+                # Pad with successes: the camera is re-opened every frame, so
+                # a two-frame run needs more init calls than the failure
+                # script itself lists.
+                camera.return_value.initialize_camera.side_effect = (
+                    list(init_side_effect) + [None] * max_iterations
+                )
+            timelapse.run()
+
+        assert len(calls) < max_iterations, "the loop did not stop on its own"
+        return advance, sleep
+
+    def test_a_normal_frame_ends_on_the_grid(self, test_config_file):
+        """The happy path, and the control for the failure case below: an
+        iteration that captures normally must still reschedule, and the first
+        frame must be aligned before the loop starts at all. Both waits go
+        through the scheduler now (the pre-loop alignment used to be a bare
+        time.sleep, which SIGTERM could not interrupt), so both show up as
+        scheduler calls: one before the first frame, one after each frame."""
+        advance, _ = self._run_one(test_config_file)
+        assert advance.call_count >= 2, (
+            f"scheduler reached {advance.call_count} time(s); expected the "
+            f"pre-loop alignment plus at least one per-frame reschedule"
+        )
+
+    def test_a_failed_camera_init_also_ends_on_the_grid(self, test_config_file):
+        """The branch that used to `continue` past the scheduling entirely.
+
+        libcamera refusing a camera that is still closing is ordinary here --
+        the camera is opened and closed once per frame -- so an off-grid retry
+        was not a rare path.
+        """
+        advance, _ = self._run_one(
+            test_config_file, init_side_effect=[RuntimeError("device busy"), None]
+        )
+        assert advance.call_count >= 2, (
+            f"init failed once and the loop rescheduled {advance.call_count} time(s); "
+            f"the failure path skipped the grid"
+        )
+
+    def test_a_camera_that_stays_wedged_ends_the_process(self, test_config_file):
+        """Every failed Picamera2() open leaks a pipe fd inside picamera2;
+        retrying forever walks the daemon into RLIMIT_NOFILE after ~8 hours
+        while systemd shows it healthy. Five consecutive failures must end
+        the loop -- Restart=always hands back a clean fd table -- and no
+        frame may be captured on the way."""
+        timelapse = AdaptiveTimelapse(test_config_file)
+        timelapse._database = None
+        timelapse._record = MagicMock()
+        timelapse._read_capture_metadata = MagicMock(return_value=None)
+        timelapse.capture_frame = MagicMock()
+
+        calls = []
+
+        def advance_stub(current_slot, interval, should_continue=None):
+            calls.append(current_slot)
+            if len(calls) >= 12:
+                timelapse.running = False
+            return 999.0
+
+        with (
+            patch("raspilapse.daemon.ImageCapture") as camera,
+            patch("raspilapse.daemon.time.sleep"),
+            patch.object(AdaptiveTimelapse, "_sleep_until_next_slot", side_effect=advance_stub),
+        ):
+            camera.return_value.initialize_camera.side_effect = RuntimeError("device busy")
+            timelapse.run()
+
+        assert len(calls) < 12, "the loop retried past five consecutive camera failures"
+        timelapse.capture_frame.assert_not_called()
+
+
+class TestSeedingAcrossARestart:
+    """The database row is a record, not a command, and the two differ.
+
+    `analogue_gain` holds what the sensor reported. The loop's state is in
+    commanded units: ladder.allocate keeps gain at 1.0 until the shutter is at
+    its ceiling, and this sensor answers 1.1228 regardless. In flight that
+    constant is absorbed -- it is a feedback loop and nothing reads it back.
+    Here it is read back as if it were a command, and the first frame after a
+    restart is seeded 12% bright.
+
+    Measured on this camera at the restart on 2026-08-07 08:06:33, one frame
+    wide because the loop corrects it immediately:
+
+        08:06:14   604 us   brightness 119.9
+        08:06:33   657 us   brightness 126.2     <- 604 x 1.1228, on the grid
+        08:06:44   604 us   brightness 120.2
+    """
+
+    def _seeded(self, config_path, row):
+        """Seed a fresh daemon from one database row, and return what the
+        controller ended up holding as its required exposure."""
+        timelapse = AdaptiveTimelapse(config_path)
+        timelapse._database = MagicMock()
+        timelapse._database.get_last_capture.return_value = row
+        timelapse._seed_from_last_capture()
+        return timelapse.exposure._required
+
+    def test_a_daylight_row_is_seeded_as_the_gain_the_ladder_commanded(self, test_config_file):
+        """604 us at a reported 1.1228 is a commanded 604 us at gain 1.0."""
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 604,
+                "analogue_gain": 1.1228070259094238,
+                "brightness_mean": 119.9,
+                "mode": LightMode.DAY,
+                "unix_timestamp": time.time(),
+            },
+        )
+        assert required == pytest.approx(
+            0.000604, rel=1e-6
+        ), "seeded the sensor's gain floor as though the ladder had asked for it"
+
+    def test_a_quantised_ceiling_still_counts_as_the_ceiling(self, test_config_file):
+        """The column records what the camera delivered, and it under-delivers.
+
+        A commanded 20 s comes back as 19999994 us. This camera's database has
+        62556 gain-controlled rows at that value and not one at exactly
+        20000000, so an equality test against max_shutter rejects every real
+        night frame and seeds the restart at gain 1.0 -- up to six times too
+        dark. That is a worse bug than the daylight one the check exists for,
+        and it is the reason the comparison carries a tolerance.
+        """
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 19_999_994,
+                "analogue_gain": 5.98830413818359,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time(),
+            },
+        )
+        assert required == pytest.approx(19.999994 * 5.98830413818359, rel=1e-6), (
+            "dropped a genuinely commanded night gain because the sensor "
+            "delivered a few microseconds under the ceiling"
+        )
+
+    def test_a_row_at_the_ceiling_keeps_its_gain(self, test_config_file):
+        """The sibling that stops the fix being 'ignore the column'.
+
+        Past the shutter ceiling the ladder really does command gain, and it is
+        the only thing distinguishing a 20-second frame at gain 1 from one at
+        gain 6. Drop it here and every restart after dark begins six times too
+        dark.
+        """
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 20_000_000,
+                "analogue_gain": 3.1,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time(),
+            },
+        )
+        assert required == pytest.approx(62.0, rel=1e-6)
+
+    def test_a_sensor_floor_gain_at_the_ceiling_is_not_trusted(self, test_config_file):
+        """At the ceiling, a reported gain at the sensor's 1.1228 floor is
+        ambiguous -- the ladder may have commanded anything in [1.0, 1.1228)
+        -- and seeding the floor re-imports the same 12% step the dusk-seeding
+        removal fixed. Below 1.2, gain 1.0 is the safer read."""
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 20_000_000,
+                "analogue_gain": 1.1228070259094238,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time(),
+            },
+        )
+        assert required == pytest.approx(20.0, rel=1e-6)
+
+    def test_a_stale_row_is_not_seeded_at_all(self, test_config_file):
+        """A night row seeded into a bright morning costs ~24 pure-white
+        frames -- worse than the cold start it was meant to prevent. Past 20
+        intervals the seed is skipped."""
+        required = self._seeded(
+            test_config_file,
+            {
+                "exposure_time_us": 20_000_000,
+                "analogue_gain": 5.9,
+                "brightness_mean": 120.0,
+                "mode": LightMode.NIGHT,
+                "unix_timestamp": time.time() - 12 * 3600,
+            },
+        )
+        assert required is None, "a 12-hour-old row was seeded as though fresh"
+
+
 class TestPolarAwareness:
     """Test polar day/night awareness functionality."""
 
@@ -977,16 +919,17 @@ class TestPolarAwareness:
             "latitude": 68.7,
             "longitude": 15.4,
             "timezone": "Europe/Oslo",
-            "civil_twilight_threshold": -6.0,
         }
         with open(test_config_file, "w") as f:
             yaml.dump(config_data, f)
 
         timelapse = AdaptiveTimelapse(test_config_file)
 
-        # Location should be initialized (if astral is available)
-        # The test is valid regardless of astral availability
-        assert timelapse._civil_twilight_threshold == -6.0
+        # Location is recorded alongside each frame now, not used to decide
+        # anything. Without astral there is simply no elevation to record.
+        if timelapse._location is None:
+            pytest.skip("astral not available")
+        assert timelapse._get_sun_elevation() is not None
 
     def test_init_location_without_config(self, test_config_file):
         """Test location initialization without config."""
@@ -994,14 +937,6 @@ class TestPolarAwareness:
 
         # Without location config, location should be None
         assert timelapse._location is None
-
-    def test_is_polar_day_returns_false_without_location(self, test_config_file):
-        """Test polar day returns False when no location configured."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        result = timelapse._is_polar_day(lux=100.0)
-
-        assert result is False
 
     def test_get_sun_elevation_without_location(self, test_config_file):
         """Test sun elevation returns None without location."""
@@ -1011,304 +946,33 @@ class TestPolarAwareness:
 
         assert result is None
 
+    def test_run_reads_sun_elevation_after_the_call_that_sets_it(self):
+        """Static check: the inline form is invisible to every runtime test.
 
-class TestOverexposureDetection:
-    """Test overexposure detection and fast ramp-down."""
-
-    def test_check_overexposure_triggers_on_high_brightness(self, test_config_file):
-        """Test overexposure detected with high brightness."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        brightness_metrics = {
-            "mean_brightness": 190,  # Above 180 threshold
-            "overexposed_percent": 5,
-        }
-
-        result = timelapse._check_overexposure(brightness_metrics)
-
-        assert result is True
-        assert timelapse._overexposure_detected is True
-
-    def test_check_overexposure_triggers_on_clipped_pixels(self, test_config_file):
-        """Test overexposure detected with many clipped pixels."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        brightness_metrics = {
-            "mean_brightness": 150,  # Normal brightness
-            "overexposed_percent": 15,  # Above 10% threshold
-        }
-
-        result = timelapse._check_overexposure(brightness_metrics)
-
-        assert result is True
-
-    def test_check_overexposure_clears_on_safe_values(self, test_config_file):
-        """Test overexposure cleared when values are safe."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._overexposure_detected = True  # Previously triggered
-        timelapse._overexposure_severity = "warning"  # Set severity
-
-        brightness_metrics = {
-            "mean_brightness": 120,  # Below 130 safe threshold
-            "overexposed_percent": 2,  # Below 3% safe threshold
-        }
-
-        result = timelapse._check_overexposure(brightness_metrics)
-
-        assert result is False
-        assert timelapse._overexposure_detected is False
-        assert timelapse._overexposure_severity is None
-
-    def test_check_overexposure_empty_metrics(self, test_config_file):
-        """Test overexposure handling with empty metrics."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._overexposure_detected = True
-
-        result = timelapse._check_overexposure({})
-
-        # Should retain previous state
-        assert result is True
-
-    def test_check_overexposure_none_metrics(self, test_config_file):
-        """Test overexposure handling with None metrics."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        result = timelapse._check_overexposure(None)
-
-        assert result is False  # Default state
-
-
-class TestUnderexposureDetection:
-    """Test underexposure detection and fast ramp-up."""
-
-    def test_check_underexposure_triggers_on_low_brightness(self, test_config_file):
-        """Test underexposure detected with low brightness (warning level)."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        brightness_metrics = {
-            "mean_brightness": 85,  # Below 90 warning threshold
-        }
-
-        result = timelapse._check_underexposure(brightness_metrics)
-
-        assert result is True
-        assert timelapse._underexposure_detected is True
-        assert timelapse._underexposure_severity == "warning"
-
-    def test_check_underexposure_triggers_critical(self, test_config_file):
-        """Test critical underexposure detected with very low brightness."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        brightness_metrics = {
-            "mean_brightness": 60,  # Below 70 critical threshold
-        }
-
-        result = timelapse._check_underexposure(brightness_metrics)
-
-        assert result is True
-        assert timelapse._underexposure_detected is True
-        assert timelapse._underexposure_severity == "critical"
-
-    def test_check_underexposure_clears_on_safe_values(self, test_config_file):
-        """Test underexposure cleared when brightness is safe."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._underexposure_detected = True
-        timelapse._underexposure_severity = "warning"
-
-        brightness_metrics = {
-            "mean_brightness": 115,  # Above 105 safe threshold
-        }
-
-        result = timelapse._check_underexposure(brightness_metrics)
-
-        assert result is False
-        assert timelapse._underexposure_detected is False
-        assert timelapse._underexposure_severity is None
-
-    def test_check_underexposure_works_in_any_mode(self, test_config_file):
-        """Test underexposure detection works regardless of exposure level.
-
-        This is critical - the old version only triggered at minimum exposure,
-        but we need it to work during transitions too.
+        Passing `self._sun_elevation` and `self._is_polar_day(...)` as arguments
+        to the same call is what caused the bug, and it type-checks, imports and
+        passes 896 tests. Only the source shape shows it.
         """
-        timelapse = AdaptiveTimelapse(test_config_file)
-        # Simulate being in middle of transition (not at min exposure)
-        timelapse._last_exposure_time = 5.0  # 5 seconds - far from min
+        import ast
 
-        brightness_metrics = {
-            "mean_brightness": 75,  # Underexposed
-        }
-
-        result = timelapse._check_underexposure(brightness_metrics)
-
-        # Should still detect underexposure even though not at min exposure
-        assert result is True
-        assert timelapse._underexposure_detected is True
-
-    def test_check_underexposure_empty_metrics(self, test_config_file):
-        """Test underexposure handling with empty metrics."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._underexposure_detected = True
-
-        result = timelapse._check_underexposure({})
-
-        # Should retain previous state
-        assert result is True
-
-    def test_check_underexposure_none_metrics(self, test_config_file):
-        """Test underexposure handling with None metrics."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        result = timelapse._check_underexposure(None)
-
-        assert result is False  # Default state
-
-
-class TestRampUpSpeed:
-    """Test fast ramp-up speed for underexposure recovery."""
-
-    def test_get_rampup_speed_returns_none_when_not_underexposed(self, test_config_file):
-        """Test rampup speed returns None when no underexposure."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._underexposure_detected = False
-
-        speed = timelapse._get_rampup_speed()
-
-        assert speed is None
-
-    def test_get_rampup_speed_returns_fast_on_warning(self, test_config_file):
-        """Test rampup speed returns fast speed on warning level."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._underexposure_detected = True
-        timelapse._underexposure_severity = "warning"
-
-        speed = timelapse._get_rampup_speed()
-
-        assert speed == timelapse._fast_rampup_speed
-        assert speed == 0.50  # Default value
-
-    def test_get_rampup_speed_returns_critical_on_severe(self, test_config_file):
-        """Test rampup speed returns critical speed on severe underexposure."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._underexposure_detected = True
-        timelapse._underexposure_severity = "critical"
-
-        speed = timelapse._get_rampup_speed()
-
-        assert speed == timelapse._critical_rampup_speed
-        assert speed == 0.70  # Default value
-
-    def test_rampup_speed_configurable(self, test_config_file):
-        """Test that rampup speeds are loaded from config."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # These should be loaded from config (with defaults if not present)
-        assert hasattr(timelapse, "_fast_rampup_speed")
-        assert hasattr(timelapse, "_critical_rampup_speed")
-        assert timelapse._fast_rampup_speed > 0
-        assert timelapse._critical_rampup_speed > 0
-        # Critical should be >= fast
-        assert timelapse._critical_rampup_speed >= timelapse._fast_rampup_speed
-
-
-class TestExposureSpeedSelection:
-    """Test exposure speed selection for both over and underexposure."""
-
-    def test_exposure_uses_rampup_when_underexposed(self, test_config_file):
-        """Test that underexposure triggers fast ramp-up in camera settings."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._underexposure_detected = True
-        timelapse._underexposure_severity = "warning"
-        timelapse._overexposure_detected = False
-
-        # Initialize exposure state
-        timelapse._last_exposure_time = 1.0
-
-        # Get settings for night mode (where ramp-up matters most)
-        settings = timelapse.get_camera_settings("night", lux=2.0)
-
-        # The exposure should have ramped up faster than normal
-        # We can't easily test the exact speed used, but we can verify
-        # the settings were generated without error
-        assert "ExposureTime" in settings
-        assert settings["ExposureTime"] > 0
-
-    def test_exposure_uses_rampdown_when_overexposed(self, test_config_file):
-        """Test that overexposure triggers fast ramp-down in camera settings."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._overexposure_detected = True
-        timelapse._overexposure_severity = "warning"
-        timelapse._underexposure_detected = False
-
-        # Initialize exposure state
-        timelapse._last_exposure_time = 10.0
-
-        # Get settings for day mode
-        settings = timelapse.get_camera_settings("day", lux=100.0)
-
-        assert "ExposureTime" in settings
-        assert settings["ExposureTime"] > 0
-
-    def test_underexposure_takes_priority_over_overexposure(self, test_config_file):
-        """Test that underexposure detection takes priority (edge case)."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-        # Both flags set (shouldn't happen, but test the priority)
-        timelapse._underexposure_detected = True
-        timelapse._underexposure_severity = "warning"
-        timelapse._overexposure_detected = True
-        timelapse._overexposure_severity = "warning"
-
-        # Initialize exposure state
-        timelapse._last_exposure_time = 5.0
-
-        # Get settings - should use ramp-up (underexposure takes priority)
-        settings = timelapse.get_camera_settings("transition", lux=20.0)
-
-        assert "ExposureTime" in settings
-
-
-class TestTransitionSeeding:
-    """Test transition seeding from metadata."""
-
-    def test_seed_from_metadata(self, test_config_file):
-        """Test seeding transition state from captured metadata."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Test shot metadata has ColourGains from AWB
-        test_shot_metadata = {
-            "ColourGains": [2.0, 1.5],
-        }
-        # Capture metadata has exposure/gain from last actual capture
-        capture_metadata = {
-            "ExposureTime": 5000,  # 5ms in microseconds
-            "AnalogueGain": 2.5,
-        }
-
-        timelapse._seed_from_metadata(test_shot_metadata, capture_metadata)
-
-        assert timelapse._seed_exposure == 0.005  # Converted to seconds
-        assert timelapse._seed_gain == 2.5
-        assert timelapse._seed_wb_gains == (2.0, 1.5)
-        assert timelapse._transition_seeded is True
-
-    def test_seed_from_metadata_updates_last_values(self, test_config_file):
-        """Test seeding updates interpolation state."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        test_shot_metadata = {
-            "ColourGains": [2.2, 1.6],
-        }
-        capture_metadata = {
-            "ExposureTime": 10000,  # 10ms
-            "AnalogueGain": 3.0,
-        }
-
-        timelapse._seed_from_metadata(test_shot_metadata, capture_metadata)
-
-        # Last values should also be updated for smooth interpolation
-        assert timelapse._last_exposure_time == 0.01
-        assert timelapse._last_analogue_gain == 3.0
-        assert timelapse._last_colour_gains == (2.2, 1.6)
+        src = Path(__file__).resolve().parent.parent / "raspilapse" / "daemon.py"
+        for node in ast.walk(ast.parse(src.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            reads_attr = any(
+                isinstance(a, ast.Attribute) and a.attr == "_sun_elevation" for a in node.args
+            )
+            calls_polar = any(
+                isinstance(a, ast.Call)
+                and isinstance(a.func, ast.Attribute)
+                and a.func.attr == "_is_polar_day"
+                for a in node.args
+            )
+            assert not (reads_attr and calls_polar), (
+                f"daemon.py:{node.lineno} passes self._sun_elevation and "
+                "_is_polar_day() to the same call. Arguments evaluate left to "
+                "right, so the attribute is read before the call populates it."
+            )
 
 
 class TestDiagnosticEnrichment:
@@ -1319,8 +983,8 @@ class TestDiagnosticEnrichment:
         import json
 
         timelapse = AdaptiveTimelapse(test_config_file)
-        timelapse._smoothed_lux = 500.0
-        timelapse._last_mode = LightMode.DAY
+        timelapse.exposure._smoothed_lux = 500.0
+        timelapse.exposure._last_mode = LightMode.DAY
         timelapse._sun_elevation = 15.0
 
         temp_dir = tempfile.mkdtemp()
@@ -1357,12 +1021,26 @@ class TestDiagnosticEnrichment:
 
             shutil.rmtree(temp_dir)
 
-    def test_enrich_metadata_with_transition_position(self, test_config_file):
-        """Test transition position is added to diagnostics."""
+    def test_enrich_metadata_with_ladder_position(self, test_config_file):
+        """Where on the exposure ladder the frame sat is recorded with it.
+
+        Passed in as a snapshot taken the instant decide() returned, rather
+        than read back off the controller later. The handover seeding runs
+        between those two moments and overwrites the shutter, gain and ladder
+        position, so reading late described the seed and not the frame.
+        """
         import json
 
         timelapse = AdaptiveTimelapse(test_config_file)
         timelapse._sun_elevation = 5.0
+
+        # Put the controller somewhere identifiable on the ladder, and take the
+        # diagnostics snapshot the loop takes -- the instant decide() returns.
+        timelapse.exposure.seed_from_capture(exposure_time=10.0, analogue_gain=3.0)
+        timelapse.exposure.decide()
+        snapshot = timelapse.exposure.diagnostics()
+        expected = timelapse.exposure.ladder_position
+        assert 0.0 < expected < 1.0, "the seed should be mid-ladder"
 
         temp_dir = tempfile.mkdtemp()
         try:
@@ -1380,7 +1058,7 @@ class TestDiagnosticEnrichment:
                 image_path,
                 LightMode.TRANSITION,
                 lux=100.0,
-                transition_position=0.5,
+                controller_diagnostics=snapshot,
             )
 
             assert result is True
@@ -1389,7 +1067,7 @@ class TestDiagnosticEnrichment:
                 enriched = json.load(f)
 
             assert "diagnostics" in enriched
-            assert enriched["diagnostics"]["transition_position"] == 0.5
+            assert enriched["diagnostics"]["ladder_position"] == pytest.approx(expected, abs=1e-4)
         finally:
             import shutil
 
@@ -1481,358 +1159,6 @@ class TestSymlinkCreation:
 
             shutil.rmtree(temp_dir)
 
-
-class TestExposureCalculation:
-    """Test exposure calculation from lux values."""
-
-    def test_calculate_target_exposure_from_lux_night(self, test_config_file):
-        """Test exposure calculation for night conditions."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Very low lux should give max night exposure
-        exposure = timelapse._calculate_target_exposure_from_lux(0.1)
-
-        assert exposure > 10.0  # Should be long exposure
-
-    def test_calculate_target_exposure_from_lux_day(self, test_config_file):
-        """Test exposure calculation for day conditions."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # High lux should give short exposure
-        exposure = timelapse._calculate_target_exposure_from_lux(10000.0)
-
-        assert exposure < 0.1  # Should be short exposure
-
-    def test_calculate_target_exposure_from_lux_transition(self, test_config_file):
-        """Test exposure calculation for transition conditions."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Transition lux should give intermediate exposure
-        exposure = timelapse._calculate_target_exposure_from_lux(50.0)
-
-        # Should be between day and night extremes
-        assert 0.01 < exposure < 20.0
-
-
-class TestEVSafetyClamp:
-    """Test EV safety clamp functionality (Holy Grail technique)."""
-
-    def test_ev_clamp_disabled_in_config(self, test_config_file):
-        """Test EV clamp is bypassed when disabled in config."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Explicitly disable EV clamp
-        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = False
-
-        # Seed with short exposure (simulating bright auto-exposure reading)
-        timelapse._transition_seeded = True
-        timelapse._seed_exposure = 0.01  # 10ms
-        timelapse._seed_gain = 1.0
-
-        # Try to apply long night exposure
-        target_exposure = 20.0  # 20 seconds
-        target_gain = 6.0
-
-        result_exposure, result_gain = timelapse._apply_ev_safety_clamp(
-            target_exposure, target_gain
-        )
-
-        # Should NOT be clamped - values unchanged
-        assert result_exposure == 20.0
-        assert result_gain == 6.0
-
-    def test_ev_clamp_enabled_within_threshold(self, test_config_file):
-        """Test EV clamp allows small differences (<5%)."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Enable EV clamp (default)
-        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = True
-
-        timelapse._transition_seeded = True
-        timelapse._seed_exposure = 1.0
-        timelapse._seed_gain = 2.0
-        # Seed EV = 1.0 * 2.0 = 2.0
-
-        # Propose values within 5% of seed EV
-        target_exposure = 1.02  # Slightly higher
-        target_gain = 2.0
-        # Proposed EV = 1.02 * 2.0 = 2.04 (2% difference)
-
-        result_exposure, result_gain = timelapse._apply_ev_safety_clamp(
-            target_exposure, target_gain
-        )
-
-        # Should NOT be clamped - within threshold
-        assert result_exposure == 1.02
-        assert result_gain == 2.0
-
-    def test_ev_clamp_enabled_exceeds_threshold(self, test_config_file):
-        """Test EV clamp corrects large differences (>5%)."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Enable EV clamp
-        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = True
-
-        timelapse._transition_seeded = True
-        timelapse._seed_exposure = 0.01  # 10ms
-        timelapse._seed_gain = 1.0
-        # Seed EV = 0.01 * 1.0 = 0.01
-
-        # Propose much longer exposure (night mode)
-        target_exposure = 20.0  # 20 seconds
-        target_gain = 6.0
-        # Proposed EV = 20.0 * 6.0 = 120.0 (way more than 5% difference!)
-
-        result_exposure, result_gain = timelapse._apply_ev_safety_clamp(
-            target_exposure, target_gain
-        )
-
-        # Should be clamped to match seed EV
-        # EV_seed = exposure_new * gain_proposed
-        # 0.01 = exposure_new * 6.0
-        # exposure_new = 0.01 / 6.0 = 0.00167s
-        expected_clamped = 0.01 / 6.0
-
-        assert abs(result_exposure - expected_clamped) < 0.0001
-        assert result_gain == 6.0  # Gain unchanged
-
-    def test_ev_clamp_not_applied_before_seeding(self, test_config_file):
-        """Test EV clamp is not applied before transition is seeded."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Not seeded yet
-        timelapse._transition_seeded = False
-        timelapse._seed_exposure = None
-        timelapse._seed_gain = None
-
-        target_exposure = 20.0
-        target_gain = 6.0
-
-        result_exposure, result_gain = timelapse._apply_ev_safety_clamp(
-            target_exposure, target_gain
-        )
-
-        # Should pass through unchanged
-        assert result_exposure == 20.0
-        assert result_gain == 6.0
-
-    def test_ev_clamp_street_lamp_scenario(self, test_config_file):
-        """Test EV clamp causes dark images when street lamp fools auto-exposure.
-
-        This is the actual bug scenario: a bright street lamp in frame causes
-        auto-exposure to use short exposure/high gain. When transitioning to
-        night mode, the EV clamp forces exposures to match this incorrect seed,
-        resulting in severely underexposed images (330ms instead of 20s).
-        """
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Simulate street lamp fooling auto-exposure
-        # Auto-exposure sees bright lamp and uses short exposure
-        timelapse._transition_seeded = True
-        timelapse._seed_exposure = 0.0003  # 300µs - street lamp fooled it
-        timelapse._seed_gain = 5.5
-        # Seed EV = 0.0003 * 5.5 = 0.00165
-
-        # Night mode wants long exposure for dark scene
-        target_exposure = 20.0  # 20 seconds
-        target_gain = 6.0
-        # Proposed EV = 120.0 - HUGE difference!
-
-        # With EV clamp ENABLED - this causes the bug
-        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = True
-        clamped_exp, clamped_gain = timelapse._apply_ev_safety_clamp(target_exposure, target_gain)
-
-        # Clamped exposure will be way too short!
-        # 0.00165 / 6.0 = 0.000275s = 275µs ≈ 0.3ms
-        assert clamped_exp < 0.001  # Less than 1ms - severely underexposed!
-
-        # With EV clamp DISABLED - correct behavior
-        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = False
-        unclamped_exp, unclamped_gain = timelapse._apply_ev_safety_clamp(
-            target_exposure, target_gain
-        )
-
-        # Should get the full 20 second exposure
-        assert unclamped_exp == 20.0
-        assert unclamped_gain == 6.0
-
-    def test_ev_clamp_applies_only_once(self, test_config_file):
-        """Test EV clamp only applies on first frame, not every frame.
-
-        This was a critical bug: the clamp was applying on EVERY frame,
-        preventing exposure from ever ramping up properly. The fix adds
-        an _ev_clamp_applied flag that ensures the clamp only runs once
-        per transition cycle.
-        """
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Enable EV clamp
-        timelapse.config["adaptive_timelapse"]["transition_mode"]["ev_safety_clamp_enabled"] = True
-
-        # Seed with short exposure (day mode values)
-        timelapse._transition_seeded = True
-        timelapse._seed_exposure = 0.01  # 10ms
-        timelapse._seed_gain = 1.0
-        timelapse._ev_clamp_applied = False  # Not yet applied
-
-        # First call - clamp SHOULD apply
-        target_exposure = 20.0
-        target_gain = 6.0
-        first_exp, first_gain = timelapse._apply_ev_safety_clamp(target_exposure, target_gain)
-
-        # Clamp should have been applied (exposure reduced to match seed EV)
-        assert first_exp < target_exposure
-        assert timelapse._ev_clamp_applied is True  # Flag should be set
-
-        # Second call - clamp should NOT apply (already applied)
-        second_exp, second_gain = timelapse._apply_ev_safety_clamp(target_exposure, target_gain)
-
-        # Should pass through unchanged now
-        assert second_exp == target_exposure
-        assert second_gain == target_gain
-
-    def test_ev_clamp_flag_resets_on_day_mode(self, test_config_file):
-        """Test _ev_clamp_applied flag resets when returning to day mode.
-
-        When the camera returns to day mode, the seed state should reset
-        so the clamp can apply again on the next transition.
-        """
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Simulate clamp was applied during previous transition
-        timelapse._transition_seeded = True
-        timelapse._ev_clamp_applied = True
-
-        # Verify initial state
-        assert timelapse._ev_clamp_applied is True
-
-        # Simulate returning to day mode (this happens in the capture loop)
-        timelapse._transition_seeded = False
-        timelapse._ev_clamp_applied = False
-
-        # Verify reset
-        assert timelapse._ev_clamp_applied is False
-        assert timelapse._transition_seeded is False
-
-
-class TestSequentialRamping:
-    """Test sequential ramping (shutter-first, then gain) for noise reduction."""
-
-    def test_sequential_ramping_phase1_shutter_priority(self, test_config_file):
-        """Test Phase 1: shutter increases while gain stays at minimum."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Setup for sequential ramping
-        timelapse._transition_seeded = True
-        timelapse._seed_exposure = 0.01  # 10ms starting point
-        timelapse._seed_gain = 1.0
-
-        # Early in transition (position close to 1.0 = day)
-        # Low lux but not fully night yet
-        exposure, gain = timelapse._calculate_sequential_ramping(lux=50.0, position=0.8)
-
-        # In Phase 1, gain should stay low while shutter increases
-        assert gain <= 2.0  # Should be close to minimum
-        assert exposure > 0.01  # Should be longer than seed
-
-    def test_sequential_ramping_phase2_gain_priority(self, test_config_file):
-        """Test Phase 2: gain increases after shutter maxed out."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Setup
-        timelapse._transition_seeded = True
-        timelapse._seed_exposure = 0.01
-        timelapse._seed_gain = 1.0
-
-        # Deep in night mode (position close to 0.0 = night)
-        exposure, gain = timelapse._calculate_sequential_ramping(lux=1.0, position=0.1)
-
-        # In Phase 2, should have long exposure and elevated gain
-        assert exposure >= 10.0  # Should be at or near max exposure
-        assert gain > 1.0  # Gain should be increasing
-
-    def test_sequential_ramping_reduces_noise(self, test_config_file):
-        """Test that sequential ramping keeps gain lower for same brightness."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        timelapse._transition_seeded = True
-        timelapse._seed_exposure = 0.01
-        timelapse._seed_gain = 1.0
-
-        # At a given transition point, sequential ramping should prefer
-        # longer shutter over higher gain (lower noise)
-        exposure, gain = timelapse._calculate_sequential_ramping(lux=20.0, position=0.5)
-
-        # The key insight: for the same EV, prefer longer exposure over higher gain
-        # This reduces noise in the final image
-        ev = exposure * gain
-
-        # If we had used simultaneous ramping at same EV with gain=3.0:
-        # alternative_exposure = ev / 3.0
-        # Sequential should give us lower gain for same EV
-        assert gain < 4.0  # Should prioritize shutter over gain
-
-
-class TestBrightPointLightEdgeCases:
-    """Test edge cases involving bright point light sources (street lamps, etc.)."""
-
-    def test_lux_calculation_with_bright_spot(self, test_config_file):
-        """Test that a bright spot doesn't overly influence lux calculation.
-
-        Note: This tests the overall behavior - the actual lux calculation
-        happens in the test shot processing.
-        """
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Simulate test shot metadata with short exposure (bright spot present)
-        # This is what happens when a street lamp is in frame
-        test_metadata = {
-            "ExposureTime": 300,  # 300µs - very short due to bright lamp
-            "AnalogueGain": 1.0,
-            "Lux": 500,  # Camera thinks scene is bright
-        }
-
-        # The calculated lux may be misleadingly high due to the bright spot
-        # This is the root cause of the street lamp issue
-
-        # Verify the timelapse object can handle this scenario
-        assert timelapse is not None
-
-    def test_transition_with_inconsistent_light_readings(self, test_config_file):
-        """Test handling of inconsistent light readings during transition."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Initialize smoothing state
-        timelapse._smoothed_lux = 5.0  # Previous reading was dark
-
-        # Simulate lux spike from bright light source passing through frame
-        spike_lux = 500.0
-
-        # Apply smoothing
-        smoothed = timelapse._smooth_lux(spike_lux)
-
-        # Smoothing should dampen the spike
-        assert smoothed < spike_lux
-        assert smoothed > 5.0  # But still increase somewhat
-
-    def test_hysteresis_prevents_mode_flapping(self, test_config_file):
-        """Test hysteresis prevents rapid mode changes from bright spots."""
-        timelapse = AdaptiveTimelapse(test_config_file)
-
-        # Initialize in night mode
-        timelapse._last_mode = LightMode.NIGHT
-        timelapse._mode_hold_count = 0
-
-        # Bright spot causes momentary "day" reading
-        mode = timelapse._apply_hysteresis(LightMode.DAY)
-
-        # Should NOT immediately switch - hysteresis holds
-        assert mode == LightMode.NIGHT
-
-        # Only after sustained readings should it switch
-        for _ in range(3):
-            mode = timelapse._apply_hysteresis(LightMode.DAY)
-
         # Now it should switch (after hysteresis_frames threshold)
         # Default hysteresis is typically 3 frames
 
@@ -1848,7 +1174,7 @@ class TestMainFunction:
         )
 
         # Import and run main
-        from src.auto_timelapse import main
+        from raspilapse.daemon import main
 
         result = main()
         assert result == 1
@@ -1857,7 +1183,7 @@ class TestMainFunction:
         """Test main with --help flag."""
         monkeypatch.setattr("sys.argv", ["auto_timelapse.py", "--help"])
 
-        from src.auto_timelapse import main
+        from raspilapse.daemon import main
 
         with pytest.raises(SystemExit) as exc_info:
             main()
@@ -1865,5 +1191,334 @@ class TestMainFunction:
         assert exc_info.value.code == 0
 
 
+@pytest.fixture
+def direct_control_config_file():
+    """Create config file with direct brightness control enabled."""
+    config_data = {
+        "camera": {
+            "resolution": {"width": 1280, "height": 720},
+            "transforms": {"horizontal_flip": False, "vertical_flip": False},
+            "controls": {},
+        },
+        "output": {
+            "directory": "test_photos",
+            "filename_pattern": "{name}_{counter}.jpg",
+            "project_name": "test_project",
+            "quality": 85,
+        },
+        "system": {"create_directories": True, "save_metadata": False},
+        "overlay": {"enabled": False},
+        "adaptive_timelapse": {
+            "enabled": True,
+            "interval": 30,
+            "num_frames": 0,
+            "reference_lux": 3.8,
+            "direct_brightness_control": True,
+            "brightness_damping": 0.5,
+            "light_thresholds": {"night": 10, "day": 100},
+            "night_mode": {
+                "max_exposure_time": 20.0,
+                "analogue_gain": 6,
+                "awb_enable": False,
+            },
+            "day_mode": {"awb_enable": True},
+            "transition_mode": {
+                "smooth_transition": True,
+                "target_brightness": 120,
+            },
+            "test_shot": {
+                "enabled": True,
+                "exposure_time": 0.1,
+                "analogue_gain": 1.0,
+            },
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+        yaml.dump(config_data, f)
+        config_path = f.name
+
+    yield config_path
+    os.unlink(config_path)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestFeedbackWiring:
+    """The capture loop must actually deliver measurements to the controller.
+
+    A refactor once left run() writing _last_brightness onto AdaptiveTimelapse
+    after that state had moved to ExposureController. Nothing raised: the write
+    just created a dead attribute, the real one kept its startup seed value, and
+    the exposure loop reacted to a measurement from minutes earlier. Unit tests
+    of both halves passed; only the camera showed it.
+    """
+
+    def test_observe_frame_updates_the_controller(self, direct_control_config_file):
+        tl = AdaptiveTimelapse(direct_control_config_file)
+
+        tl.exposure.observe_frame(
+            {
+                "mean_brightness": 137.0,
+                "percentile_95": 231.0,
+                "std_brightness": 55.0,
+                "overexposed_percent": 0.0,
+                "underexposed_percent": 0.0,
+            }
+        )
+
+        assert tl.exposure.last_brightness == 137.0
+        assert tl.exposure.meter.p95 == 231.0
+
+    def test_capture_loop_never_assigns_controller_state_to_self(self, direct_control_config_file):
+        """Static check on AdaptiveTimelapse's source.
+
+        Assigning `self._last_brightness = ...` inside AdaptiveTimelapse is
+        always a bug now: that name belongs to ExposureController. Python
+        happily creates a new attribute instead of raising, so only a check
+        like this catches it -- calling observe_frame() directly in a test
+        would not, because the broken code path is in run().
+        """
+        import inspect
+
+        source = inspect.getsource(AdaptiveTimelapse)
+        controller_state = {
+            name
+            for name in vars(AdaptiveTimelapse(direct_control_config_file).exposure)
+            if name.startswith("_")
+        }
+
+        offenders = sorted(
+            name for name in controller_state if re.search(rf"self\.{name}\s*=[^=]", source)
+        )
+        assert not offenders, (
+            "AdaptiveTimelapse assigns state that belongs to ExposureController: "
+            f"{offenders}. Route it through the controller instead."
+        )
+
+    def test_controller_reacts_to_the_reported_brightness(self, direct_control_config_file):
+        """Too bright -> shorter exposure. The sign of the loop."""
+        tl = AdaptiveTimelapse(direct_control_config_file)
+
+        tl.exposure.seed_from_capture(exposure_time=0.02, analogue_gain=1.0)
+        tl.exposure.observe_frame({"mean_brightness": 200.0, "percentile_95": 210.0})
+        assert tl.exposure.decide()["ExposureTime"] < 0.02 * 1_000_000
+
+        tl.exposure.seed_from_capture(exposure_time=0.02, analogue_gain=1.0)
+        tl.exposure.observe_frame({"mean_brightness": 60.0, "percentile_95": 90.0})
+        assert tl.exposure.decide()["ExposureTime"] > 0.02 * 1_000_000
+
+
+class TestReferenceShotPolicy:
+    """When to interrupt the loop for a white-balance reading.
+
+    This used to happen on every frame, which cost two camera teardowns per
+    capture. The shot's other job -- producing a lux figure -- moved onto the
+    frame the camera was taking anyway, leaving only the white balance, which
+    genuinely cannot be had any other way: it is the only frame the ISP meters
+    itself.
+    """
+
+    @staticmethod
+    def _timelapse(config_file, position=0.0, frame=0):
+        from raspilapse.daemon import AdaptiveTimelapse
+
+        timelapse = AdaptiveTimelapse(config_file)
+        timelapse._reference_position = position
+        timelapse._reference_frame = frame
+        timelapse.frame_count = frame
+        return timelapse
+
+    def test_the_first_frame_always_needs_one(self, test_config_file):
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None
+        assert timelapse._wants_reference_shot()
+
+    def test_a_settled_scene_does_not(self, test_config_file):
+        timelapse = self._timelapse(test_config_file)
+        timelapse.exposure.seed_from_capture(exposure_time=0.001, analogue_gain=1.0)
+        timelapse.exposure.decide()
+        timelapse._reference_position = timelapse.exposure.ladder_position
+        assert not timelapse._wants_reference_shot()
+
+    def test_moving_light_does(self, test_config_file):
+        from raspilapse.daemon import REFERENCE_LADDER_STEP
+
+        timelapse = self._timelapse(test_config_file)
+        timelapse.exposure.seed_from_capture(exposure_time=0.001, analogue_gain=1.0)
+        timelapse.exposure.decide()
+        timelapse._reference_position = (
+            timelapse.exposure.ladder_position - REFERENCE_LADDER_STEP * 2
+        )
+        assert timelapse._wants_reference_shot()
+
+    def test_a_stale_reading_expires_even_in_still_light(self, test_config_file):
+        """The ladder trigger cannot see what it does not move for: a season
+        turning, a dirty lens, a streetlight coming on. Hence the floor."""
+        from raspilapse.daemon import REFERENCE_MAX_INTERVAL_FRAMES
+
+        timelapse = self._timelapse(test_config_file)
+        timelapse.exposure.seed_from_capture(exposure_time=0.001, analogue_gain=1.0)
+        timelapse.exposure.decide()
+        timelapse._reference_position = timelapse.exposure.ladder_position
+        timelapse._reference_frame = 0
+        timelapse.frame_count = REFERENCE_MAX_INTERVAL_FRAMES
+        assert timelapse._wants_reference_shot()
+
+    def test_it_can_be_switched_off_entirely(self, test_config_file):
+        """The explicit off switch, which still wins over every other reason to
+        take one -- including the always-fires first frame."""
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None
+        timelapse.config["adaptive_timelapse"]["test_shot"]["enabled"] = False
+        assert not timelapse._wants_reference_shot()
+
+    def test_a_configured_white_point_makes_the_reading_pointless(self, test_config_file):
+        """_target_colour_gains prefers `fixed_colour_gains` and never looks at
+        the learned reference, so on those cameras the reading is taken, paid
+        for and discarded. The price is a camera teardown and a frame landing
+        three seconds late: 68 of 2879 intervals on 2026-08-06.
+
+        The operator used to have to know to set `test_shot.enabled: false`.
+        """
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None  # the always-fires case
+        assert timelapse._wants_reference_shot(), "the fixture must start from wanting one"
+
+        timelapse.exposure.config["adaptive_timelapse"]["day_mode"]["fixed_colour_gains"] = [
+            2.547,
+            1.579,
+        ]
+        assert not timelapse._wants_reference_shot()
+
+    def test_a_camera_without_a_configured_white_point_still_takes_one(self, test_config_file):
+        """The sibling that stops the test above passing with the feature
+        deleted outright. A camera with no configured white point has no other
+        source of daylight colour: the AWB frame is the only one the ISP meters
+        itself, and without it the controller falls back to a hardcoded
+        (2.5, 1.6) forever.
+        """
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None
+        assert not timelapse.exposure.config["adaptive_timelapse"]["day_mode"].get(
+            "fixed_colour_gains"
+        )
+        assert timelapse._wants_reference_shot()
+
+    @pytest.mark.parametrize("mode", [LightMode.TRANSITION, LightMode.NIGHT])
+    def test_no_reading_away_from_the_bright_end(self, test_config_file, mode):
+        """update_day_wb_reference drops everything taken outside DAY -- AWB has
+        nothing to meter in the dark -- and it did so on the far side of the
+        teardown, so the frame was already late by then. Dusk is the worst case:
+        the ladder crosses most of its range and REFERENCE_LADDER_STEP fires a
+        couple of dozen times, every one of them discarded.
+        """
+        timelapse = self._timelapse(test_config_file)
+        timelapse._reference_position = None  # the otherwise-always-fires case
+
+        timelapse.exposure._mode = mode
+        assert not timelapse._wants_reference_shot()
+
+        timelapse.exposure._mode = LightMode.DAY
+        assert timelapse._wants_reference_shot(), "the day case must still fire"
+
+    def test_wanting_a_reading_tracks_whether_one_would_be_used(self, test_config_file):
+        """The property and the precedence must not drift apart.
+
+        Two controllers on the same light, one shown a reference reading and
+        one not: they may diverge only where learns_day_wb says the reading is
+        used. A third source of daylight colour added to _target_colour_gains
+        without updating the property fails here rather than silently
+        reintroducing the teardowns.
+        """
+        for fixed, should_matter in (([2.547, 1.579], False), (None, True)):
+            shown = AdaptiveTimelapse(test_config_file).exposure
+            hidden = AdaptiveTimelapse(test_config_file).exposure
+            for controller in (shown, hidden):
+                day = controller.config["adaptive_timelapse"]["day_mode"]
+                if fixed:
+                    day["fixed_colour_gains"] = fixed
+                else:
+                    day.pop("fixed_colour_gains", None)
+
+            # One frame first: update_day_wb_reference only learns in DAY, and
+            # a controller that has decided nothing yet has no mode at all.
+            for controller in (shown, hidden):
+                controller.decide()
+            assert shown.last_mode == LightMode.DAY
+
+            shown.update_day_wb_reference({"ColourGains": [2.9, 1.35]})
+            # Several frames, because the cross-fade moves 15% of the way per
+            # frame -- one frame's difference is real but small enough to read
+            # as noise.
+            for _ in range(9):
+                shown.decide()
+                hidden.decide()
+            diverged = shown.decide()["ColourGains"] != hidden.decide()["ColourGains"]
+
+            assert diverged == should_matter, (
+                f"with fixed_colour_gains={fixed!r} the reading "
+                f"{'changed' if diverged else 'did not change'} the output, but "
+                f"learns_day_wb says {shown.learns_day_wb}"
+            )
+
+
+class TestLuxFromTheCapturedFrame:
+    """Lux no longer needs a shot of its own."""
+
+    @staticmethod
+    def _measure(config_file, brightness, exposure_us, gain):
+        from raspilapse.daemon import AdaptiveTimelapse
+
+        timelapse = AdaptiveTimelapse(config_file)
+        return timelapse._measure_lux(
+            brightness, {"ExposureTime": exposure_us, "AnalogueGain": gain}
+        )
+
+    def test_it_follows_the_documented_formula(self, test_config_file):
+        """(brightness / 128) * (1 / seconds) * (1 / gain) * calibration."""
+        from raspilapse.daemon import LUX_CALIBRATION
+
+        got = self._measure(test_config_file, 128.0, 10_000, 1.0)
+        assert got == pytest.approx((128 / 128) * (1 / 0.01) * (1 / 1.0) * LUX_CALIBRATION)
+
+    def test_daylight_lands_in_a_physically_plausible_range(self, test_config_file):
+        """A light meter reads roughly 20,000 lux under bright overcast.
+
+        The old figure was measured from a shot pinned at 0.2 s, which
+        saturates in daylight -- 368k rows of the database carry the identical
+        value 887.19. The scale changed here deliberately.
+        """
+        daylight = self._measure(test_config_file, 126.0, 210, 1.12)
+        assert 5_000 < daylight < 100_000, daylight
+
+    def test_a_dark_night_reads_near_zero(self, test_config_file):
+        night = self._measure(test_config_file, 90.0, 20_000_000, 6.0)
+        assert 0.0 < night < 1.0, night
+
+    def test_more_light_for_the_same_exposure_reads_higher(self, test_config_file):
+        dim = self._measure(test_config_file, 60.0, 10_000, 1.0)
+        bright = self._measure(test_config_file, 200.0, 10_000, 1.0)
+        assert bright > dim
+
+    def test_the_same_brightness_from_a_longer_exposure_reads_lower(self, test_config_file):
+        """A frame that needed more exposure to look the same saw less light."""
+        short = self._measure(test_config_file, 120.0, 1_000, 1.0)
+        long = self._measure(test_config_file, 120.0, 1_000_000, 1.0)
+        assert long < short
+
+    def test_gain_counts_against_it_the_same_way(self, test_config_file):
+        low = self._measure(test_config_file, 120.0, 10_000, 1.0)
+        high = self._measure(test_config_file, 120.0, 10_000, 6.0)
+        assert high == pytest.approx(low / 6.0)
+
+    @pytest.mark.parametrize(
+        "brightness,exposure_us,gain",
+        [(None, 10_000, 1.0), (120.0, None, 1.0), (120.0, 10_000, None), (120.0, 0, 1.0)],
+    )
+    def test_missing_or_impossible_inputs_give_nothing(
+        self, test_config_file, brightness, exposure_us, gain
+    ):
+        assert self._measure(test_config_file, brightness, exposure_us, gain) is None

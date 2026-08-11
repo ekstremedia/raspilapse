@@ -1,20 +1,51 @@
-# Production dependencies for Raspilapse
-# Note: picamera2 must be installed via apt, not pip
-# sudo apt install -y python3-picamera2
+# Runtime dependencies for Raspilapse.
+#
+# On a Raspberry Pi you do not need this file. Everything here arrives with
+#
+#     sudo apt install -y python3-picamera2 python3-yaml ffmpeg
+#
+# because python3-picamera2 depends on python3-numpy and python3-pil. Prefer
+# the apt packages: picamera2 cannot be installed from pip at all, and pip
+# upgrading numpy underneath it breaks it with a binary-incompatibility error.
+#
+# This file is for CI and for non-Pi development checkouts.
 
-# YAML configuration parsing
+# Configuration. The one dependency with no other way in.
 PyYAML>=6.0
 
-# Image processing for overlay system
-Pillow>=10.0.0
-
-# Analysis and visualization (for analyze_timelapse.py)
-matplotlib>=3.5.0
+# Overlay rendering and keograms; also the lores brightness metering the
+# exposure loop closes on. Both are pulled in by python3-picamera2.
+# 11.3.0 is the highest floor this project can set: it is the last 11.x
+# release, and it carries every security fix available to Python 3.9. The
+# remaining advisories are fixed only in 12.x, which requires Python 3.10 --
+# and 3.9 is supported here because Raspberry Pi OS Bullseye ships it and CI
+# builds against it. Raise this to 12.x the day 3.9 is dropped.
+#
+# In practice a Pi never installs this: apt's python3-pil is 9.4.0 and comes in
+# with picamera2. This floor is for pip installs -- CI and development
+# checkouts -- where nothing is pinned to the system libraries.
+Pillow>=11.3.0
 numpy>=1.21.0
-openpyxl>=3.0.0
 
-# Sun position calculation for polar regions (68°N)
+# --- everything below is optional; the feature degrades if it is absent ---
+
+# Sun elevation, recorded alongside each frame for the database and the
+# solar graph script. Nothing decides from it.
+# apt ships astral 1.6, whose API predates LocationInfo, so this one really
+# does need pip: pip3 install --break-system-packages 'astral>=3.2'
 astral>=3.2
 
-# HTTP requests for weather API
+# Uploading the daily video. requests-toolbelt streams the multipart body
+# instead of holding ~300 MB in memory.
 requests>=2.28.0
+requests-toolbelt>=1.0.0
+
+# scripts/db_graphs.py and scripts/graph_solar_patterns.py only.
+matplotlib>=3.5.0
+
+# The dynamic_range methods: fusion and tone_map need OpenCV, raw needs
+# rawpy. On a Pi both come from apt:
+#     sudo apt install -y python3-opencv python3-rawpy
+# Installed in CI so the pixel paths are tested there, not just on cameras.
+opencv-python-headless>=4.6.0
+rawpy>=0.21.0

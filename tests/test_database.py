@@ -1,7 +1,7 @@
 """Tests for database module."""
 
 import os
-import sys
+import sqlite3
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,9 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.database import CaptureDatabase, DatabaseConfig
+from raspilapse.storage.database import CAPTURES_DDL, CaptureDatabase, DatabaseConfig
 
 
 @pytest.fixture
@@ -626,3 +624,443 @@ class TestEdgeCases:
             sun_elevation=-18.0,  # Astronomical twilight
         )
         assert result is True
+
+
+class TestGetLastCapture:
+    """Test get_last_capture method for startup seeding."""
+
+    def test_get_last_capture_empty_db(self, db_config):
+        """Test returns None when database is empty."""
+        db = CaptureDatabase(db_config)
+        result = db.get_last_capture()
+        assert result is None
+
+    def test_get_last_capture_returns_most_recent(self, db_config):
+        """Test returns the most recent capture."""
+        db = CaptureDatabase(db_config)
+
+        # Store two captures
+        db.store_capture(
+            image_path="/test/image1.jpg",
+            metadata={
+                "capture_timestamp": "2025-01-10T12:00:00",
+                "ExposureTime": 1000,
+                "AnalogueGain": 1.0,
+            },
+            mode="day",
+            brightness_metrics={"mean_brightness": 120.0, "overexposed_percent": 0.0},
+        )
+        db.store_capture(
+            image_path="/test/image2.jpg",
+            metadata={
+                "capture_timestamp": "2025-01-10T12:30:00",
+                "ExposureTime": 2000,
+                "AnalogueGain": 1.5,
+            },
+            mode="day",
+            brightness_metrics={"mean_brightness": 118.0, "overexposed_percent": 0.0},
+        )
+
+        result = db.get_last_capture()
+        assert result is not None
+        assert result["exposure_time_us"] == 2000
+        assert result["analogue_gain"] == 1.5
+
+    def test_get_last_capture_excludes_overexposed(self, db_config):
+        """Test excludes captures with high brightness or overexposure."""
+        db = CaptureDatabase(db_config)
+
+        # Store a good capture first
+        db.store_capture(
+            image_path="/test/good.jpg",
+            metadata={
+                "capture_timestamp": "2025-01-10T12:00:00",
+                "ExposureTime": 1000,
+                "AnalogueGain": 1.0,
+            },
+            mode="day",
+            brightness_metrics={"mean_brightness": 120.0, "overexposed_percent": 0.0},
+        )
+
+        # Store an overexposed capture (more recent)
+        db.store_capture(
+            image_path="/test/overexposed.jpg",
+            metadata={
+                "capture_timestamp": "2025-01-10T12:30:00",
+                "ExposureTime": 5000,
+                "AnalogueGain": 2.0,
+            },
+            mode="day",
+            brightness_metrics={"mean_brightness": 250.0, "overexposed_percent": 95.0},
+        )
+
+        result = db.get_last_capture()
+        assert result is not None
+        # Should return the good capture, not the overexposed one
+        assert result["exposure_time_us"] == 1000
+        assert result["brightness_mean"] == 120.0
+
+    def test_get_last_capture_requires_exposure_data(self, db_config):
+        """Test excludes captures without exposure data."""
+        db = CaptureDatabase(db_config)
+
+        # Store capture without exposure data
+        db.store_capture(
+            image_path="/test/no_exposure.jpg",
+            metadata={"capture_timestamp": "2025-01-10T12:00:00"},
+            mode="day",
+        )
+
+        # Store capture with exposure data
+        db.store_capture(
+            image_path="/test/with_exposure.jpg",
+            metadata={
+                "capture_timestamp": "2025-01-10T11:00:00",  # Earlier
+                "ExposureTime": 1500,
+                "AnalogueGain": 1.2,
+            },
+            mode="day",
+            brightness_metrics={"mean_brightness": 115.0, "overexposed_percent": 0.0},
+        )
+
+        result = db.get_last_capture()
+        assert result is not None
+        assert result["exposure_time_us"] == 1500
+
+    def test_get_last_capture_disabled(self):
+        """Test returns None when database is disabled."""
+        config = {
+            "database": {"enabled": False},
+            "output": {"project_name": "test"},
+        }
+        db = CaptureDatabase(config)
+        result = db.get_last_capture()
+        assert result is None
+
+
+class TestPrune:
+    """Retention pruning."""
+
+    def _db(self, tmp_path, retention_days=0):
+        return CaptureDatabase(
+            {
+                "database": {
+                    "enabled": True,
+                    "path": str(tmp_path / "t.db"),
+                    "retention_days": retention_days,
+                },
+                "output": {"project_name": "cam"},
+            }
+        )
+
+    def _insert(self, db, days_ago, name):
+        ts = datetime.now() - timedelta(days=days_ago)
+        with db._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO captures (timestamp, unix_timestamp, camera_id, image_path) "
+                "VALUES (?, ?, ?, ?)",
+                (ts.isoformat(), ts.timestamp(), "cam", name),
+            )
+            conn.commit()
+
+    def test_disabled_by_default_keeps_everything(self, tmp_path):
+        # A missing retention_days must never silently delete an existing
+        # camera's history just because it pulled a new version.
+        db = self._db(tmp_path)
+        self._insert(db, 900, "ancient.jpg")
+
+        assert db.prune() == {"captures": 0, "upload_queue": 0}
+        assert db.get_statistics()["total_captures"] == 1
+
+    def test_deletes_only_rows_past_the_window(self, tmp_path):
+        db = self._db(tmp_path, retention_days=180)
+        self._insert(db, 200, "old.jpg")
+        self._insert(db, 10, "recent.jpg")
+
+        assert db.prune()["captures"] == 1
+        with db._get_connection() as conn:
+            remaining = [r["image_path"] for r in conn.execute("SELECT image_path FROM captures")]
+        assert remaining == ["recent.jpg"]
+
+    def test_dry_run_counts_without_deleting(self, tmp_path):
+        db = self._db(tmp_path, retention_days=180)
+        self._insert(db, 200, "old.jpg")
+
+        assert db.prune(dry_run=True)["captures"] == 1
+        assert db.get_statistics()["total_captures"] == 1
+
+    def test_retention_days_override(self, tmp_path):
+        db = self._db(tmp_path, retention_days=0)
+        self._insert(db, 30, "old.jpg")
+
+        assert db.prune(retention_days=7)["captures"] == 1
+
+    def test_prunes_completed_upload_rows(self, tmp_path):
+        db = self._db(tmp_path, retention_days=180)
+        old = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d %H:%M:%S")
+        recent = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
+        with db._get_connection() as conn:
+            conn.executemany(
+                "INSERT INTO upload_queue (video_date, video_path, status, completed_at) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    ("2026-01-01", "/a.mp4", "success", old),
+                    ("2026-02-01", "/b.mp4", "cancelled", old),
+                    ("2026-07-01", "/c.mp4", "success", recent),
+                    ("2026-07-02", "/d.mp4", "pending", None),
+                ],
+            )
+            conn.commit()
+
+        assert db.prune()["upload_queue"] == 2
+        with db._get_connection() as conn:
+            left = {r["video_date"] for r in conn.execute("SELECT video_date FROM upload_queue")}
+        # Pending rows are never touched, whatever their age.
+        assert left == {"2026-07-01", "2026-07-02"}
+
+    def test_vacuum_runs(self, tmp_path):
+        db = self._db(tmp_path, retention_days=180)
+        self._insert(db, 200, "old.jpg")
+        db.prune()
+        assert db.vacuum() is True
+
+
+class TestSchemaSingleSource:
+    """One definition of the schema, applied to whichever connection you have."""
+
+    def test_wal_enabled_for_file_databases(self, tmp_path):
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(tmp_path / "wal.db")},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+    def test_schema_version_is_current(self, tmp_path):
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(tmp_path / "v.db")},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        assert version == CaptureDatabase.SCHEMA_VERSION
+
+    def test_dropped_indexes_are_not_recreated(self, tmp_path):
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(tmp_path / "i.db")},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            names = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
+                )
+            }
+        assert "idx_captures_lux" not in names
+        assert "idx_captures_mode" not in names
+        assert "idx_captures_brightness" not in names
+        assert "idx_captures_camera_time" in names
+
+    def test_migration_5_drops_indexes_on_an_existing_database(self, tmp_path):
+        path = tmp_path / "legacy.db"
+        # A pre-migration database: schema v4 with all five old indexes.
+        with sqlite3.connect(path) as conn:
+            conn.execute(CAPTURES_DDL)
+            conn.execute("CREATE INDEX idx_captures_lux ON captures(lux)")
+            conn.execute("CREATE INDEX idx_captures_mode ON captures(mode)")
+            conn.execute(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT)"
+            )
+            conn.execute("INSERT INTO schema_version (version) VALUES (4)")
+            conn.commit()
+
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(path)},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            names = {
+                r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+            }
+            version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+
+        # Not a hardcoded 5: opening a legacy file runs every migration, so
+        # pinning the number here breaks on the next bump for a reason that
+        # has nothing to do with what this test is about, which is that the
+        # indexes are gone.
+        assert version == CaptureDatabase.SCHEMA_VERSION
+        assert "idx_captures_lux" not in names
+        assert "idx_captures_mode" not in names
+
+    def test_migration_6_adds_the_telemetry_columns_to_an_existing_database(self, tmp_path):
+        path = tmp_path / "legacy_v5.db"
+        # A v5 database, built from the DDL as it stood before the new columns
+        # were added to it -- otherwise CAPTURES_DDL would create them and the
+        # ALTERs would never be exercised.
+        ddl = CAPTURES_DDL
+        for column in (
+            "system_mem_used_mb INTEGER",
+            "system_mem_percent REAL",
+            "system_disk_free_gb REAL",
+            "system_disk_percent REAL",
+            "system_uptime_s INTEGER",
+            "process_rss_mb INTEGER",
+            "network_up INTEGER",
+            "network_signal_dbm INTEGER",
+        ):
+            ddl = ddl.replace(f"        {column},\n", "")
+        assert "network_up" not in ddl
+
+        with sqlite3.connect(path) as conn:
+            conn.execute(ddl)
+            conn.execute(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT)"
+            )
+            conn.execute("INSERT INTO schema_version (version) VALUES (5)")
+            conn.execute(
+                "INSERT INTO captures (timestamp, unix_timestamp, camera_id, image_path,"
+                " system_cpu_temp) VALUES ('2026-08-06T00:00:00', 1786000000.0, 'cam',"
+                " '/old.jpg', 44.5)"
+            )
+            conn.commit()
+
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(path)},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(captures)")}
+            version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+            preserved = conn.execute(
+                "SELECT system_cpu_temp, network_up FROM captures WHERE image_path='/old.jpg'"
+            ).fetchone()
+
+        # The chain runs to the current version, not just to 6 -- a legacy
+        # database picks up every later migration in the same open.
+        assert version == CaptureDatabase.SCHEMA_VERSION
+        assert {
+            "system_mem_used_mb",
+            "system_mem_percent",
+            "system_disk_free_gb",
+            "system_disk_percent",
+            "system_uptime_s",
+            "process_rss_mb",
+            "network_up",
+            "network_signal_dbm",
+        } <= columns
+        # The rows that were already there keep their data and get NULL, not 0,
+        # for the columns nobody could have measured at the time.
+        assert tuple(preserved) == (44.5, None)
+
+    def test_migration_7_adds_dr_method_to_an_existing_database(self, tmp_path):
+        path = tmp_path / "legacy_v6.db"
+        # A v6 database: the DDL as it stood before dr_method existed.
+        ddl = CAPTURES_DDL.replace("        dr_method TEXT,\n", "")
+        assert "dr_method" not in ddl
+
+        with sqlite3.connect(path) as conn:
+            conn.execute(ddl)
+            conn.execute(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT)"
+            )
+            conn.execute("INSERT INTO schema_version (version) VALUES (6)")
+            conn.execute(
+                "INSERT INTO captures (timestamp, unix_timestamp, camera_id, image_path)"
+                " VALUES ('2026-08-06T00:00:00', 1786000000.0, 'cam', '/old.jpg')"
+            )
+            conn.commit()
+
+        db = CaptureDatabase(
+            {
+                "database": {"enabled": True, "path": str(path)},
+                "output": {"project_name": "cam"},
+            }
+        )
+        with db._get_connection() as conn:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(captures)")}
+            version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+            preserved = conn.execute(
+                "SELECT dr_method FROM captures WHERE image_path='/old.jpg'"
+            ).fetchone()
+
+        assert version == 7
+        assert "dr_method" in columns
+        # Old frames predate the trial: NULL, not a fabricated "off".
+        assert tuple(preserved) == (None,)
+
+    def test_dr_method_round_trips_from_metadata(self, db_config, sample_metadata):
+        db = CaptureDatabase(db_config)
+        # A distinct timestamp: INSERT OR REPLACE keys on (timestamp,
+        # camera_id) and two stores of the same second would collapse.
+        db.store_capture(
+            image_path="/test/fused.jpg",
+            metadata={
+                **sample_metadata,
+                "capture_timestamp": "2025-01-10T15:30:30",
+                "dr_method": "fusion+tm",
+            },
+            mode="day",
+        )
+        db.store_capture(
+            image_path="/test/plain.jpg",
+            metadata=sample_metadata,
+            mode="day",
+        )
+        with db._get_connection() as conn:
+            rows = dict(conn.execute("SELECT image_path, dr_method FROM captures").fetchall())
+        assert rows == {"/test/fused.jpg": "fusion+tm", "/test/plain.jpg": None}
+
+    def test_upload_service_creates_the_v4_index(self, tmp_path):
+        # UploadService used to carry its own DDL that predated migration v4,
+        # so a database it created first was permanently missing that index.
+        from raspilapse.storage.upload import UploadService
+
+        path = tmp_path / "queue.db"
+        UploadService({"database": {"path": str(path)}, "video_upload": {}})
+
+        with sqlite3.connect(path) as conn:
+            names = {
+                r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+            }
+            version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+
+        assert "idx_upload_queue_status_retry" in names
+        assert version == CaptureDatabase.SCHEMA_VERSION
+
+
+class TestAsInt:
+    """_as_int's contract is that bad input becomes NULL, never an exception.
+
+    An exception here escapes into store_capture's handler, which drops the
+    whole capture row -- losing that frame's exposure and brightness history
+    over one bad telemetry reading.
+    """
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (12.4, 12),
+            (12.6, 13),
+            (0, 0),
+            (None, None),
+            (float("nan"), None),
+            (float("inf"), None),
+            (float("-inf"), None),
+            ("not a number", None),
+        ],
+    )
+    def test_bad_input_becomes_none_rather_than_raising(self, value, expected):
+        from raspilapse.storage.database import _as_int
+
+        assert _as_int(value) == expected or (expected is None and _as_int(value) is None)

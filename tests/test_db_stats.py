@@ -5,9 +5,7 @@ import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timedelta
-from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -207,9 +205,11 @@ class TestPrintStats:
         assert "Last 3 captures" in captured.out
         # Count table rows - lines that contain mode (night/day) but not "distribution"
         table_rows = [
-            l
-            for l in captured.out.split("\n")
-            if ("night" in l or "day" in l) and "distribution" not in l and "Mode:" not in l
+            line
+            for line in captured.out.split("\n")
+            if ("night" in line or "day" in line)
+            and "distribution" not in line
+            and "Mode:" not in line
         ]
         assert len(table_rows) == 3
 

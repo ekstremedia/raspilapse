@@ -1,18 +1,16 @@
 """Tests for capture_image module."""
 
-import os
 import json
-import tempfile
+import os
 import shutil
+import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 import yaml
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.capture_image import CameraConfig, ImageCapture, capture_single_image
+from raspilapse.camera.capture import CameraConfig, ImageCapture, capture_single_image
 
 
 @pytest.fixture
@@ -284,6 +282,20 @@ class TestImageCapture:
         assert mock_picamera2.close.called
         assert capture.picam2 is None
 
+    def test_a_failed_initialize_releases_the_camera(self, mock_picamera2, test_config_file):
+        """A half-opened Picamera2 left behind pins the device in picamera2's
+        global registry, and the retry then fails with "Camera in use" even
+        though the previous open never completed."""
+        config = CameraConfig(test_config_file)
+        capture = ImageCapture(config)
+        mock_picamera2.configure.side_effect = RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            capture.initialize_camera()
+
+        assert capture.picam2 is None
+        mock_picamera2.close.assert_called_once()
+
 
 class TestDateOrganization:
     """Test date-organized folder structure."""
@@ -295,8 +307,8 @@ class TestDateOrganization:
 
     def test_organize_by_date_enabled(self, mock_picamera2, test_output_dir):
         """Test capture with date organization."""
-        from datetime import datetime
         import tempfile
+        from datetime import datetime
 
         # Create config with date organization
         config_data = {
@@ -360,6 +372,7 @@ class TestDateOrganization:
     def test_date_format_variations(self, test_output_dir):
         """Test different date format options."""
         import tempfile
+
         import yaml
 
         formats = [
@@ -473,7 +486,7 @@ class TestIntegration:
             pytest.skip(f"Camera test failed: {e}")
 
 
-class TestControlMapping:
+class TestControlMappingBasics:
     """Test camera control mapping."""
 
     def test_prepare_control_map_snake_case(self, test_config_file):
@@ -640,6 +653,7 @@ class TestOutputPath:
     def test_generate_filename_with_timestamp(self, mock_picamera2, test_output_dir):
         """Test filename with timestamp pattern."""
         import tempfile
+
         import yaml
 
         config_data = {
@@ -684,6 +698,7 @@ class TestOutputPath:
     def test_generate_filename_with_name_placeholder(self, mock_picamera2, test_output_dir):
         """Test filename with {name} placeholder."""
         import tempfile
+
         import yaml
 
         config_data = {
@@ -729,6 +744,7 @@ class TestMetadataDisabled:
     def test_capture_without_metadata(self, mock_picamera2, test_output_dir):
         """Test capture when metadata is disabled."""
         import tempfile
+
         import yaml
 
         config_data = {
@@ -777,6 +793,7 @@ class TestOverlayIntegration:
     def test_capture_with_overlay(self, mock_picamera2, test_output_dir):
         """Test capture applies overlay when enabled."""
         import tempfile
+
         import yaml
 
         config_data = {
@@ -817,20 +834,57 @@ class TestOverlayIntegration:
 
         try:
             config = CameraConfig(config_path)
-            capture = ImageCapture(config)
+
+            # The overlay is passed in rather than constructed here. ImageCapture
+            # no longer knows what an overlay is -- it applies whatever callable
+            # it was handed, which is what keeps Pillow out of the capture path.
+            mock_overlay = MagicMock(return_value=os.path.join(test_output_dir, "test.jpg"))
+            capture = ImageCapture(config, post_process=mock_overlay)
             capture.initialize_camera()
 
-            with patch.object(capture.overlay, "apply_overlay") as mock_overlay:
-                mock_overlay.return_value = os.path.join(test_output_dir, "test.jpg")
-                image_path, _ = capture.capture()
+            image_path, _ = capture.capture()
 
-                # Verify overlay was called
-                mock_overlay.assert_called_once()
+            mock_overlay.assert_called_once()
+            called_path, called_metadata, called_mode = mock_overlay.call_args[0]
+            assert called_path == image_path
+            assert isinstance(called_metadata, dict)
+        finally:
+            os.unlink(config_path)
+
+    def test_capture_without_post_process_leaves_the_frame_alone(
+        self, mock_picamera2, test_output_dir
+    ):
+        """No post-processor is the whole of "no overlay"."""
+        config_data = {
+            "camera": {
+                "resolution": {"width": 640, "height": 480},
+                "transforms": {"horizontal_flip": False, "vertical_flip": False},
+            },
+            "output": {
+                "directory": test_output_dir,
+                "filename_pattern": "test_%Y%m%d.jpg",
+                "project_name": "test",
+                "quality": 85,
+            },
+            "system": {"create_directories": True, "save_metadata": False},
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(config_data, f)
+            config_path = f.name
+
+        try:
+            capture = ImageCapture(CameraConfig(config_path))
+            capture.initialize_camera()
+
+            assert capture.post_process is None
+            image_path, _ = capture.capture()
+            assert image_path
         finally:
             os.unlink(config_path)
 
 
-class TestBrightnessComputation:
+class TestBrightnessComputationBasics:
     """Test brightness computation from lores stream."""
 
     @pytest.fixture
@@ -864,8 +918,9 @@ class TestBrightnessComputation:
 
     def test_compute_brightness_metrics(self, mock_picamera2, test_config):
         """Test brightness metrics are computed correctly."""
-        import numpy as np
         from unittest.mock import MagicMock
+
+        import numpy as np
 
         config = CameraConfig(test_config)
         capture = ImageCapture(config)
@@ -1192,6 +1247,7 @@ class TestSymlinkLatest:
     def test_symlink_created(self, mock_picamera2, test_output_dir):
         """Test symlink to latest image is created."""
         import tempfile
+
         import yaml
 
         config_data = {
@@ -1437,7 +1493,7 @@ class TestCameraConfigValidation:
         with open(config_path, "w") as f:
             f.write("invalid: yaml: [[[")
 
-        with pytest.raises(Exception):
+        with pytest.raises(yaml.YAMLError):
             CameraConfig(str(config_path))
 
     def test_config_nonexistent_file(self):

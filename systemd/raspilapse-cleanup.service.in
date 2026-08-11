@@ -1,0 +1,36 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Image Cleanup Service
+Documentation=https://github.com/ekstremedia/raspilapse
+After=network.target
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@PROJECT_DIR@
+# Type=oneshot runs these in order: expired images off disk, then the videos
+# made from them, then expired rows out of the database. All three are no-ops
+# when their retention is disabled.
+#
+# Image retention lives in cleanup_old_images.sh (default: keep 7 days of
+# /var/www/html/images). Override without editing anything tracked by git:
+#   sudo systemctl edit raspilapse-cleanup.service
+#     [Service]
+#     Environment=RASPILAPSE_KEEP_DAYS=14
+#     Environment=RASPILAPSE_IMAGE_DIR=/your/output/directory
+# RASPILAPSE_IMAGE_DIR must match output.directory in config.yml, or the
+# script silently prunes a tree the camera is not writing to.
+# The drop-in survives re-runs of scripts/install.sh, which rewrites only this
+# file. Video and database retention are video.retention_days and
+# database.retention_days in config.yml, read by the two commands below.
+ExecStart=/bin/bash @PROJECT_DIR@/scripts/cleanup_old_images.sh
+ExecStart=@PYTHON@ -m raspilapse.cli.prune_videos
+ExecStart=@PYTHON@ -m raspilapse.cli.db --prune
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raspilapse-cleanup
+
+# Housekeeping must never compete with the capture loop for I/O.
+Nice=10
+IOSchedulingClass=idle

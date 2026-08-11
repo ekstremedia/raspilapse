@@ -10,29 +10,26 @@ Tests the timelapse video generation functionality including:
 - Deflicker and resolution options
 """
 
-import pytest
+import os
+import shutil
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-import tempfile
-import shutil
+from unittest.mock import Mock, patch
+
+import pytest
 import yaml
-import sys
-import os
-from unittest.mock import Mock, patch, MagicMock
 
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from make_timelapse import (
-    parse_time,
+from raspilapse.video.timelapse import (
+    Colors,
+    create_video,
     find_images_in_range,
     load_config,
-    create_video,
-    Colors,
+    main,
+    parse_time,
+    print_info,
     print_section,
     print_subsection,
-    print_info,
-    main,
 )
 
 
@@ -127,15 +124,16 @@ class TestFindImagesInRange:
             temp_image_dir, "test", start, end, organize_by_date=True, date_format="%Y/%m/%d"
         )
 
-        # Should find 8 images (excluding the ones outside range)
-        assert len(images) == 8
+        # 7 images: the range is half-open, so the frame exactly at the end
+        # instant (08:00:00) belongs to the next window, not to both.
+        assert len(images) == 7
 
         # Check they're sorted
         assert images == sorted(images)
 
         # Check first and last
         assert "20_00_00" in images[0].name
-        assert "08_00_00" in images[-1].name
+        assert "04_00_00" in images[-1].name
 
     def test_find_images_no_results(self, temp_image_dir):
         """Test finding images when none exist in range."""
@@ -165,8 +163,9 @@ class TestFindImagesInRange:
             temp_image_dir, "test", start, end, organize_by_date=True, date_format="%Y/%m/%d"
         )
 
-        # Should find 4 images (20:00, 20:30, 21:00, 22:00, 23:00)
-        assert len(images) == 5
+        # 4 images: 20:00, 20:30, 21:00, 22:00. The 23:00 frame sits exactly
+        # on the (exclusive) end of the window.
+        assert len(images) == 4
         assert all("2025_11_05" in img.name for img in images)
 
 
@@ -284,10 +283,57 @@ class TestCreateVideoCodecHandling:
         yield output
         shutil.rmtree(temp_dir)
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_the_frame_rate_is_set_on_the_input_not_the_output(
+        self, mock_run, temp_images, temp_output
+    ):
+        """`-r` after `-i` is an output option, and that changes what it means.
+
+        Against a concat input it becomes a constant-rate *conversion*: the
+        demuxer inherits image2's implicit 25 fps, so ffmpeg duplicates or
+        drops frames to reach whatever `-r` says. Measured with real files on
+        ffmpeg 5.1.9, 50 source images at `-r 30`: 60 encoded frames with `-r`
+        after `-i`, 50 with it before. At the configured `video.fps: 25` the
+        two rates agree and the bug is invisible, which is why it survived.
+
+        Asserted on position rather than presence: `"-r" in cmd and "30" in
+        cmd` passes on the broken command line and the fixed one alike, and
+        that is exactly the test this replaces the absence of.
+
+        `-framerate` is not the answer either -- the concat demuxer has no such
+        option and ffmpeg exits with "Option framerate not found".
+        """
+        from raspilapse.video.timelapse import create_video
+
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(temp_images, temp_output, fps=30, codec="libx264")
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd.count("-r") == 1, "two rates means one of them is a conversion"
+        assert cmd.index("-r") < cmd.index("-i"), "-r after -i is an output-side conversion"
+        assert cmd[cmd.index("-r") + 1] == "30"
+        assert "-framerate" not in cmd, "the concat demuxer has no -framerate option"
+
+    @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_a_wedged_ffmpeg_is_killed_and_reported(self, mock_run, temp_images, temp_output):
+        """Past the 3h cap ffmpeg is wedged, not slow -- the measured 4K day
+        is ~25 minutes. An unbounded wait here sat inside a Type=oneshot unit
+        whose next timer merged into the stuck job: no video ever again,
+        nothing marked failed."""
+        import subprocess as _subprocess
+
+        from raspilapse.video.timelapse import create_video
+
+        mock_run.side_effect = _subprocess.TimeoutExpired(cmd="ffmpeg", timeout=3 * 3600)
+
+        assert create_video(temp_images, temp_output, fps=25, codec="libx264") is False
+
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_libx264_uses_crf_preset_threads(self, mock_run, temp_images, temp_output):
         """Test that libx264 codec uses CRF, preset, and threads."""
-        from make_timelapse import create_video
+        from raspilapse.video.timelapse import create_video
 
         mock_run.return_value = Mock(returncode=0)
         # Create a fake output file so stat() works
@@ -319,10 +365,10 @@ class TestCreateVideoCodecHandling:
         # Should NOT have bitrate for libx264
         assert "-b:v" not in cmd
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_h264_v4l2m2m_uses_bitrate(self, mock_run, temp_images, temp_output):
         """Test that h264_v4l2m2m hardware encoder uses bitrate instead of CRF."""
-        from make_timelapse import create_video
+        from raspilapse.video.timelapse import create_video
 
         mock_run.return_value = Mock(returncode=0)
         temp_output.touch()
@@ -337,6 +383,10 @@ class TestCreateVideoCodecHandling:
             preset="ultrafast",
             threads=2,
             bitrate="10M",
+            # The Pi's V4L2 encoder cannot go above this, so a hardware-codec
+            # call without a resolution is rejected before ffmpeg is reached.
+            # Asking for the bitrate branch means asking for a size it can do.
+            resolution=(1920, 1080),
         )
 
         assert mock_run.called
@@ -350,10 +400,10 @@ class TestCreateVideoCodecHandling:
         assert "-preset" not in cmd
         assert "-threads" not in cmd
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_h264_omx_uses_bitrate(self, mock_run, temp_images, temp_output):
         """Test that h264_omx hardware encoder uses bitrate instead of CRF."""
-        from make_timelapse import create_video
+        from raspilapse.video.timelapse import create_video
 
         mock_run.return_value = Mock(returncode=0)
         temp_output.touch()
@@ -368,6 +418,10 @@ class TestCreateVideoCodecHandling:
             preset="ultrafast",
             threads=2,
             bitrate="15M",
+            # The Pi's V4L2 encoder cannot go above this, so a hardware-codec
+            # call without a resolution is rejected before ffmpeg is reached.
+            # Asking for the bitrate branch means asking for a size it can do.
+            resolution=(1920, 1080),
         )
 
         assert mock_run.called
@@ -379,9 +433,47 @@ class TestCreateVideoCodecHandling:
         # Should NOT have CRF for hardware encoder
         assert "-crf" not in cmd
 
+    @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_a_hardware_codec_at_source_resolution_is_refused(
+        self, mock_run, temp_images, temp_output
+    ):
+        """The Pi's V4L2 encoder stops at 1080p, and nothing sets a resolution
+        by default -- so setting video.codec.name to h264_v4l2m2m used to turn
+        the 05:00 job into a nightly 'can't configure encoder' failure."""
+        from raspilapse.video.timelapse import create_video
+
+        result = create_video(
+            temp_images, temp_output, codec="h264_v4l2m2m", bitrate="10M", resolution=None
+        )
+
+        assert result is False
+        assert not mock_run.called, "ffmpeg should not be reached"
+
+    @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_a_hardware_codec_above_1080p_is_refused(self, mock_run, temp_images, temp_output):
+        from raspilapse.video.timelapse import create_video
+
+        # Verified on this hardware: 1440p fails the same way 4K does.
+        assert (
+            create_video(temp_images, temp_output, codec="h264_v4l2m2m", resolution=(2560, 1440))
+            is False
+        )
+        assert not mock_run.called
+
+    @patch("raspilapse.video.timelapse.subprocess.run")
+    def test_libx264_is_not_subject_to_the_hardware_limit(self, mock_run, temp_images, temp_output):
+        from raspilapse.video.timelapse import create_video
+
+        mock_run.return_value = Mock(returncode=0)
+        temp_output.touch()
+
+        create_video(temp_images, temp_output, codec="libx264", resolution=None)
+
+        assert mock_run.called
+
     def test_create_video_empty_list(self, temp_output):
         """Test create_video with empty image list."""
-        from make_timelapse import create_video
+        from raspilapse.video.timelapse import create_video
 
         result = create_video([], temp_output)
         assert result is False
@@ -392,8 +484,8 @@ class TestVideoDirectoryOrganization:
 
     def test_video_path_with_date_organization(self):
         """Test that video path includes date subdirectory when organize_by_date is True."""
-        from pathlib import Path
         from datetime import datetime
+        from pathlib import Path
 
         video_base_dir = "/videos"
         video_organize_by_date = True
@@ -422,7 +514,6 @@ class TestVideoDirectoryOrganization:
 
     def test_video_date_format_variations(self):
         """Test different date format patterns."""
-        from pathlib import Path
         from datetime import datetime
 
         end_datetime = datetime(2025, 12, 25, 10, 0, 0)
@@ -541,7 +632,7 @@ class TestDeflickerOptions:
         yield output
         shutil.rmtree(temp_dir)
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_deflicker_enabled(self, mock_run, temp_images, temp_output):
         """Test deflicker filter is applied when enabled."""
         mock_run.return_value = Mock(returncode=0)
@@ -561,7 +652,7 @@ class TestDeflickerOptions:
         assert "deflicker" in filter_string
         assert "size=10" in filter_string
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_deflicker_disabled(self, mock_run, temp_images, temp_output):
         """Test no deflicker filter when disabled."""
         mock_run.return_value = Mock(returncode=0)
@@ -577,7 +668,7 @@ class TestDeflickerOptions:
         cmd_str = " ".join(cmd)
         assert "deflicker" not in cmd_str
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_deflicker_custom_size(self, mock_run, temp_images, temp_output):
         """Test custom deflicker size."""
         mock_run.return_value = Mock(returncode=0)
@@ -613,7 +704,7 @@ class TestDeflickerOptions:
             )
 
 
-class TestResolutionScaling:
+class TestResolutionScalingBasics:
     """Test video resolution scaling."""
 
     @pytest.fixture
@@ -636,7 +727,7 @@ class TestResolutionScaling:
         yield output
         shutil.rmtree(temp_dir)
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_resolution_scaling(self, mock_run, temp_images, temp_output):
         """Test resolution scaling filter is applied."""
         mock_run.return_value = Mock(returncode=0)
@@ -655,7 +746,7 @@ class TestResolutionScaling:
         filter_string = cmd[vf_index + 1]
         assert "scale=1920:1080" in filter_string
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_no_resolution_scaling(self, mock_run, temp_images, temp_output):
         """Test no scaling filter when resolution is None."""
         mock_run.return_value = Mock(returncode=0)
@@ -672,7 +763,7 @@ class TestResolutionScaling:
         cmd_str = " ".join(cmd)
         assert "scale=" not in cmd_str
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_resolution_and_deflicker_combined(self, mock_run, temp_images, temp_output):
         """Test resolution and deflicker filters are combined."""
         mock_run.return_value = Mock(returncode=0)
@@ -720,7 +811,7 @@ class TestCreateVideoErrorHandling:
         yield output
         shutil.rmtree(temp_dir)
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_ffmpeg_failure(self, mock_run, temp_images, temp_output):
         """Test handling of ffmpeg failure."""
         mock_run.return_value = Mock(returncode=1)
@@ -729,7 +820,7 @@ class TestCreateVideoErrorHandling:
 
         assert result is False
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_ffmpeg_success(self, mock_run, temp_images, temp_output):
         """Test handling of ffmpeg success."""
         mock_run.return_value = Mock(returncode=0)
@@ -745,7 +836,7 @@ class TestCreateVideoErrorHandling:
 
         logger = logging.getLogger("test")
 
-        with patch("make_timelapse.subprocess.run") as mock_run:
+        with patch("raspilapse.video.timelapse.subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0)
             temp_output.touch()
 
@@ -895,7 +986,7 @@ class TestFastStartFlag:
         yield output
         shutil.rmtree(temp_dir)
 
-    @patch("make_timelapse.subprocess.run")
+    @patch("raspilapse.video.timelapse.subprocess.run")
     def test_faststart_flag_present(self, mock_run, temp_images, temp_output):
         """Test that faststart flag is included for web streaming."""
         mock_run.return_value = Mock(returncode=0)
@@ -972,10 +1063,10 @@ class TestFFmpegErrorHandling:
     @patch("subprocess.run")
     def test_ffmpeg_subprocess_exception(self, mock_run, temp_images, temp_output):
         """Test handling when subprocess raises an exception."""
-        mock_run.side_effect = Exception("Subprocess failed")
+        mock_run.side_effect = RuntimeError("Subprocess failed")
 
-        # The function lets exceptions propagate
-        with pytest.raises(Exception):
+        # The function lets exceptions propagate rather than swallowing them
+        with pytest.raises(RuntimeError, match="Subprocess failed"):
             create_video(temp_images, temp_output)
 
     @patch("subprocess.run")

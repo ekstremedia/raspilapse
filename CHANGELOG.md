@@ -5,6 +5,763 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.8.0] - 2026-08-09
+
+A camera that never looks at its own colours will drift, and this one's
+daylight sat green-tinged khaki for months on gains that suited different
+weather. The fix is the same idea the exposure loop has always used, applied
+to white balance: measure the frame that was just taken, correct the next
+one, gently.
+
+### Added
+
+- `adaptive_timelapse.day_mode.wb_feedback` — a closed-loop trim on the day
+  white point, off by default. Every day frame's lores buffer already holds
+  the U/V chroma planes; near-neutral pixels (grey cloud, grey water) are
+  selected there and the day gains are nudged toward whatever makes them
+  render grey — about 0.1% per frame against a real cast at the default
+  strength, at most ~3.5% against a reading the 2:1 input clamp has already
+  flagged as broken, and never past ±`max_trim` around the configured
+  anchor. Fixed gains alone cannot do this: libcamera swaps its
+  colour matrix as the colour temperature implied by the manual gains moves,
+  so the same gains render differently in different weather — measured live,
+  one fixed white point rendered overcast grey as khaki while a 16% red-gain
+  cut moved rendered red 27%. Night and aurora colour are never touched: the
+  trim rides the day endpoint of the existing cross-fade only, and updates
+  are gated to day frames. Survives restarts via `data/wb_trim.json`;
+  `wb_trim_r`/`wb_trim_b` appear in the metadata diagnostics once it moves.
+
+## [1.7.0] - 2026-08-09
+
+Shadows crushed against protected highlights are the price of deciding one
+exposure per frame. This release adds four opt-in ways past that limit, one
+config key to choose between them, and a tool that shoots them side by side.
+Every method was validated live on camera hardware — night and daylight —
+before this release, and the field tuning is folded into the docs.
+
+### Added
+
+- `adaptive_timelapse.dynamic_range.method` — selectable dynamic-range
+  methods, all off by default: `fusion` (2–3 exposure brackets merged with
+  Mertens fusion at full resolution; the spread narrows continuously to zero
+  as exposures lengthen, so night frames are exactly the plain single-shot
+  path), `tone_map` (blended luminance CLAHE on the captured frame, fading
+  out on dark frames; combinable with any method), `sensor_hdr` (the
+  imx708's on-chip HDR by day at 2304×1296, upscaled back to the configured
+  size so the video pipeline never sees mixed frame sizes) and `raw`
+  (develop the sensor's 10-bit DNG with its own embedded colour matrices;
+  the ISP JPEG stays as the always-there fallback).
+- `raspilapse-drtest` — captures the same scene with each method back to
+  back into labelled files, with a timing/brightness summary table. Also
+  measures the numbers the daemon's slot-budget guards assume.
+- `output.dng_sidecar` — keep every Nth frame's raw negative beside its
+  JPEG for hand-developing, pruned oldest-first past `max_files`. Ships
+  disabled.
+- `{dr_method}` overlay placeholder and a `dr_method` database column
+  (schema v7), so trial frames are labelled on the image and comparable
+  with a WHERE clause.
+- OpenCV and rawpy in `requirements.txt` (CI-only, as ever): the pixel
+  paths are tested in CI rather than skipped. On a Pi they come from apt:
+  `sudo apt install python3-opencv python3-rawpy`.
+
+### Changed
+
+- While fusion is active, `highlight_protection` defaults off: the under
+  bracket buys about two stops of highlight headroom against the half stop
+  the protection floor could, without darkening the base frame. An explicit
+  `enabled: true` still wins.
+
+### Removed
+
+- `adaptive_timelapse.hdr` — it set libcamera's `HdrMode` control, which
+  the Pi 4's sensor never acts on; the block was dormant on every camera.
+  Configs that still carry it get one warning pointing at `dynamic_range`.
+
+## [1.6.0] - 2026-08-09
+
+The rest of the dusk step, and the reason the timelapse felt choppy — then a
+fresh install on a new camera put the whole path under audit: three
+correctness passes over the daemon, the video pipeline and the storage layer,
+and a claim-by-claim review of every document. What they confirmed is fixed
+below.
+
+1.5.0 removed the *colour* half of the day-to-transition seeding. The exposure
+half was still there, and so was a second copy of the same mistake at every
+restart. Separately, the camera was being torn down and reopened 68 times a
+day to compute a white balance reading it then discarded — and each of those
+landed a frame three seconds late.
+
+### Fixed
+- **`install.sh --check` exited 1 even when it printed "Ready to install."**
+  The EXIT trap's last command was `[ -n "$STAGING" ]`, false whenever nothing
+  was staged, and bash takes the trap's status as the script's — which also
+  broke the success exits of `--dry-run` and `--uninstall`, and any script
+  gating on `$?`.
+- **The overlay could be enabled and draw nothing.** The default position was
+  a corner layout, corner layouts require `overlay.content` lines, and the
+  miss was logged at DEBUG. `top-bar` — which has built-in content — is now
+  the default, the unconfigured-corner case logs a WARNING, and the default
+  font is DejaVuSans-Bold rather than PIL's built-in bitmap font, which
+  ignores the computed size and rendered 10px text on a 4K frame.
+- **A frame straddling midnight filed under the wrong day.** The date
+  subdirectory, the image filename, the metadata sidecar's name and its
+  `capture_timestamp` each called `datetime.now()` separately; one shared,
+  timezone-aware timestamp now covers all four. Aware matters in October:
+  during the DST fall-back hour a naive timestamp repeats, and the database's
+  `INSERT OR REPLACE` destroyed the first pass's rows while the second pass
+  overwrote its JPEGs (those now keep both files under a `_dst` suffix).
+- **A wedged ffmpeg ended daily videos forever, silently.** The render ran
+  under `TimeoutStartSec=infinity`, and a `Type=oneshot` start that never
+  returns never fails — the next morning's timer merges into the stuck job.
+  The unit now caps at 4h, the renderer caps its own ffmpeg at 3h, daily.py
+  caps the renderer subprocess, and lock contention reports how long the
+  holder has been at it.
+- **A broken renderer invocation reported "no images — nothing to do" nightly.**
+  "Nothing to render" exited 2, which argparse also uses for usage errors, so
+  daily.py mapped both to success. It is now exit 10.
+- **A failed keogram uploaded yesterday's file as today's.** The upload
+  finder's loose fallback glob (`keogram*<date>*`) matched the *end* date in
+  the previous day's `_0500_to_` filename. The loose patterns are gone.
+- **Video retention judged by mtime and swept too widely.** Files now expire
+  by the covered date in their name (mtime does not survive clock steps on an
+  RTC-less Pi, and re-rendering an old day reset its clock); the patterns are
+  anchored to `output.project_name` so a parked mp4 or a second camera's
+  files are never swept; empty-directory removal is limited to directories
+  this prune emptied; and with uploads configured, a *missing* queue database
+  now refuses to delete — an absent file is indistinguishable from a
+  mispointed `database.path`, and answering "nothing is protected" to that
+  deletes the only copy of every day that never uploaded.
+- **One failed reference shot disabled metadata sidecars for the process
+  lifetime.** `take_test_shot` restored `save_metadata` only on the success
+  path; a busy camera — ordinary right after a teardown — left it `False`,
+  which nulled every later row's exposure columns and starved restart
+  seeding. The restore is in a `finally`.
+- **A camera that stayed wedged walked the daemon into its fd limit.** Every
+  failed `Picamera2()` open leaks a pipe fd inside picamera2, and the loop
+  retried forever while systemd showed healthy; ~8 hours to
+  `Too many open files`. Five consecutive failures now exit for a clean
+  `Restart=always` respawn; a half-opened camera is closed before the retry,
+  and `close()` nulls the handle even when picamera2's own close raises. The
+  same five-strikes tolerance now also covers a failing exposure decision,
+  which used to end the loop — with exit code 0 — on the first transient.
+- **Restart seeding trusted stale and ambiguous rows.** A row older than 20
+  intervals is no longer seeded at all (a night row seeded into a bright
+  morning cost ~24 pure-white frames), and at the shutter ceiling the gain
+  column is only trusted above 1.2 — below that the sensor's 1.1228 floor is
+  indistinguishable from a commanded 1.0, the same 12% step this changelog
+  already removed twice.
+- **A backward clock step put the daemon to sleep for the whole step.** The
+  grid re-anchors when the next slot is more than an interval away; and the
+  slot sleep now runs in one-second slices so SIGTERM stops the loop now
+  rather than after the remainder of the slot (PEP 475 resumes a sleep after
+  a handled signal).
+- **`--test` could not fail and took a minute to do one frame's work.** It
+  slept to the grid before and after its single frame, and exited 0 with zero
+  frames captured. It now shoots immediately, stops without the trailing
+  sleep, and exits 1 when no frame was produced.
+- **A measured brightness of 0.0 read as "no measurement".** `or 128` treated
+  a genuinely black frame as absent, clearing the underexposure flag at the
+  exact moment it mattered and recovering 4.7× slower. The dark-frame
+  fallback that re-read the *overlaid* JPEG from disk — biasing the loop
+  toward overexposure — is gone too; with no lores metrics the controller
+  holds its last measurement.
+- **`status.jpg` vanished briefly on every frame, and a failed overlay save
+  truncated the frame it was overlaying.** The symlink now swaps by atomic
+  rename, and the overlay saves to a temp file and renames into place — an
+  ENOSPC mid-encode used to leave a partial JPEG that was then symlinked,
+  recorded and uploaded. The overlay re-encode also now defaults to quality
+  85, matching `output.quality`, instead of 95 on the one path that bypasses
+  the config merge.
+- **A locked database was reported as a Python generator bug.** The
+  connection context managers in storage yielded a second time when the
+  caller's body raised `sqlite3.Error`, which contextlib reports as
+  "generator didn't stop after throw()" — burying the actual "database is
+  locked". `db --prune` also reported its pre-count as deletions even when
+  the DELETE failed; it now reports `rowcount`.
+- **The lores brightness reader assumed 320x240.** It slices what libcamera
+  actually granted, so an adjusted stream can no longer silently average
+  chroma rows into every exposure decision.
+- **The overlay's locale handling leaked and spammed.** `setlocale` restored
+  from the environment instead of the previous value (not a restore at all,
+  and process-global), and a missing locale warned once per frame — 2,880
+  journal lines a day. It restores properly in a `finally` and warns once.
+  The exposure formatter's 1-second boundary also produced an 8-character
+  `1000.0ms` against ` 20.0s` — the exact sideways jump the fixed-width
+  module exists to prevent — and its 1/Ns fraction branch was unreachable.
+- **The suite could not run on a lean camera install.** Two test modules
+  imported matplotlib — documented as optional, "only for the graph scripts"
+  — at collection time and took the whole run down with them. They now skip
+  without it; CI still runs them.
+- **The metering target seeded from a dead key.** The first decision after
+  every restart aimed at `transition_mode.target_brightness` (fixed 120)
+  regardless of `brightness_target.base`.
+
+- **The exposure stepped 12% at every dusk.** `seed_from_metadata` reseeded the
+  loop from the last daylight frame's *camera* metadata at the day-to-transition
+  crossing. Metadata reports what the sensor did, not what was commanded, and
+  the sensor's analogue gain floor is 1.1228 where the ladder asks for 1.0.
+  Measured on nine consecutive nights: `200043 → 224519 µs` in one frame, mean
+  brightness +8 to +11 points. The ladder is continuous and nothing consults the
+  mode label, so no state needed carrying across the boundary at all — the
+  seeding is gone. This re-records the golden replay files; see the commit for
+  the before/after comparison and why it clears the bar `tests/replay/README.md`
+  sets for that.
+- **The same 12% step at every service restart.** `_seed_from_last_capture`
+  passed the database's `analogue_gain` column into the loop's state, and that
+  column holds the achieved gain, not the commanded one. Measured at the restart
+  on 2026-08-07 08:06:33: `604 → 657 µs`, brightness 119.9 → 126.2, corrected
+  one frame later. The column is now trusted only where the ladder genuinely
+  commands gain — at the shutter ceiling.
+- **The white balance reference shot ran on cameras that discard its answer.**
+  Where `fixed_colour_gains` is configured, `_target_colour_gains` prefers it
+  and never consults the learned reference — so the reading cost a camera
+  teardown and a late frame for nothing. The docstring already said so and told
+  the operator to set `test_shot.enabled: false` by hand. The controller now
+  answers that itself via `learns_day_wb`. Measured on 2026-08-06: 68 of the
+  day's 2879 intervals off by ≥2 s from 30, hourly on the dot plus a cluster
+  either side of midnight — a 10% wobble in playback speed about once a second
+  of finished video, worst at dawn and dusk. Cameras without a configured white
+  point are unaffected.
+- **An overrunning frame shifted every later frame, permanently.** The loop
+  slept `interval - elapsed` clamped at zero, so it kept whatever phase an
+  expensive frame left it on. Capture times now land on multiples of the
+  interval since the epoch: an overrun costs its own slots and no more, a
+  restart resumes the previous phase, and the per-frame creep from excluding
+  the wake-up from `elapsed` is gone.
+- **`-r` was set after `-i` in the ffmpeg command**, making it an output-side
+  constant-rate conversion rather than a declaration of the input rate. With
+  `video.fps: 25` it matched the concat demuxer's implicit rate and did nothing;
+  at 30 it duplicated frames — 50 source images became 60. Harmless until
+  somebody changed `video.fps`.
+
+### Added
+- `synthetic_overexposure_critical_edge` replay sequence. Removing the dusk
+  seeding removed the violent overshoot that used to be the only thing reaching
+  the critical-overexposure branch, and `mutation_check.py` caught the loss.
+
+### Changed
+- **Highlight protection is on by default**, as CONFIG-REFERENCE always said
+  it was. Night remains exempt by default.
+- **`scripts/cleanup_old_images.sh` takes `RASPILAPSE_IMAGE_DIR` and
+  `RASPILAPSE_KEEP_DAYS`** environment overrides (with a systemd drop-in
+  example in the unit template), validates them, and treats 0 as "retention
+  off" — under `find -mtime +0` it used to mean "delete everything older
+  than a day".
+- **A frame exactly on a window's end instant belongs to the next window.**
+  The image range is half-open, so the 05:00:00 frame no longer appears in
+  two consecutive videos and both keograms.
+- **`config/config.example.yml` grew the settings everyone was missing**:
+  `video.organize_by_date` (the code default files every video flat),
+  retention pointers, the `symlink_latest` and `overlay.camera_name` shapes
+  — and dropped `reference_lux`, which nothing has read since the ladder
+  replaced the modes; `brightness_target.base` is the knob.
+- **Documentation audited claim-by-claim against the code.** EXPOSURE.md
+  rewritten around the ladder (its threshold/hysteresis/civil-twilight
+  system no longer exists); TIMELAPSE_VIDEO.md brought to the veryfast/crf 20
+  encoder and real CLI defaults; CONFIG-REFERENCE.yml's twenty-two drifted
+  values named against their code defaults, dead keys removed, `bitrate`
+  documented; newcam.md rewritten as a fresh-Pi quickstart; trixie noted as
+  supported; the raspi-config camera step (gone since Bookworm) removed from
+  the install docs.
+
+### Removed
+- `adaptive_timelapse.test_shot.frequency` (never read),
+  `video.filename_pattern` (documented but hardcoded), and the reference
+  entry for `transition_mode.target_brightness` (inert since the dynamic
+  target; the code no longer reads it either). The `_daily_` filename branch
+  in the renderer produced keogram/slitscan names that neither the uploader
+  nor retention recognised — gone.
+
+## [1.5.0] - 2026-08-07
+
+Two failures that had been misread for months, and the instrumentation to stop
+the next one being guesswork.
+
+Cameras appeared to freeze every week or two; they were losing their network
+while capturing perfectly. And every dusk put a one-frame colour step in the
+timelapse while daylight colour drifted a little each day, from AWB readings
+reaching manual gains by paths that stopped making sense when white balance
+became manual on every frame.
+
+Alongside those: the daily 4K video is 2.5x faster and closer to the source at
+the same time, the videos it produces are finally expired instead of
+accumulating forever, and the capture table records the memory, disk, uptime
+and network state it had been collecting and discarding since it was written.
+
+### Fixed
+- **Cameras that "froze" every week or two were losing their network, not
+  hanging.** Diagnosed on a Pi that had run 9.3 days: capture never missed a
+  frame — exactly 2880 a day, one gap over 60 seconds in ten days, CPU
+  temperature flat at 42-46°C and load flat at 0.34-0.38 throughout, no OOM
+  anywhere. The daily ffmpeg job, the obvious suspect, succeeded every single
+  day and finished two hours before the reboot.
+
+  What actually happened: the access point dropped at 23:31, both BSSIDs timed
+  out within 23 seconds, and NetworkManager read the timeout as a wrong
+  password — `need-auth` → `no secrets: No agents were available` → `failed
+  (reason 'no-secrets')`. That sets an autoconnect *blocked reason* on the
+  profile rather than a retry counter, so `connection.autoconnect-retries=-1`,
+  which was already set, could not clear it. wlan0 sat `inactive` for 8h35m
+  until a human power-cycled the Pi. The only symptoms were the upload and the
+  live image going quiet, which is indistinguishable from a hang unless you
+  look at the card.
+
+  `scripts/check_network.sh` now recovers it, opt-in via
+  `./scripts/install.sh --with-netwatch`. Two checks of grace, then `nmcli dev
+  connect` (the step that clears the block), the priority profile explicitly, a
+  radio cycle, a NetworkManager restart, and only then a reboot — gated on 30
+  minutes of continuous failure, the SSID having been seen on the air, and 6
+  hours since the last watchdog reboot, so an access point that is switched off
+  can never trigger one. `docs/TROUBLESHOOTING.md` gained "The camera looks
+  frozen but is still capturing".
+
+- **The capture watchdog was spamming the journal it would need later.**
+  `find | sort -rn | head -1` left `sort` writing into a closed pipe every run;
+  invisible interactively, but systemd sets `IgnoreSIGPIPE=yes`, so under the
+  service it printed two error lines every five minutes into a journal already
+  at its 200 MB cap. Diagnosing the outage above, `journalctl --list-boots`
+  only reached back two days of a nine-day run. Now one `awk` pass.
+
+- **`video.codec.name: h264_v4l2m2m` silently converted the 05:00 job into a
+  nightly failure.** The Pi's V4L2 encoder stops at 1080p and nothing sets an
+  output resolution by default, so it reached ffmpeg and died with "can't
+  configure encoder". Refused up front with an actionable message instead.
+
+### Added
+- **Memory, disk, uptime, process RSS and network state in `captures`**
+  (schema v6). `SystemMonitor` had collected memory and disk every 30 seconds
+  since it was written; `store_capture` bound the CPU temperature and three
+  load averages and dropped the rest. Ruling out a memory leak during the
+  outage above meant arguing from temperature and load alone. `system_uptime_s`
+  makes every reboot visible in the capture timeline itself, and
+  `network_signal_dbm` is the one that would have predicted the drop rather
+  than merely recording it. Migrating this camera's real 549,288-row database
+  took 111 ms.
+
+- **`video.retention_days`, defaulting to 7.** `cleanup_old_images.sh` has
+  expired source frames for a long time; nothing ever expired the videos made
+  from them, so a bounded input fed an unbounded output — 3.2 GB from twelve
+  days here. Runs as a third step of the existing nightly cleanup timer. Never
+  deletes a file the upload queue still holds in any state other than
+  `success`, including `failed`, because that video exists nowhere else.
+
+- **A shared reboot floor between the two watchdogs.** Both can reboot the
+  machine and a Pi with wedged wifi looks stalled to the other one, so
+  `/var/lib/raspilapse/last_reboot` now stops them cycling. Written with
+  `sync`, because ext4's commit window will otherwise lose it across the very
+  reboot it bounds.
+
+### Changed
+- **The daily video is both faster and closer to the source**: preset `fast` →
+  `veryfast`, crf 25 → 20, threads 2 → 3, still native 4K. Measured on 60 real
+  frames: 25.2 → 43.8 Mbit/s, 75s → 35s, SSIM 0.985634 → 0.990225. A preset
+  does not set quality, crf does, and at 4K the encode is dominated by decode
+  and filtering rather than bitrate — so the old settings were paying for a
+  slower preset and spending the savings nowhere. crf 25 at 4K quantises away
+  the fine texture 4K exists to carry. Peak memory *fell*, 1399 MB → 1021 MB.
+
+- **The keogram and slitscan share one decode pass.** Both are a vertical strip
+  from every frame; they were built by two separate full passes over the day's
+  4K images, 314s + 271s. `create_time_slices` does one, 2.20x faster on 300
+  real frames, with both outputs sha256-identical to what the split version
+  produced. `create_keogram` and `create_slitscan` remain as wrappers.
+
+- `CPUWeight=20` on the daily video unit, since `Nice` alone does not hold back
+  a multi-threaded encode. `MemoryHigh`/`MemoryMax` are set too, but note that
+  Raspberry Pi OS ships the memory cgroup controller disabled — they need
+  `cgroup_enable=memory cgroup_memory=1` in `cmdline.txt` to do anything.
+
+- A `flock` on `data/daily.lock` so a manual `raspilapse-daily` cannot run two
+  ffmpegs alongside the timer's. Contention exits 0, not 1: a duplicate
+  invocation is not a failure.
+
+- **A one-frame colour step at every dusk, and daylight colour that drifted a
+  little each day.** Both came from AWB readings reaching the manual gains by
+  paths that stopped making sense when white balance became manual on every
+  frame.
+
+  The step: `_seed_across_mode_change` primed the controller from the AWB
+  reference shot on the day-to-transition crossing, and `seed_from_metadata`
+  assigned those gains straight to `_last_colour_gains`, bypassing the
+  `wb_transition_speed` cross-fade. So AWB's twilight guess arrived whole, in
+  one frame, and slid back over the following ten. Seven of them are visible in
+  this camera's database between 26 July and 3 August, one per dusk, each about
+  0.3 in R. The seed now carries exposure only; colour crosses the boundary the
+  way it crosses everywhere else.
+
+  The drift: `_target_colour_gains` read `day_mode.fixed_colour_gains` and then
+  unconditionally overwrote it with `_day_wb_reference`, so a configured white
+  point silently did nothing. Worse, that reference was learned in `_record`
+  from the frame's own capture metadata -- a frame taken with AWB off, whose
+  `ColourGains` are the ones the controller just chose. The reference was its
+  own input: it held wherever it was pushed and adopted each dusk's step
+  permanently. Daylight R went 2.500 -> 2.547 over nine days.
+
+  Configured gains now win, the learned reference is the fallback for a camera
+  that has not set one, and it is learned in `_take_reference_shot` from the
+  one frame actually taken with AWB on.
+
+  If you have been running the drifted values and want the rendered output to
+  match, set `fixed_colour_gains` to the gains your recent frames carry rather
+  than the config's original pair.
+
+## [1.4.0] - 2026-07-26
+
+A cleanup pass over the whole project. Behaviour is unchanged apart from
+highlight protection, which is new and can be turned off in config.
+
+### Removed
+- **The ML exposure system.** It had not run since January: `_init_ml_predictor()`
+  returned early whenever `direct_brightness_control` was true. With ML inert the
+  "legacy" branches of `get_camera_settings` were unreachable too, and the formula
+  functions behind them had one live caller left -- the metadata diagnostics, which
+  re-ran the entire exposure calculation to fill in a JSON field.
+  Gone: `ml_exposure.py`, `ml_exposure_v2.py`, `bootstrap_ml.py`,
+  `bootstrap_ml_v2.py`, `ML.md`, `ml_state/` and four test modules.
+- **`analyze_timelapse.py`** (1,967 lines). It read per-frame metadata JSON that
+  cleanup deletes after 7 days, so it could never look back further than a week,
+  while `scripts/db_graphs.py` reads months from the database. Its one
+  non-overlapping chart, white balance, is now `create_white_balance_graph()`.
+- **`manuals/*.pdf`** -- 45 MB of third-party PDFs nothing referenced.
+- **A leaked Codecov token** from `docs/MAINTAINER.md`. Rotate it if you forked
+  this repo before now; it remains in history.
+- **`ml_state/ml_state.json`**, which shipped one camera's learned model to
+  everyone who cloned.
+- Five installer scripts, `test.sh`, `check_disk_space.sh`,
+  `check_capture_rate.sh`, and twelve documentation files.
+
+### Added
+- **Highlight protection** (`adaptive_timelapse.highlight_protection`). Lowers the
+  brightness target when the top of the histogram nears clipping, so bright skies
+  keep detail. Off at night by default. `enabled: false` reverts.
+  Not to be confused with the p95 protection listed under 1.3.0: that one scaled
+  the *exposure*, lived in the now-deleted ML path, and never reached the camera.
+  This one scales the *target*, which is what makes its equilibrium independent
+  of `brightness_damping`.
+- **`scripts/install.sh` as the single entry point**, with `--only`, `--check`,
+  `--dry-run`, `--uninstall` and `--with-watchdog`. It renders `systemd/*.in`
+  templates rather than copying units that hardcode `pi` and `/home/pi`.
+- **`database.retention_days`** and `python3 src/database.py --prune|--vacuum|--stats`.
+  Defaults to 0, keep everything; the example ships 180 days.
+- **`src/exposure.py`** and **`src/config_utils.py`**.
+- **`tests/test_config_example.py`**, which fails when the example config and the
+  code that reads it drift apart in either direction.
+
+### Fixed
+- **The daily-video service could not run.** `upload_service.py` imported
+  `requests_toolbelt` unguarded and `/usr/bin/python3` did not have it. Guarded,
+  with a `requests.post` fallback.
+- **An empty day failed the unit.** `make_timelapse.py` now exits 2 for "no images"
+  and `daily_timelapse.py` maps that to success.
+- **The upload retry queue retried the impossible.** 172 rows, all pending since
+  January, all pointing at videos deleted long ago, and no installer had ever
+  installed the timer that drains them. Rows whose source is gone are cancelled;
+  `failed` is treated as terminal; `--purge-missing` clears a backlog.
+- **The installed daily-video timer had drifted** from the repo: `Requires=`, two
+  `OnCalendar=` lines and `Persistent=true`, all removed months ago and never
+  redeployed, which is why it fired at boot and failed.
+- **Every log line was stored twice**, once in `logs/` and once in the journal.
+  `logging.console` becomes tri-state; `auto` skips the console handler under
+  systemd. journald is capped at 200 MB.
+- **Logging ignored `-c/--config`.** Seven modules call `get_logger()` at import
+  time, before argparse runs; `configure_logging()` now reconfigures them.
+- **Weather hammered its endpoint.** The 300 s cache was per-instance and the
+  instance was rebuilt twice per capture cycle, so it never applied. There was no
+  backoff either: one outage produced 72,536 identical error lines. Also fixed
+  `data.get("data", {})` returning `None` on `"data": null`, which was 2,204 more.
+- **`brightness_p25` and `brightness_p75` were NULL on every row** ever written --
+  the producer emitted p10/p90.
+- **The upload queue schema was defined twice** and had drifted, leaving the live
+  database pinned at v3 with the v4 index missing.
+- **18 tests had never run**, in four classes shadowed by a later class of the
+  same name.
+- **The overlay bar was darker than its config said.** Each gradient row was
+  drawn as a two-pixel rectangle, so every row got painted twice and its alpha
+  compounded: `background.color` alpha 70 rendered at roughly 124. The bar also
+  ran one scanline past `bar_height`. Both fixed, which means **the bar now
+  renders lighter than before at the same setting** -- if you want the old look,
+  multiply your alpha by about 1.8. `config.example.yml` keeps 70, which for the
+  first time is what it actually produces.
+- **Tide points with an explicit `"level_cm": null`** reached the interpolation
+  arithmetic as `None` and raised, taking the whole overlay down over one bad
+  forecast entry. `.get("level_cm", 0)` only defaults a *missing* key.
+- **A never-present ships/tide/aurora file was stat()ed on every render.** The
+  retry interval was gated on there being a cached value, so it did nothing in
+  the one case it existed for.
+
+### Changed
+- SQLite runs in WAL mode. Three unused indexes dropped (26 MB on a 515k-row
+  database, three fewer B-tree writes per capture).
+- `auto_timelapse.py` is under 1,000 lines, down from 3,230.
+- ruff replaces flake8 and pylint, and the CI lint step can now fail -- it was
+  `--exit-zero` *and* `continue-on-error`.
+- black pinned to one version across `requirements-dev.txt`, `pyproject.toml` and
+  `.pre-commit-config.yaml`. The mismatch was the cause of the recurring CI
+  formatting failures.
+- `pyproject.toml` version is now read from `src/__version__.py`, and its
+  dependency list matches what the code imports.
+- `graph_ml_patterns.py` -> `scripts/graph_solar_patterns.py`; it was never ML.
+- The `timelapse:` and `graphs:` config blocks are gone -- no code read either,
+  and `timelapse.interval: 3` sat next to `adaptive_timelapse.interval: 30`.
+
+### Migrating
+
+Existing installs:
+
+```bash
+git pull
+./scripts/install.sh --check
+./scripts/install.sh              # redeploys the corrected units
+sudo systemctl restart raspilapse
+```
+
+Then, in `config/config.yml`:
+
+- set `logging.console: auto`
+- optionally add `adaptive_timelapse.highlight_protection` (see the example)
+- optionally set `database.retention_days` -- absent means keep everything
+- remove `adaptive_timelapse.ml_exposure` and `direct_brightness_control`,
+  both now inert
+
+If uploads were configured, clear any stale queue:
+
+```bash
+python3 src/retry_uploads.py --purge-missing
+```
+
+## [1.3.2] - 2026-01-23
+
+### Fixed
+- **Startup brightness flash after reboot/restart**: First frame(s) after reboot were severely overexposed (254 brightness, 97% clipped)
+  - Root cause: On startup, `_last_exposure_time` was None, and the test shot was saturated due to camera ISP needing time to stabilize
+  - Added `get_last_capture()` database method to retrieve the most recent valid capture (excludes overexposed frames)
+  - Added `_seed_from_last_capture()` to initialize exposure settings from database on startup
+  - Now seeds: `_last_exposure_time`, `_last_analogue_gain`, `_last_colour_gains`, `_last_brightness`, `_smoothed_lux`, `_last_mode`
+  - Added safety check: if brightness is None but seeded exposure exists, use seeded exposure
+  - Added saturated test shot detection on first frame - uses seeded lux if available
+
+### Before/After
+- **Before**: First frame brightness 254, 97.65% overexposed, took 7+ frames (3.5+ min) to recover
+- **After**: First frame brightness 118.55, 0% overexposed, immediately on target
+
+### Log Messages
+- `[Startup] Seeded from last capture: exposure=X.XXXXs, gain=X.XX, WB=[X.XX, X.XX], mode=X, brightness=XXX.X`
+- `[Startup] First test shot saturated (XXX.X/255) - using seeded lux=XXX.X instead of calculated=XXXX.X`
+- `[DirectFB] No brightness data yet, using seeded exposure X.XXXXs`
+
+## [1.3.1] - 2026-01-17
+
+### Fixed
+- **Day mode brightness oscillation**: Brightness was ranging 77-163 instead of target 105-135
+  - Root cause: Config too loose + ML trained on bad data (only 21% of captures in good range)
+  - Tightened `brightness_tolerance` from 60 to 25 (triggers feedback at 95-145)
+  - Increased `brightness_feedback_strength` from 0.05 to 0.15 (3x faster corrections)
+  - Increased `exposure_transition_speed` from 0.08 to 0.15 (~2x faster)
+  - Increased `fast_rampup_speed` from 0.20 to 0.40 (faster underexposure recovery)
+  - Increased `fast_rampdown_speed` from 0.20 to 0.35 (faster overexposure correction)
+
+### Changed
+- **ML state reset procedure documented**: When ML is trained on bad data, delete `ml_state/ml_state_v2.json` and restart
+  - ML automatically retrains from only good samples (brightness 105-135) in database
+  - Database is never deleted - all historical data preserved
+  - Added troubleshooting section to `docs/ML_EXPOSURE_SYSTEM.md` and `docs/CLAUDE.md`
+
+### Documentation
+- Added "Day Mode Brightness Oscillation" troubleshooting to `docs/CLAUDE.md`
+- Added "ML Trained on Bad Data" troubleshooting to `docs/ML_EXPOSURE_SYSTEM.md`
+- Updated `docs/NEXT_SESSION_CONTEXT.md` with fix details
+
+## [1.3.0] - 2026-01-16
+
+### Changed
+
+#### ML-First Exposure with Smart Safety
+- **Philosophy change**: Trust ML predictions for smooth transitions, with graduated safety mechanisms
+- **Higher ML trust**: Initial trust increased from 0.5 to 0.70, max trust from 0.8 to 0.90
+- **Tighter training range**: Good brightness range narrowed from 100-140 to 105-135 for higher quality ML data
+
+#### Bucket Interpolation for ML Data Gaps
+- **New**: ML v2 now interpolates between adjacent buckets when exact match unavailable
+- **Fills data gaps**: Addresses missing data in 0.0-0.5 lux (deep night) and 5-20 lux (transition zone)
+- Uses logarithmic interpolation in both lux and exposure space
+- Reduced confidence (70%) for interpolated predictions
+
+#### Sustained Drift Correction (Replaces Per-Frame Feedback)
+- **New**: `SustainedDriftCorrector` class only corrects after 3+ consecutive frames of consistent error
+- Prevents frame-to-frame oscillation that caused brightness flickering
+- Gradual decay back to neutral when error pattern breaks
+- Max 30% correction per update, capped at 0.5x-2.0x range
+
+#### Graduated Trust Reduction
+- **New**: `get_brightness_adjusted_trust()` method reduces ML trust as brightness deviates from target
+- Severe cases (brightness < 50 or > 200): Force formula (trust = 0)
+- Warning zones: Graduated reduction (50-70 brightness ramps from 0% to 100% trust)
+
+#### Rapid Light Change Detection
+- **New**: `get_lux_stability_trust()` method reduces trust during sunrise/sunset transitions
+- Detects rate of change in log-lux space
+- Above 0.3 log-lux/minute: Up to 50% trust reduction
+- Helps formula adapt faster during rapid Arctic light changes
+
+#### Simplified Safety Clamps
+- Removed intermediate emergency zones (WARNING_HIGH, WARNING_LOW, etc.)
+- Now only applies hard corrections for extreme cases:
+  - Brightness > 220: Force 30% exposure reduction
+  - Brightness < 35: Force 80% exposure increase
+- Philosophy: Small brightness variations (70-170) are acceptable if curve is smooth
+
+#### Proactive P95 Highlight Protection
+- **New**: `get_p95_highlight_factor()` method prevents highlight clipping BEFORE it happens
+- Based on Raspberry Pi Camera Algorithm Guide's histogram constraint concept
+- Monitors p95 (95th percentile brightness) and reduces exposure proactively:
+  - p95 < 200: No adjustment (highlights have headroom)
+  - p95 200-220: Gentle reduction (0.95-1.0x exposure)
+  - p95 220-240: Moderate reduction (0.85-0.95x exposure)
+  - p95 > 240: Aggressive reduction (0.70-0.85x exposure)
+- Especially useful for sunrise sky blowout, Aurora bright peaks, and high-contrast scenes
+
+### Config Changes (v1.3.0)
+```yaml
+ml_exposure:
+  initial_trust_v2: 0.70    # Was 0.5
+  max_trust: 0.90           # Was 0.8
+  good_brightness_min: 105  # Was 100
+  good_brightness_max: 135  # Was 140
+
+transition_mode:
+  brightness_feedback_strength: 0.05  # Was 0.2 - very gentle
+  brightness_tolerance: 60            # Was 40 - wider tolerance
+  exposure_transition_speed: 0.08     # Was 0.10 - slower for smoothness
+  fast_rampdown_speed: 0.20           # Was 0.50 - much gentler
+  fast_rampup_speed: 0.20             # Was 0.50 - much gentler
+```
+
+**Note**: These v1.3.0 values were further tuned in v1.3.1 - see above for current recommended values.
+
+### Technical Details
+- **Expected outcome**: Smooth transitions without oscillation
+- **Brightness target**: 70-170 range acceptable if curve is smooth (no banding in slitscan)
+- **Drift corrections should be rare**: Only for systematic ML prediction errors
+- **ML data gaps filled**: Interpolation provides predictions even for untrained lux zones
+
+## [1.2.2] - 2026-01-15
+
+### Fixed
+- **Critical: Severe underexposure during Arctic winter twilight**
+  - Root cause: Exposure interpolation (15% per frame) too slow for rapid Arctic light changes, combined with emergency factor cap (1.5x) being far too low
+  - Symptoms: Images going nearly black (brightness ~17 instead of target ~120) during afternoon/evening at high latitudes
+  - The lux calculation was accurate (correctly detecting 1154 → 125 lux), but exposure couldn't catch up
+  - At 30-second intervals, log-space interpolation takes 5+ minutes to reach target exposure
+  - Emergency factor was capped at 1.5x when 4x+ correction was needed
+
+### Changed
+- **Increased emergency factor cap from 1.5x to 4.0x** - allows much faster recovery from severe underexposure
+- **Increased EMERGENCY_LOW_FACTOR from 1.4x to 2.0x** - 100% exposure increase for brightness < 60
+- **Added new CRITICAL_LOW brightness zone** - 300% exposure increase for brightness < 40 (Arctic twilight conditions)
+
+### Technical Details
+- Emergency factor asymmetric by design: aggressive on underexposure (up to 4x), conservative on overexposure (max 50% reduction)
+- New zone thresholds:
+  - EMERGENCY_LOW: brightness < 60 → 2.0x correction (was 1.4x)
+  - CRITICAL_LOW: brightness < 40 → 4.0x correction (new)
+- Factors still smoothed over multiple frames to prevent flickering
+- Only affects severe underexposure scenarios - normal operation unchanged
+
+### Why this only affected Arctic locations
+- At 68°N in January, daylight lasts only 2-3 hours with rapid light changes
+- Sun barely rises above horizon during polar twilight period
+- Light drops much faster than at lower latitudes
+- Standard exposure interpolation designed for temperate latitudes couldn't keep up
+
+### Added
+- New test `test_critical_low_factor` for CRITICAL_LOW zone
+- Updated test assertions for new EMERGENCY_LOW_FACTOR value
+
+## [1.2.1] - 2026-01-14
+
+### Fixed
+- **Critical: Brightness correction not applied in transition mode with sequential ramping**
+  - Root cause: `_brightness_correction_factor` was only applied in `_calculate_target_exposure_from_lux()`, but sequential ramping bypassed this function entirely
+  - Symptoms: Images stayed dark (brightness ~35 instead of target ~120) even with correction factor at maximum (4.0x)
+  - The feedback system correctly detected underexposure but corrections were never applied
+  - Fix: Apply both brightness correction factor AND emergency brightness factor to sequential ramping results
+  - This affects cameras where auto-exposure seed values don't match the actual scene brightness (e.g., different sensor sensitivity)
+
+- **Daytime flickering caused by emergency factor oscillation**
+  - Root cause: Emergency brightness factor used hard thresholds (180) causing on/off toggling every frame
+  - Symptoms: Exposure bouncing between ~14ms and ~16ms every frame, visible as flickering in slitscan
+  - Pattern: brightness 187 → factor 0.7 → exposure drops → brightness 173 → factor 1.0 → exposure rises → repeat
+  - Fix: Replaced hard threshold with smoothed emergency factor that gradually moves towards target
+  - Applies corrections faster (2x speed) when brightness worsening, relaxes slower (0.5x speed) when improving
+  - Prevents oscillation by not instantly reverting correction when brightness crosses threshold
+
+### Technical Details
+- Sequential ramping calculates exposure from seed values (captured during day mode auto-exposure)
+- If the seed exposure produces dark images on a particular camera, the brightness feedback system detects this
+- Previously, the correction factor was calculated but never applied to the transition mode exposure
+- Now, correction is applied immediately after sequential ramping calculation, before EV safety clamp
+- Emergency factor also applied for severe underexposure (brightness < 60)
+
+### Why this only affected some cameras
+- Different cameras have different sensor sensitivity
+- The "other camera" happened to have seed values that produced correct brightness
+- This camera's seeds produced dark images, requiring the correction that was being ignored
+
+## [1.2.0] - 2026-01-12
+
+### Changed
+- **ML v2 Integration Complete**: `auto_timelapse.py` now uses ML v2 instead of v1
+  - ML v2 is database-driven and only learns from good frames (brightness 100-140)
+  - Passes `sun_elevation` to predictions for Arctic-aware time periods
+  - Requires database to be enabled (fails gracefully if not)
+  - Removes frame-by-frame learning (v1's `learn_from_frame()`) - prevents perpetuating bad exposures
+  - Higher initial trust (0.5) since it's trained only on proven good data
+
+### Deprecated
+- **ML v1** (`src/ml_exposure.py`): No longer used by `auto_timelapse.py`
+  - Kept for reference but not imported
+  - Old state file `ml_state/ml_state.json` can be safely deleted
+
+### Added
+- New tests for ML v2 integration in `tests/test_auto_timelapse.py`
+  - `test_ml_v2_disabled_by_default`
+  - `test_ml_v2_requires_database`
+  - `test_ml_v2_disabled_without_database`
+
+### Documentation
+- Updated `ML.md` to reflect v2 integration and v1 deprecation
+
+## [1.1.0] - 2026-01-11
+
+### Added
+- **Arctic-Aware ML v2**: Solar elevation-based time periods instead of clock hours
+  - Uses sun elevation to determine night/twilight/day periods
+  - Works correctly year-round at any latitude (including polar night and midnight sun)
+  - Falls back to clock-based periods if sun_elevation not available
+  - New period definitions: night (< -12°), twilight (-12° to 0°), day (> 0°)
+
+- **Aurora Frame Support in ML Training**: High-contrast night frames now included
+  - Standard frames: brightness 100-140 (target exposure)
+  - Aurora/night frames: brightness 30-90 with p95 > 150 at lux < 5
+  - Prevents rejecting valid aurora/star photography
+
+- **Database Migration System**: Auto-migrates schema on startup
+  - Schema version tracking in `schema_version` table
+  - Migration v2: Adds `sun_elevation` column
+  - No manual steps required when pulling new code to other cameras
+  - Gracefully handles "duplicate column" errors for fresh databases
+
+### Changed
+- Bumped database schema version from 1 to 2
+- ML v2 now uses `sun_elevation` from database when available
+- Updated `bootstrap_ml_v2.py` with Arctic-aware period detection
+
+### Documentation
+- Updated `ML.md` with Arctic-aware features, aurora support, and migration system
+- Added version history to ML documentation
+
 ## [1.0.9] - 2026-01-11
 
 ### Added
@@ -42,11 +799,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New documentation: `docs/ML_EXPOSURE_SYSTEM.md`
   - 43 tests in `tests/test_ml_exposure.py`
 
-- **ML Solar Patterns Graph**: Visualization of learned light patterns
-  - Shows lux by time of day for each learned day
+- **Daily Solar Patterns Graph**: Visualization of light patterns from database
+  - Shows lux curves by time of day for each recent day (last 14 days)
   - Displays daily midday light levels with trend line
-  - Tracks polar winter recovery (+100 lux/day trend visible)
-  - Generated at `graphs/ml_solar_patterns.png`
+  - Tracks polar winter recovery
+  - Generated at `graphs/daily_solar_patterns.png` via `db_graphs.py`
 
 - **Fast Underexposure Ramp-Up**: Symmetric to existing overexposure ramp-down
   - Triggers when brightness < 70 (warning) or < 50 (critical)
@@ -319,7 +1076,7 @@ Raspilapse v1.0.0 is production-ready for year-long operation.
 3. Documentation moved to `docs/` folder
 4. No configuration changes required
 
-See [docs/V1_RELEASE_NOTES.md](docs/V1_RELEASE_NOTES.md) for complete release details.
+See the v1.0.0 release notes on GitHub for complete release details.
 
 ---
 

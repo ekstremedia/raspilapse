@@ -10,26 +10,21 @@ Tests the daily timelapse runner including:
 - Main CLI function
 """
 
-import pytest
-import os
+import importlib.util
+import shutil
 import sys
 import tempfile
-import shutil
+from datetime import datetime
 from pathlib import Path
-from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock, Mock
+from unittest.mock import MagicMock, patch
+
+import pytest
 import yaml
-import logging
 
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from daily_timelapse import (
-    load_config,
-    find_video_file,
+from raspilapse.video.daily import (
     find_keogram_file,
-    find_slitscan_file,
-    upload_to_server,
+    find_video_file,
+    load_config,
     main,
 )
 
@@ -40,6 +35,20 @@ def temp_dir():
     temp_path = Path(tempfile.mkdtemp())
     yield temp_path
     shutil.rmtree(temp_path)
+
+
+@pytest.fixture(autouse=True)
+def _private_daily_lock(tmp_path, monkeypatch):
+    """Every test gets its own lock directory.
+
+    flock is per open-file-description, so a main() whose lock file outlives
+    the call (gc timing decides) blocks every later main() in the same pytest
+    process with 'already in progress' -- and the repo's real data/ directory
+    is not the suite's to write into anyway.
+    """
+    import raspilapse.video.daily as daily_module
+
+    monkeypatch.setattr(daily_module, "PROJECT_ROOT", tmp_path)
 
 
 @pytest.fixture
@@ -257,264 +266,6 @@ class TestFindKeogramFile:
         assert "2025-12-26" in result.name
 
 
-class TestUploadToServer:
-    """Tests for upload_to_server function."""
-
-    @pytest.fixture
-    def mock_logger(self):
-        """Create a mock logger."""
-        return MagicMock(spec=logging.Logger)
-
-    @pytest.fixture
-    def sample_upload_files(self, temp_dir):
-        """Create sample files for upload testing."""
-        video_path = temp_dir / "test_video.mp4"
-        keogram_path = temp_dir / "test_keogram.jpg"
-        slitscan_path = temp_dir / "test_slitscan.jpg"
-
-        video_path.write_bytes(b"fake video content")
-        keogram_path.write_bytes(b"fake keogram content")
-        slitscan_path.write_bytes(b"fake slitscan content")
-
-        return video_path, keogram_path, slitscan_path
-
-    def test_upload_success(self, sample_upload_files, mock_logger):
-        """Test successful upload."""
-        video_path, keogram_path, slitscan_path = sample_upload_files
-        upload_config = {
-            "url": "https://example.com/upload",
-            "api_key": "test_key",
-        }
-
-        with patch("daily_timelapse.requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.text = "OK"
-            mock_post.return_value = mock_response
-
-            result = upload_to_server(
-                video_path,
-                keogram_path,
-                slitscan_path,
-                "2025-12-24",
-                upload_config,
-                "test_camera",
-                mock_logger,
-            )
-
-        assert result is True
-        mock_post.assert_called_once()
-
-    def test_upload_without_keogram(self, temp_dir, mock_logger):
-        """Test upload without keogram file."""
-        video_path = temp_dir / "test_video.mp4"
-        video_path.write_bytes(b"fake video")
-
-        upload_config = {
-            "url": "https://example.com/upload",
-            "api_key": "test_key",
-        }
-
-        with patch("daily_timelapse.requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.text = "OK"
-            mock_post.return_value = mock_response
-
-            result = upload_to_server(
-                video_path,
-                None,  # No keogram
-                None,  # No slitscan
-                "2025-12-24",
-                upload_config,
-                "test_camera",
-                mock_logger,
-            )
-
-        assert result is True
-
-    def test_upload_video_not_found(self, temp_dir, mock_logger):
-        """Test upload fails when video file doesn't exist."""
-        video_path = temp_dir / "nonexistent.mp4"
-        upload_config = {
-            "url": "https://example.com/upload",
-            "api_key": "test_key",
-        }
-
-        result = upload_to_server(
-            video_path,
-            None,
-            None,
-            "2025-12-24",
-            upload_config,
-            "test_camera",
-            mock_logger,
-        )
-
-        assert result is False
-
-    def test_upload_failure_status_code(self, sample_upload_files, mock_logger):
-        """Test upload failure with bad status code."""
-        video_path, keogram_path, slitscan_path = sample_upload_files
-        upload_config = {
-            "url": "https://example.com/upload",
-            "api_key": "test_key",
-        }
-
-        with patch("daily_timelapse.requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 500
-            mock_response.text = "Server Error"
-            mock_post.return_value = mock_response
-
-            result = upload_to_server(
-                video_path,
-                keogram_path,
-                slitscan_path,
-                "2025-12-24",
-                upload_config,
-                "test_camera",
-                mock_logger,
-            )
-
-        assert result is False
-
-    def test_upload_request_exception(self, sample_upload_files, mock_logger):
-        """Test upload handles request exceptions."""
-        video_path, keogram_path, slitscan_path = sample_upload_files
-        upload_config = {
-            "url": "https://example.com/upload",
-            "api_key": "test_key",
-        }
-
-        with patch("daily_timelapse.requests.post") as mock_post:
-            import requests
-
-            mock_post.side_effect = requests.exceptions.ConnectionError("Network error")
-
-            result = upload_to_server(
-                video_path,
-                keogram_path,
-                slitscan_path,
-                "2025-12-24",
-                upload_config,
-                "test_camera",
-                mock_logger,
-            )
-
-        assert result is False
-
-    def test_upload_general_exception(self, sample_upload_files, mock_logger):
-        """Test upload handles general exceptions."""
-        video_path, keogram_path, slitscan_path = sample_upload_files
-        upload_config = {
-            "url": "https://example.com/upload",
-            "api_key": "test_key",
-        }
-
-        with patch("daily_timelapse.requests.post") as mock_post:
-            mock_post.side_effect = Exception("Unexpected error")
-
-            result = upload_to_server(
-                video_path,
-                keogram_path,
-                slitscan_path,
-                "2025-12-24",
-                upload_config,
-                "test_camera",
-                mock_logger,
-            )
-
-        assert result is False
-
-    def test_upload_authorization_header(self, sample_upload_files, mock_logger):
-        """Test upload includes correct authorization header."""
-        video_path, keogram_path, slitscan_path = sample_upload_files
-        upload_config = {
-            "url": "https://example.com/upload",
-            "api_key": "secret_api_key",
-        }
-
-        with patch("daily_timelapse.requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_post.return_value = mock_response
-
-            upload_to_server(
-                video_path,
-                keogram_path,
-                slitscan_path,
-                "2025-12-24",
-                upload_config,
-                "test_camera",
-                mock_logger,
-            )
-
-            call_kwargs = mock_post.call_args[1]
-            assert "headers" in call_kwargs
-            assert "Authorization" in call_kwargs["headers"]
-            assert "Bearer secret_api_key" in call_kwargs["headers"]["Authorization"]
-
-    def test_upload_data_payload(self, sample_upload_files, mock_logger):
-        """Test upload includes correct data payload."""
-        video_path, keogram_path, slitscan_path = sample_upload_files
-        upload_config = {
-            "url": "https://example.com/upload",
-            "api_key": "test_key",
-        }
-
-        with patch("daily_timelapse.requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_post.return_value = mock_response
-
-            upload_to_server(
-                video_path,
-                keogram_path,
-                slitscan_path,
-                "2025-12-24",
-                upload_config,
-                "my_camera",
-                mock_logger,
-            )
-
-            call_kwargs = mock_post.call_args[1]
-            assert "data" in call_kwargs
-            assert call_kwargs["data"]["date"] == "2025-12-24"
-            assert call_kwargs["data"]["camera_id"] == "my_camera"
-
-    def test_upload_with_slitscan(self, sample_upload_files, mock_logger):
-        """Test upload includes slitscan file."""
-        video_path, keogram_path, slitscan_path = sample_upload_files
-        upload_config = {
-            "url": "https://example.com/upload",
-            "api_key": "test_key",
-        }
-
-        with patch("daily_timelapse.requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_post.return_value = mock_response
-
-            result = upload_to_server(
-                video_path,
-                keogram_path,
-                slitscan_path,
-                "2025-12-24",
-                upload_config,
-                "test_camera",
-                mock_logger,
-            )
-
-            call_kwargs = mock_post.call_args[1]
-            assert "files" in call_kwargs
-            # Check that slitscan is in the files
-            files_dict = call_kwargs["files"]
-            assert "slitscan" in files_dict
-
-        assert result is True
-
-
 class TestMainCLI:
     """Tests for main CLI function."""
 
@@ -576,11 +327,12 @@ class TestMainCLI:
             ],
         )
 
-        with patch("daily_timelapse.subprocess.run") as mock_run:
+        with patch("raspilapse.video.daily.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             main()
 
         # Should not have called subprocess since --only-upload was used
+        mock_run.assert_not_called()
 
     def test_main_specific_date(self, sample_config, temp_dir, monkeypatch):
         """Test main with specific date."""
@@ -696,12 +448,68 @@ class TestMainCLI:
             ],
         )
 
-        with patch("daily_timelapse.subprocess.run") as mock_run:
+        with patch("raspilapse.video.daily.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1)  # Failure
 
             result = main()
 
         assert result == 1
+
+    def test_main_no_images_exits_zero(self, sample_config, temp_dir, monkeypatch, capsys):
+        """Exit code 10 from the renderer means 'no images', which is not a failure."""
+        video_dir = Path(sample_config).parent / "videos"
+        video_dir.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "daily_timelapse.py",
+                "--config",
+                str(sample_config),
+                "--date",
+                "2025-12-24",
+            ],
+        )
+
+        with patch("raspilapse.video.daily.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=10)  # nothing to render
+
+            with patch("raspilapse.video.daily.UploadService") as mock_upload:
+                result = main()
+
+            # No upload should be attempted when there is no video
+            mock_upload.assert_not_called()
+
+        assert result == 0
+        assert "No images for 2025-12-24" in capsys.readouterr().out
+
+    def test_main_wedged_renderer_is_killed_and_fails(
+        self, sample_config, temp_dir, monkeypatch, capsys
+    ):
+        """A renderer that exceeds its 4h cap is killed and reported as a
+        failure -- the unbounded wait used to leave the oneshot unit
+        'activating' forever, with the next timer merging into the stuck job."""
+        import subprocess as _subprocess
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "daily_timelapse.py",
+                "--config",
+                str(sample_config),
+                "--date",
+                "2025-12-24",
+            ],
+        )
+
+        with patch("raspilapse.video.daily.subprocess.run") as mock_run:
+            mock_run.side_effect = _subprocess.TimeoutExpired(cmd="renderer", timeout=4 * 3600)
+            with patch("raspilapse.video.daily.UploadService") as mock_upload:
+                result = main()
+            mock_upload.assert_not_called()
+
+        assert result == 1
+        assert "exceeded 4 hours" in capsys.readouterr().out
 
     def test_main_upload_disabled_in_config(self, temp_dir, monkeypatch, capsys):
         """Test main when upload is disabled in config."""
@@ -796,11 +604,14 @@ class TestMainCLI:
             ],
         )
 
-        with patch("daily_timelapse.requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 500
-            mock_response.text = "Server Error"
-            mock_post.return_value = mock_response
+        # Mock UploadService since the code now uses it instead of direct requests
+        with patch("raspilapse.video.daily.UploadService") as mock_upload_service_class:
+            mock_service = MagicMock()
+            mock_upload_service_class.return_value = mock_service
+            # Simulate upload failure
+            mock_service.upload_to_server.return_value = (False, "Server Error", None)
+            # Simulate queue failure (returns None) to trigger return 1
+            mock_service.queue_upload.return_value = None
 
             result = main()
 
@@ -909,7 +720,7 @@ class TestCompleteWorkflow:
             ],
         )
 
-        with patch("daily_timelapse.subprocess.run") as mock_run:
+        with patch("raspilapse.video.daily.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
 
             result = main()
@@ -919,12 +730,86 @@ class TestCompleteWorkflow:
 
         # Verify correct arguments were passed
         call_args = mock_run.call_args[0][0]
-        assert "make_timelapse.py" in " ".join(call_args)
         assert "--start" in call_args
         assert "05:00" in call_args
         assert "--start-date" in call_args
         assert "2025-12-24" in call_args
 
+        # The renderer runs in a separate process, so nothing here fails if the
+        # target does not exist -- the failure lands in a systemd unit at 05:00
+        # instead. This used to assert only that "make_timelapse.py" appeared in
+        # the command, which stayed true when the path underneath it stopped
+        # existing. Resolve the target for real.
+        assert call_args[1:3] == ["-m", "raspilapse.cli.timelapse"], call_args
+        assert (
+            importlib.util.find_spec(call_args[2]) is not None
+        ), f"{call_args[2]} is not importable, so the daily video job would fail"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestConcurrencyLock:
+    """Two daily runs at once means two ffmpegs, ~2.8 GB resident and a starved
+    capture loop. systemd stops the unit overlapping itself; it cannot see a
+    human running the module in a shell during the timer's run.
+    """
+
+    def test_a_second_run_backs_off_without_failing(self, tmp_path, monkeypatch):
+        import fcntl
+
+        import raspilapse.video.daily as daily
+
+        monkeypatch.setattr(daily, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "data").mkdir()
+
+        # Hold the lock the way a run in progress would.
+        held = open(tmp_path / "data" / "daily.lock", "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        monkeypatch.setattr(sys, "argv", ["raspilapse-daily"])
+        try:
+            rc = daily.main()
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
+            held.close()
+
+        # 0, not 1: a duplicate invocation is not a failure, and exiting
+        # non-zero would drop the unit into 'failed' -- a misleading signal.
+        assert rc == 0
+
+    def test_the_lock_is_free_when_nothing_is_running(self, tmp_path, monkeypatch):
+        import fcntl
+
+        import raspilapse.video.daily as daily
+
+        monkeypatch.setattr(daily, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "data").mkdir()
+        lock_path = tmp_path / "data" / "daily.lock"
+        lock_path.touch()
+
+        f = open(lock_path, "w")
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # must not raise
+        fcntl.flock(f, fcntl.LOCK_UN)
+        f.close()
+
+    def test_a_real_lock_error_is_a_failure_not_a_duplicate(self, tmp_path, monkeypatch):
+        """Contention is EACCES/EAGAIN. Anything else -- ENOLCK on a filesystem
+        without lock support, EIO -- means we do not know whether another run
+        holds it, and reporting that as success would skip the day's video
+        while systemd showed green."""
+        import errno as errno_mod
+        import fcntl
+
+        import raspilapse.video.daily as daily
+
+        monkeypatch.setattr(daily, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "data").mkdir()
+
+        def no_locks(*args, **kwargs):
+            raise OSError(errno_mod.ENOLCK, "No locks available")
+
+        monkeypatch.setattr(fcntl, "flock", no_locks)
+        monkeypatch.setattr(sys, "argv", ["raspilapse-daily"])
+        assert daily.main() == 1

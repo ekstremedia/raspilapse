@@ -1,0 +1,16 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Image Cleanup Timer
+Documentation=https://github.com/ekstremedia/raspilapse
+# No Requires= here on purpose: a timer already starts the service of the same
+# name. Adding Requires= makes systemd pull the service in the moment the
+# *timer* starts, which means it runs on every boot as well as on schedule.
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+# If the Pi was powered down at 02:00, still clean up on the next boot.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

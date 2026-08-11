@@ -6,21 +6,25 @@ import sys
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
-import pytest
 import numpy as np
+import pytest
+
+# db_graphs needs matplotlib, an optional dependency the install docs list as
+# "only for the graph scripts" -- a lean camera install must still be able to
+# run the suite. (CI installs it, so these tests are not skipped there.)
+pytest.importorskip("matplotlib")
 
 # Add scripts to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from db_graphs import (
-    parse_time_arg,
-    format_duration,
-    smooth_data,
-    get_temperature_colors,
-    find_mode_zones,
     fetch_data,
+    find_mode_zones,
+    format_duration,
+    get_temperature_colors,
+    parse_time_arg,
+    smooth_data,
 )
 
 
@@ -476,13 +480,13 @@ class TestIntegration:
     def test_full_graph_generation(self, temp_db_with_data):
         """Test that graph generation completes without errors."""
         from db_graphs import (
-            fetch_data,
-            create_lux_graph,
-            create_exposure_gain_graph,
             create_brightness_graph,
-            create_weather_graph,
-            create_system_graph,
+            create_exposure_gain_graph,
+            create_lux_graph,
             create_overview_graph,
+            create_system_graph,
+            create_weather_graph,
+            fetch_data,
         )
 
         with tempfile.TemporaryDirectory() as output_dir:

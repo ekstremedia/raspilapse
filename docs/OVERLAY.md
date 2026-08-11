@@ -1,564 +1,179 @@
-# Image Overlay System
+# Overlay
 
-Modern, flexible text overlay system for timelapse images with configurable content, styling, and placement.
+Raspilapse burns a two-line information bar into every frame — camera name,
+timestamp, exposure settings, and optionally weather, tide, ships and aurora.
 
----
+The overlay is applied during capture, so it is part of the JPEG rather than
+something added afterwards. It therefore also appears in the daily video.
 
-## Features
+## The content model
 
-- **Modular Design**: Can be used during capture OR as standalone script
-- **Highly Configurable**: Everything controlled via `config/config.yml`
-- **Resolution Independent**: Automatic font sizing based on image dimensions
-- **Semi-Transparent Backgrounds**: Dark backgrounds for text readability
-- **Rich Content**: Camera settings, timestamps, debug info, custom text
-- **Flexible Positioning**: Presets (corners) or custom positioning
-- **Batch Processing**: Apply overlays to multiple existing images
+Four slots, arranged as two lines of two:
 
----
-
-## Quick Start
-
-### 1. Enable Overlay in Config
-
-Edit `config/config.yml`:
-
-```yaml
-overlay:
-  enabled: true  # ← Set to true
-  position: "bottom-left"
-  camera_name: "My Timelapse"
+```text
+┌────────────────────────────────────────────────────────────────────┐
+│ line_1_left                                          line_1_right  │
+│ line_2_left                                          line_2_right  │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2. Capture with Overlay (Automatic)
-
-```bash
-python3 src/auto_timelapse.py --test
-```
-
-Overlay is applied automatically during capture!
-
-### 3. Apply to Existing Images (Manual)
-
-```bash
-# Single image
-python3 src/apply_overlay.py test_photos/kringelen_2025_11_05_10_30_45.jpg
-
-# Batch process
-python3 src/apply_overlay.py test_photos/*.jpg --output-dir overlayed/
-```
-
----
-
-## Configuration Reference
-
-### Basic Structure
-
-```yaml
-overlay:
-  enabled: false          # Master enable/disable
-  position: "bottom-left" # Where to place text
-  camera_name: "Camera"   # Display name
-
-  font:
-    family: "DejaVuSans.ttf"  # Font file
-    size_ratio: 0.025          # Size relative to image height
-    color: [255, 255, 255, 255] # RGBA color
-
-  background:
-    enabled: true
-    color: [0, 0, 0, 180]  # RGBA (180 = 70% opacity)
-    padding: 0.3            # Padding around text
-
-  content:
-    main:              # Always shown
-      - "{camera_name}"
-      - "{date} {time}"
-
-    camera_settings:  # Optional section
-      enabled: true
-      lines:
-        - "Exposure: {exposure} | ISO: {iso}"
-
-    debug:            # Optional debug section
-      enabled: false
-      lines:
-        - "Gain: {gain} | Temp: {temperature}°C"
-```
-
----
-
-## Position Options
-
-### Presets
-
-- `"top-bar"` - Full-width navbar at top with centered text (recommended)
-- `"top-left"` - Upper left corner
-- `"top-right"` - Upper right corner
-- `"bottom-left"` - Lower left corner
-- `"bottom-right"` - Lower right corner
-- `"custom"` - Use custom_position coordinates
-
-### Custom Positioning
-
-```yaml
-position: "custom"
-custom_position:
-  x: 50  # 50% from left (center)
-  y: 10  # 10% from top
-```
-
-Values are percentages (0-100) of image dimensions.
-
----
-
-## Available Variables
-
-Use these placeholders in your content templates:
-
-### Time & Date
-- `{date}` - Date (YYYY-MM-DD)
-- `{time}` - Time (HH:MM:SS)
-- `{datetime}` - Full datetime
-
-### Camera Info
-- `{camera_name}` - Camera name from config
-- `{mode}` - Light mode (Day/Night/Transition)
-- `{resolution}` - Image resolution (1920x1080)
-
-### Exposure Settings
-- `{exposure}` - Human-readable exposure (e.g., "1/500s", "2.5s")
-- `{exposure_ms}` - Exposure in milliseconds
-- `{exposure_us}` - Exposure in microseconds
-- `{iso}` - ISO equivalent (e.g., "ISO 400")
-- `{gain}` - Raw analogue gain value
-
-### White Balance
-- `{wb}` - WB mode (Auto/Manual)
-- `{wb_gains}` - WB gains (R:1.8 B:1.5)
-
-### Advanced
-- `{lux}` - Calculated lux value
-- `{temperature}` - Camera sensor temperature in °C (internal hardware temp, NOT ambient temperature)
-
-### System Monitoring (Always Available)
-- `{cpu_temp}` - CPU temperature formatted (e.g., "42.5°C")
-- `{cpu_temp_raw}` - CPU temperature raw value (e.g., "42.5")
-- `{disk}` - Disk space formatted (e.g., "50.2 GB free (42% used)")
-- `{disk_free}` - Free disk space (e.g., "50.2 GB")
-- `{disk_used}` - Used disk space (e.g., "36.8 GB")
-- `{disk_total}` - Total disk space (e.g., "116.7 GB")
-- `{disk_percent}` - Disk usage percentage (e.g., "31%")
-- `{memory}` - Memory usage formatted (e.g., "1.2 GB / 4.0 GB (30%)")
-- `{memory_used}` - Used memory (e.g., "1.2 GB")
-- `{memory_free}` - Free memory (e.g., "2.8 GB")
-- `{memory_total}` - Total memory (e.g., "4.0 GB")
-- `{memory_percent}` - Memory usage percentage (e.g., "30%")
-- `{load}` - CPU load averages (e.g., "0.52, 0.48, 0.45")
-- `{load_1min}` - 1-minute load average (e.g., "0.52")
-- `{load_5min}` - 5-minute load average (e.g., "0.48")
-- `{load_15min}` - 15-minute load average (e.g., "0.45")
-- `{uptime}` - System uptime (e.g., "2d 5h 30m")
-
----
-
-## Content Sections
-
-Organize your overlay into sections for better readability:
-
-### Main Section (Always Visible)
-
-```yaml
-content:
-  main:
-    - "{camera_name}"
-    - "{date} {time}"
-    - "Mode: {mode}"
-```
-
-### Camera Settings (Toggle)
-
-```yaml
-camera_settings:
-  enabled: true  # Set to false to hide
-  lines:
-    - "Exposure: {exposure} | ISO: {iso}"
-    - "WB: {wb} | Lux: {lux}"
-```
-
-### Debug Info (Toggle)
-
-```yaml
-debug:
-  enabled: false  # Set to true for debugging
-  lines:
-    - "Gain: {gain} | Temp: {temperature}°C"
-    - "WB Gains: {wb_gains}"
-    - "Resolution: {resolution}"
-```
-
----
-
-## Styling Options
-
-### Font Settings
-
-```yaml
-font:
-  # Font file (searches system font directories)
-  family: "DejaVuSans.ttf"
-  # Options: "DejaVuSans.ttf", "Arial.ttf", "Helvetica.ttf", "default"
-
-  # Size as ratio of image height
-  size_ratio: 0.025  # 2.5% of image height
-  # Smaller = 0.02, Larger = 0.03
-
-  # Text color (RGBA: Red, Green, Blue, Alpha)
-  color: [255, 255, 255, 255]  # White, fully opaque
-  # Examples:
-  # [255, 255, 0, 255]   # Yellow
-  # [0, 255, 0, 200]     # Green, 78% opacity
-```
-
-### Background Settings
-
-```yaml
-background:
-  enabled: true  # Semi-transparent box behind text
-
-  # Background color (RGBA)
-  color: [0, 0, 0, 180]
-  # Alpha values:
-  # 255 = fully opaque (100%)
-  # 180 = 70% opacity (recommended)
-  # 128 = 50% opacity
-  # 0 = fully transparent
-
-  # Padding around text (relative to font size)
-  padding: 0.3
-  # 0.3 = 30% of font size
-  # Smaller = tighter, Larger = more breathing room
-```
-
-### Layout Options
-
-```yaml
-layout:
-  # Spacing between lines
-  line_spacing: 1.3
-  # 1.0 = single spacing
-  # 1.5 = 1.5x spacing
-
-  # Add blank line between sections
-  section_spacing: true
-```
-
----
-
-## Standalone Script Usage
-
-The `apply_overlay.py` script allows you to process existing images.
-
-### Basic Usage
-
-```bash
-# Single image (overwrites original)
-python3 src/apply_overlay.py image.jpg
-
-# Single image with custom output
-python3 src/apply_overlay.py image.jpg -o output.jpg
-
-# Batch process to new directory
-python3 src/apply_overlay.py test_photos/*.jpg --output-dir overlayed/
-```
-
-### Advanced Options
-
-```bash
-# Specify custom metadata file
-python3 src/apply_overlay.py image.jpg -m custom_metadata.json
-
-# Override light mode
-python3 src/apply_overlay.py image.jpg --mode night
-
-# Use custom config
-python3 src/apply_overlay.py image.jpg -c custom_config.yml
-
-# Verbose output
-python3 src/apply_overlay.py image.jpg -v
-```
-
-### Batch Processing Examples
-
-```bash
-# Process all images in directory
-python3 src/apply_overlay.py test_photos/*.jpg --output-dir overlayed/
-
-# Process images from specific date
-python3 src/apply_overlay.py test_photos/kringelen_2025_11_05_*.jpg --output-dir nov5/
-
-# In-place processing (careful!)
-python3 src/apply_overlay.py test_photos/*.jpg --in-place
-```
-
----
-
-## Example Configurations
-
-### Minimal Overlay
+That is the whole model. `overlay.content` accepts exactly these four keys and
+nothing else:
 
 ```yaml
 overlay:
   enabled: true
-  position: "bottom-left"
-  camera_name: "My Camera"
-
   content:
-    main:
-      - "{camera_name} | {date} {time}"
-    camera_settings:
-      enabled: false
-    debug:
-      enabled: false
+    line_1_left:  "{camera_name}"
+    line_1_right: "{temp}, humidity: {humidity}, wind: {wind} {wind_dir}"
+    line_2_left:  "{date} {time}"
+    line_2_right: "Exposure: {exposure}, {iso}, lux: {lux} - CPU: {cpu_temp}"
 ```
 
-### Detailed Overlay
+Each value is a template. Anything in `{braces}` is substituted; everything
+else is printed literally. An unknown placeholder leaves that slot showing its
+raw template rather than aborting the overlay, so a typo costs you one line and
+not the whole bar.
+
+## Placeholders
+
+### Camera and capture
+
+| Placeholder | Example |
+|---|---|
+| `{camera_name}` | from `overlay.camera_name` |
+| `{date}` `{time}` `{datetime}` | `2026-07-27`, `01:12`, both |
+| `{datetime_localized}` | `mandag. 27 juli 2026 01:12` — see `overlay.datetime` |
+| `{exposure}` `{exposure_ms}` `{exposure_us}` | `190.9ms`, `190.90`, `190900` |
+| `{iso}` `{gain}` | `ISO  112`, `1.12` |
+| `{lux}` | `435.8`, padded to six characters |
+| `{mode}` | `Day`, `Night`, `Transition` |
+| `{wb}` `{wb_gains}` `{color_gains}` | white balance as text and as gains |
+| `{temperature}` | **sensor** temperature, not outdoor |
+| `{resolution}` | `3840x2160` |
+| `{af_mode}` `{lens_position}` `{focus_distance}` | autofocus state, where supported |
+
+The numeric formatters pad to fixed widths, so a value changing digits never
+makes the bar jump sideways mid-timelapse.
+
+### System
+
+`{cpu_temp}` `{cpu_temp_raw}` `{load}` `{load_1min}` `{load_5min}`
+`{load_15min}` `{memory}` `{memory_percent}` `{memory_used}` `{memory_free}`
+`{memory_total}` `{disk}` `{disk_free}` `{disk_used}` `{disk_total}`
+`{disk_percent}` `{uptime}`
+
+### Weather
+
+Requires `weather.enabled`. See [WEATHER.md](WEATHER.md).
+
+`{temp}` `{temperature_outdoor}` `{humidity}` `{wind}` `{wind_speed}`
+`{wind_gust}` `{wind_dir}` `{rain}` `{rain_1h}` `{rain_24h}` `{pressure}`
+
+> `{temp}` is the outdoor reading; `{temperature}` is the camera sensor. Two
+> deliberately different names for two deliberately different things.
+
+### Tide, ships and aurora
+
+These read JSON files written by a separate service — see the `barentswatch`,
+`tide` and `aurora` sections of the config. Leave them disabled unless you run
+that service.
+
+`{tide}` `{tide_level}` `{tide_trend}` `{tide_arrow}` `{tide_target}`
+`{tide_high_time}` `{tide_high_level}` `{tide_low_time}` `{tide_low_level}`
+`{ships}` `{ships_count}` `{ships_moving}` `{ships_line_1}`…`{ships_line_5}`
+
+Tide and aurora also draw directly into the right-hand end of the top bar — a
+wave sparkline and a Kp/Bz readout — rather than through placeholders. Ships
+render as labelled boxes below the bar.
+
+## Appearance
 
 ```yaml
 overlay:
-  enabled: true
-  position: "bottom-left"
-  camera_name: "Kringelen Timelapse"
-
-  font:
-    family: "DejaVuSans.ttf"
-    size_ratio: 0.028
-    color: [255, 255, 255, 255]
-
-  background:
-    enabled: true
-    color: [0, 0, 0, 200]
-    padding: 0.4
-
-  content:
-    main:
-      - "{camera_name}"
-      - "{datetime}"
-      - "Light Mode: {mode}"
-
-    camera_settings:
-      enabled: true
-      lines:
-        - "Exposure: {exposure} | ISO: {iso}"
-        - "White Balance: {wb} | Lux: {lux}"
-
-    debug:
-      enabled: false
-```
-
-### Debug Overlay (Troubleshooting)
-
-```yaml
-overlay:
-  enabled: true
-  position: "bottom-left"
-
-  content:
-    main:
-      - "DEBUG MODE"
-      - "{datetime}"
-
-    camera_settings:
-      enabled: true
-      lines:
-        - "Exp: {exposure_us}µs | Gain: {gain}"
-        - "ISO: {iso} | Lux: {lux}"
-
-    debug:
-      enabled: true
-      lines:
-        - "WB Gains: {wb_gains}"
-        - "Temp: {temperature}°C"
-        - "Resolution: {resolution}"
-```
-
-### System Monitoring Overlay
-
-```yaml
-overlay:
-  enabled: true
-  position: "top-bar"  # Full width for more info
-  camera_name: "Timelapse with System Stats"
+  position: "top-bar"        # see below
+  margin: 10                 # px from the edge
 
   font:
     family: "DejaVuSans-Bold.ttf"
-    size_ratio: 0.020
+    size_ratio: 0.020        # fraction of image height, so it scales
     color: [255, 255, 255, 255]
 
   background:
     enabled: true
-    color: [0, 0, 0, 110]  # Semi-transparent
-    padding: 0.6
+    color: [0, 0, 30, 70]    # RGBA; the bar fades toward the image
+    padding: 0.6             # multiple of the font size
 
-  content:
-    # Line 1 - Camera and Time Info
-    line_1_left: "{camera_name}"
-    line_1_right: "{date} {time}"
+  layout:
+    line_spacing: 1.2        # corner modes only; top-bar is fixed at 1.2
+    bottom_padding_multiplier: 0.7
 
-    # Line 2 - System Health Metrics
-    line_2_left: "CPU: {cpu_temp}, Load: {load_1min}"
-    line_2_right: "Disk: {disk_free}, Memory: {memory_percent}"
+  datetime:
+    localized: true          # weekday and month in your locale
+    locale: "nb_NO.UTF-8"    # must be generated on the system
+    show_seconds: false
+    date_format: "%Y-%m-%d"  # used when localized is false
+    time_format: "%H:%M"
 ```
 
-This example shows system health metrics alongside camera info, perfect for monitoring long-running timelapses.
+`size_ratio` is a fraction of image height rather than a pixel size, so the bar
+looks the same on 1080p and on 4K. At 0.020 that is about 43 px on 4K.
 
----
+### Position
 
-## Font Installation
+`top-bar` is what the example ships and what the four-slot model is designed
+for: a full-width band across the top, fading into the image.
 
-### Check Available Fonts
+The other values place a text block in a corner instead — `top-left`,
+`top-right`, `bottom-left`, `bottom-right`, and `custom` (which uses
+`overlay.custom_position.x`/`.y` as percentages). In those modes the four slots
+stack as separate lines rather than being laid out left and right.
+
+### Localization
+
+`localized: true` needs the locale generated on the system:
 
 ```bash
-# List installed fonts
-fc-list | grep -i dejavu
-fc-list | grep -i arial
-
-# Search for TrueType fonts
-find /usr/share/fonts -name "*.ttf"
+sudo dpkg-reconfigure locales     # tick nb_NO.UTF-8, or whichever you want
+locale -a | grep nb_NO            # confirm
 ```
 
-### Install Additional Fonts (Debian/Ubuntu)
+Without it you get numeric ISO output instead — `2026-07-27 01:12`, no weekday
+or month name in any language — and one warning in the log.
+
+## Applying an overlay after the fact
+
+`raspilapse/cli/apply_overlay.py` re-renders onto existing images using their sidecar
+metadata JSON:
 
 ```bash
-# Install DejaVu fonts (recommended)
-sudo apt install fonts-dejavu
-
-# Install Microsoft core fonts
-sudo apt install ttf-mscorefonts-installer
-
-# Install Liberation fonts
-sudo apt install fonts-liberation
+python3 -m raspilapse.cli.apply_overlay /var/www/html/images/2026/07/27/*.jpg --output-dir /tmp/out
+python3 -m raspilapse.cli.apply_overlay frame.jpg     # in place when no -o/--output-dir
 ```
 
-### Using Custom Fonts
+Useful for trying a template change without waiting for the next capture.
 
-Place your `.ttf` file in a known location and specify the full path:
+## When the overlay looks wrong
 
-```yaml
-font:
-  family: "/home/pi/fonts/MyCustomFont.ttf"
-```
+**Nothing is drawn.** Check `overlay.enabled`, then check you are using the
+four `line_N_side` keys — any other key under `content` is silently ignored.
 
----
-
-## Troubleshooting
-
-### Overlay Not Appearing
-
-1. **Check if enabled:**
-   ```yaml
-   overlay:
-     enabled: true  # Must be true!
-   ```
-
-2. **Check logs:**
-   ```bash
-   tail -f logs/capture_image.log
-   # Look for "Overlay applied" or error messages
-   ```
-
-3. **Test with standalone script:**
-   ```bash
-   python3 src/apply_overlay.py image.jpg -v
-   ```
-
-### Font Not Loading
-
-If you see "Could not load font" warnings:
+**A slot shows `{something}` literally.** That placeholder does not exist.
+Check it against the tables above; the log names it:
 
 ```bash
-# Install DejaVu fonts
-sudo apt install fonts-dejavu
-
-# Or use default font
+grep "Unknown variable" logs/overlay.log
 ```
 
-In `config/config.yml`:
-```yaml
-font:
-  family: "default"  # Falls back to PIL default font
-```
+**Weather fields show `-`.** Nothing has ever been fetched successfully. If
+they show *stale* values instead, that is deliberate — see
+[WEATHER.md](WEATHER.md).
 
-### Text Too Small/Large
+**Dates are in English despite `localized: true`.** The locale is not generated
+on the system; see above.
 
-Adjust the size ratio:
+**Font not found.** The family name is resolved against the system font path.
+`fc-list | grep DejaVu` shows what is available.
 
-```yaml
-font:
-  size_ratio: 0.025  # Default
-  # Too small? Try: 0.03 or 0.035
-  # Too large? Try: 0.02 or 0.018
-```
-
-### Background Not Visible
-
-Increase opacity (alpha channel):
-
-```yaml
-background:
-  color: [0, 0, 0, 220]  # Increase from 180 to 220
-```
-
-### Missing Variables
-
-If you see `{variable_name}` in your overlay instead of values:
-
-1. Check variable name is correct (see Available Variables section)
-2. Check metadata file exists and contains the data
-3. Enable verbose logging to see what's available
-
----
-
-## Integration with Adaptive Timelapse
-
-The overlay system integrates seamlessly with adaptive timelapse:
-
-1. **Automatic Mode Detection**: Shows "Day", "Night", or "Transition" mode
-2. **Real-time Settings**: Displays actual exposure/ISO used for that frame
-3. **No Performance Impact**: Applied after image capture (doesn't slow down camera)
-4. **Optional**: Can be enabled/disabled without affecting capture
-
----
-
-## Performance Notes
-
-- **Negligible Impact**: Overlay adds ~0.1-0.5 seconds per image
-- **Memory Efficient**: Processes one image at a time
-- **Non-blocking**: Applied after camera release (doesn't affect capture timing)
-- **Batch Friendly**: Can process hundreds of images efficiently
-
----
-
-## Best Practices
-
-1. **Start Simple**: Enable basic overlay, then add details
-2. **Test First**: Use `--test` mode to check overlay appearance
-3. **Resolution Aware**: Size ratio scales automatically with resolution
-4. **Readability**: Keep background enabled for bright scenes
-5. **Minimal Debug**: Only enable debug info when troubleshooting
-6. **Batch Carefully**: Test on single image before batch processing
-
----
-
-## Summary
-
-The overlay system provides a powerful, flexible way to add professional-looking information to your timelapse images:
-
-| Feature | Status |
-|---------|--------|
-| Automatic Integration | During capture |
-| Standalone Processing | After capture |
-| Resolution Independent | Scales automatically |
-| Configurable Content | Via YAML config |
-| Semi-transparent BG | For readability |
-| Batch Processing | Multiple images |
-| Performance | Fast and efficient |
+Overlay activity goes to `logs/overlay.log`, most of it at DEBUG — set
+`logging.level: DEBUG` while experimenting.

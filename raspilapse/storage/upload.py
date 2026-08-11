@@ -1,0 +1,798 @@
+"""
+Upload Service - Handles video uploads with retry queue management.
+
+Provides:
+- upload_to_server() - Upload video/keogram/slitscan to server
+- queue_upload() - Add failed upload to retry queue
+- get_pending_uploads() - List pending/failed uploads
+- get_upload_history() - List completed uploads
+- mark_upload_success/failed() - Update upload status
+- retry_single_upload() - Retry one upload
+- process_retry_queue() - Process all due for retry
+
+Exponential backoff: 5min, 10min, 20min, 40min, 80min... capped at 24h
+"""
+
+import os
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    # Optional: only the upload itself needs it. Queueing, the retry schedule
+    # and the queue statistics are all plain SQLite, so a camera that never
+    # uploads -- which is the default, video_upload.enabled is false -- should
+    # not have to install an HTTP client to render its daily video.
+    import requests
+
+    RequestError = requests.exceptions.RequestException
+except ImportError:  # pragma: no cover - the module is present in CI
+    requests = None
+
+    class RequestError(Exception):
+        """Stands in for requests' exception so the handler below still parses."""
+
+
+try:
+    # Optional: streams the multipart body instead of buffering it in memory.
+    # A daily video is ~300 MB, which a 4 GB Pi cannot afford to hold twice.
+    from requests_toolbelt import MultipartEncoder
+except ImportError:  # pragma: no cover - exercised via patching in tests
+    MultipartEncoder = None
+
+from raspilapse.logging_setup import get_logger
+from raspilapse.storage.database import apply_schema
+
+# Exponential backoff settings
+BASE_RETRY_DELAY_MINUTES = 5
+MAX_RETRY_DELAY_MINUTES = 24 * 60  # 24 hours
+
+
+class UploadService:
+    """
+    Service for uploading timelapse videos with retry queue support.
+
+    Manages upload attempts and maintains a SQLite queue for retries.
+    """
+
+    def __init__(self, config: Dict, config_path: str = None):
+        """
+        Initialize the upload service.
+
+        Args:
+            config: Full configuration dictionary
+            config_path: Optional path to config file for logger
+        """
+        self.config = config
+        self.config_path = config_path
+        self.upload_config = config.get("video_upload", {})
+        self.db_config = config.get("database", {})
+        self.db_path = self.db_config.get("path", "data/timelapse.db")
+
+        # Make db_path absolute relative to config file location
+        if config_path and not os.path.isabs(self.db_path):
+            config_dir = os.path.dirname(os.path.abspath(config_path))
+            project_dir = os.path.dirname(config_dir)
+            self.db_path = os.path.join(project_dir, self.db_path)
+
+        self.camera_id = self.upload_config.get(
+            "camera_id", config.get("output", {}).get("project_name", "unknown")
+        )
+        self.logger = get_logger("upload_service", config_path)
+        self._persistent_conn = None  # For in-memory databases
+
+        # Ensure database has the upload_queue table
+        self._ensure_table_exists()
+
+    @contextmanager
+    def _get_connection(self):
+        """
+        Context manager for database connections.
+
+        For in-memory databases, uses a persistent connection.
+        For file databases, creates a fresh connection each time for thread safety.
+        """
+        # For in-memory databases, use persistent connection
+        if self.db_path == ":memory:":
+            if self._persistent_conn is None:
+                try:
+                    self._persistent_conn = sqlite3.connect(
+                        ":memory:",
+                        timeout=10.0,
+                    )
+                    self._persistent_conn.row_factory = sqlite3.Row
+                except sqlite3.Error as e:
+                    self.logger.warning(f"[Upload] Connection error: {e}")
+                    yield None
+                    return
+            yield self._persistent_conn
+            return
+
+        # For file databases, create fresh connection
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10.0)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.Error as e:
+            self.logger.warning(f"[Upload] Database connection error: {e}")
+            conn = None
+
+        # Yield outside the connect guard: an sqlite3.Error from the caller's
+        # body used to re-enter the except and yield a second time, which
+        # contextlib turns into "generator didn't stop after throw()".
+        try:
+            yield conn
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _ensure_table_exists(self) -> bool:
+        """Ensure the upload_queue table and its indexes exist.
+
+        Applies database.apply_schema to this service's own connection rather
+        than carrying a second copy of the DDL. The two copies had already
+        drifted: this one predated the v4 composite index, so whichever process
+        opened the file first decided which indexes existed, leaving the schema
+        pinned at v3.
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return False
+                return apply_schema(conn, wal=self.db_path != ":memory:")
+        except Exception as e:
+            self.logger.error(f"[Upload] Failed to ensure table exists: {e}")
+            return False
+
+    def upload_to_server(
+        self,
+        video_path: Path,
+        keogram_path: Optional[Path],
+        slitscan_path: Optional[Path],
+        date: str,
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Upload timelapse video and images to the webserver.
+
+        Args:
+            video_path: Path to video file
+            keogram_path: Optional path to keogram image
+            slitscan_path: Optional path to slitscan image
+            date: Date string (YYYY-MM-DD)
+
+        Returns:
+            Tuple of (success, error_message, server_response)
+        """
+        if requests is None:
+            message = (
+                "requests is not installed, so the upload cannot be attempted. "
+                "Install it with: sudo apt install python3-requests"
+            )
+            self.logger.error(f"[Upload] {message}")
+            return False, message, None
+
+        url = self.upload_config.get("url")
+        api_key = self.upload_config.get("api_key")
+
+        if not url or not api_key:
+            return False, "Upload URL or API key not configured", None
+
+        self.logger.info(f"[Upload] Uploading to: {url}")
+        self.logger.info(f"[Upload] Video: {video_path}")
+        self.logger.info(f"[Upload] Date: {date}")
+
+        file_handles = []
+        fields = []
+
+        try:
+            # Form fields first
+            fields.append(("title", Path(video_path).name))
+            fields.append(("date", date))
+            fields.append(("camera_id", self.camera_id))
+
+            # Open video file
+            if video_path and Path(video_path).exists():
+                f = open(video_path, "rb")
+                file_handles.append(f)
+                fields.append(("video", (Path(video_path).name, f, "video/mp4")))
+            else:
+                return False, f"Video file not found: {video_path}", None
+
+            # Open keogram if exists
+            if keogram_path and Path(keogram_path).exists():
+                f = open(keogram_path, "rb")
+                file_handles.append(f)
+                fields.append(("keogram", (Path(keogram_path).name, f, "image/jpeg")))
+                self.logger.info(f"[Upload] Keogram: {keogram_path}")
+
+            # Open slitscan if exists
+            if slitscan_path and Path(slitscan_path).exists():
+                f = open(slitscan_path, "rb")
+                file_handles.append(f)
+                fields.append(("slitscan", (Path(slitscan_path).name, f, "image/jpeg")))
+                self.logger.info(f"[Upload] Slitscan: {slitscan_path}")
+
+            file_names = [name for name, val in fields if isinstance(val, tuple)]
+            headers = {"Authorization": f"Bearer {api_key}"}
+
+            # timeout=(connect, read); read is the socket idle timeout.
+            if MultipartEncoder is not None:
+                encoder = MultipartEncoder(fields=fields)
+                self.logger.info(f"[Upload] Uploading files: {file_names} ({encoder.len} bytes)")
+                # Stream the body so we don't buffer hundreds of MB in memory.
+                headers["Content-Type"] = encoder.content_type
+                response = requests.post(url, data=encoder, headers=headers, timeout=(30, 3600))
+            else:
+                self.logger.warning(
+                    "[Upload] requests-toolbelt not installed - uploading without streaming "
+                    "(the whole file is held in memory). "
+                    "Install it with: sudo apt install python3-requests-toolbelt"
+                )
+                self.logger.info(f"[Upload] Uploading files: {file_names}")
+                # requests builds the multipart body itself, including the boundary,
+                # so Content-Type must NOT be set here or the body is unreadable.
+                files = {name: val for name, val in fields if isinstance(val, tuple)}
+                data = {name: val for name, val in fields if not isinstance(val, tuple)}
+                response = requests.post(
+                    url, files=files, data=data, headers=headers, timeout=(30, 3600)
+                )
+
+            if response.status_code == 200:
+                self.logger.info("[Upload] Upload successful!")
+                return True, None, response.text
+            else:
+                error_msg = f"HTTP {response.status_code}: {response.text}"
+                self.logger.error(f"[Upload] Upload failed: {error_msg}")
+                return False, error_msg, None
+
+        except RequestError as e:
+            error_msg = str(e)
+            self.logger.error(f"[Upload] Request failed: {error_msg}")
+            return False, error_msg, None
+        except Exception as e:
+            error_msg = str(e)
+            self.logger.error(f"[Upload] Upload error: {error_msg}")
+            return False, error_msg, None
+        finally:
+            for f in file_handles:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+
+    def queue_upload(
+        self,
+        video_path: str,
+        keogram_path: Optional[str],
+        slitscan_path: Optional[str],
+        video_date: str,
+        max_retries: int = 5,
+    ) -> Optional[int]:
+        """
+        Add an upload to the retry queue.
+
+        Args:
+            video_path: Path to video file
+            keogram_path: Optional path to keogram
+            slitscan_path: Optional path to slitscan
+            video_date: Date string (YYYY-MM-DD)
+            max_retries: Maximum retry attempts (default 5)
+
+        Returns:
+            Queue ID if successful, None otherwise
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return None
+
+                cursor = conn.cursor()
+
+                # Calculate next retry time (immediate for new entries)
+                next_retry = datetime.now().isoformat()
+
+                # Use INSERT OR REPLACE to handle re-queueing same date
+                cursor.execute(
+                    """INSERT OR REPLACE INTO upload_queue
+                       (video_date, video_path, keogram_path, slitscan_path,
+                        status, retry_count, max_retries, created_at, next_retry_at)
+                       VALUES (?, ?, ?, ?, 'pending', 0, ?, datetime('now'), ?)""",
+                    (video_date, video_path, keogram_path, slitscan_path, max_retries, next_retry),
+                )
+                conn.commit()
+
+                queue_id = cursor.lastrowid
+                self.logger.info(f"[Upload] Queued upload for {video_date} (id={queue_id})")
+                return queue_id
+
+        except Exception as e:
+            self.logger.error(f"[Upload] Failed to queue upload: {e}")
+            return None
+
+    def get_pending_uploads(self, include_failed: bool = False) -> List[Dict]:
+        """
+        Get uploads awaiting retry.
+
+        'failed' is a terminal status - a row reaches it only after the retry
+        schedule has been exhausted, so the automatic queue must not pick it
+        back up. `retry_uploads.py --force` opts in explicitly.
+
+        Args:
+            include_failed: Also return rows that have been given up on
+
+        Returns:
+            List of upload records
+        """
+        statuses = ("pending", "failed") if include_failed else ("pending",)
+        placeholders = ", ".join("?" for _ in statuses)
+
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return []
+
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""SELECT * FROM upload_queue
+                        WHERE status IN ({placeholders})
+                        ORDER BY created_at DESC""",
+                    statuses,
+                )
+                return [dict(row) for row in cursor.fetchall()]
+
+        except Exception as e:
+            self.logger.warning(f"[Upload] Failed to get pending uploads: {e}")
+            return []
+
+    def get_upload_history(self, limit: int = 50) -> List[Dict]:
+        """
+        Get upload history (all statuses).
+
+        Args:
+            limit: Maximum number of records to return
+
+        Returns:
+            List of upload records
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return []
+
+                cursor = conn.cursor()
+                cursor.execute(
+                    """SELECT * FROM upload_queue
+                       ORDER BY created_at DESC
+                       LIMIT ?""",
+                    (limit,),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+
+        except Exception as e:
+            self.logger.warning(f"[Upload] Failed to get upload history: {e}")
+            return []
+
+    def get_upload_by_id(self, upload_id: int) -> Optional[Dict]:
+        """
+        Get a single upload by ID.
+
+        Args:
+            upload_id: Upload queue ID
+
+        Returns:
+            Upload record or None
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return None
+
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM upload_queue WHERE id = ?", (upload_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+
+        except Exception as e:
+            self.logger.warning(f"[Upload] Failed to get upload {upload_id}: {e}")
+            return None
+
+    def mark_upload_success(self, upload_id: int, server_response: str = None) -> bool:
+        """
+        Mark an upload as successful.
+
+        Args:
+            upload_id: Upload queue ID
+            server_response: Optional server response JSON
+
+        Returns:
+            True if successful
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return False
+
+                cursor = conn.cursor()
+                cursor.execute(
+                    """UPDATE upload_queue
+                       SET status = 'success',
+                           completed_at = datetime('now'),
+                           last_attempt_at = datetime('now'),
+                           server_response = ?,
+                           last_error = NULL
+                       WHERE id = ?""",
+                    (server_response, upload_id),
+                )
+                conn.commit()
+
+                self.logger.info(f"[Upload] Marked upload {upload_id} as success")
+                return True
+
+        except Exception as e:
+            self.logger.error(f"[Upload] Failed to mark success: {e}")
+            return False
+
+    def mark_upload_failed(self, upload_id: int, error: str) -> bool:
+        """
+        Mark an upload as failed and schedule next retry.
+
+        Uses exponential backoff for retry timing.
+
+        Args:
+            upload_id: Upload queue ID
+            error: Error message
+
+        Returns:
+            True if successful
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return False
+
+                cursor = conn.cursor()
+
+                # Get current retry count and max_retries
+                cursor.execute(
+                    "SELECT retry_count, max_retries FROM upload_queue WHERE id = ?",
+                    (upload_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return False
+
+                retry_count = row["retry_count"] + 1
+                max_retries = row["max_retries"]
+
+                # Calculate next retry with exponential backoff
+                delay_minutes = min(
+                    BASE_RETRY_DELAY_MINUTES * (2 ** (retry_count - 1)),
+                    MAX_RETRY_DELAY_MINUTES,
+                )
+                next_retry = datetime.now() + timedelta(minutes=delay_minutes)
+
+                # Determine status
+                if retry_count >= max_retries:
+                    status = "failed"
+                    self.logger.warning(
+                        f"[Upload] Upload {upload_id} exhausted retries ({retry_count}/{max_retries})"
+                    )
+                else:
+                    status = "pending"
+                    self.logger.info(
+                        f"[Upload] Upload {upload_id} failed, retry {retry_count}/{max_retries} "
+                        f"scheduled in {delay_minutes} minutes"
+                    )
+
+                cursor.execute(
+                    """UPDATE upload_queue
+                       SET status = ?,
+                           retry_count = ?,
+                           last_attempt_at = datetime('now'),
+                           next_retry_at = ?,
+                           last_error = ?
+                       WHERE id = ?""",
+                    (status, retry_count, next_retry.isoformat(), error, upload_id),
+                )
+                conn.commit()
+
+                return True
+
+        except Exception as e:
+            self.logger.error(f"[Upload] Failed to mark failed: {e}")
+            return False
+
+    def cancel_upload(self, upload_id: int) -> bool:
+        """
+        Cancel/remove an upload from the queue.
+
+        Args:
+            upload_id: Upload queue ID
+
+        Returns:
+            True if successful
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return False
+
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM upload_queue WHERE id = ?", (upload_id,))
+                conn.commit()
+
+                self.logger.info(f"[Upload] Cancelled upload {upload_id}")
+                return True
+
+        except Exception as e:
+            self.logger.error(f"[Upload] Failed to cancel upload: {e}")
+            return False
+
+    def retry_single_upload(self, upload_id: int, force: bool = False) -> Tuple[bool, str]:
+        """
+        Retry a single upload.
+
+        Args:
+            upload_id: Upload queue ID
+            force: If True, retry even if not due yet
+
+        Returns:
+            Tuple of (success, message)
+        """
+        upload = self.get_upload_by_id(upload_id)
+        if not upload:
+            return False, f"Upload {upload_id} not found"
+
+        if upload["status"] == "success":
+            return False, "Upload already completed successfully"
+
+        # Check if due for retry (unless forced)
+        if not force and upload["next_retry_at"]:
+            next_retry = datetime.fromisoformat(upload["next_retry_at"])
+            if datetime.now() < next_retry:
+                return False, f"Not due for retry until {next_retry}"
+
+        # The source video is deleted long before the queue gives up on it.
+        # Rescheduling a row whose file is gone means retrying forever, so
+        # cancel it instead of letting it accumulate attempts.
+        if not Path(upload["video_path"]).exists():
+            self.cancel_upload(upload_id)
+            msg = f"source video no longer exists: {upload['video_path']}"
+            self.logger.info(f"[Upload] Cancelled upload {upload_id} - {msg}")
+            return False, msg
+
+        # Mark as uploading
+        try:
+            with self._get_connection() as conn:
+                if conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE upload_queue SET status = 'uploading', last_attempt_at = datetime('now') WHERE id = ?",
+                        (upload_id,),
+                    )
+                    conn.commit()
+        except Exception as e:
+            # Non-fatal: the upload itself can still proceed, but log so a DB issue
+            # doesn't go unnoticed. _reset_stale_uploading_rows handles recovery.
+            self.logger.warning(f"[Upload] Could not mark upload {upload_id} as 'uploading': {e}")
+
+        # Attempt upload
+        video_path = Path(upload["video_path"])
+        keogram_path = Path(upload["keogram_path"]) if upload["keogram_path"] else None
+        slitscan_path = Path(upload["slitscan_path"]) if upload["slitscan_path"] else None
+
+        success, error, response = self.upload_to_server(
+            video_path, keogram_path, slitscan_path, upload["video_date"]
+        )
+
+        if success:
+            self.mark_upload_success(upload_id, response)
+            return True, "Upload successful"
+        else:
+            self.mark_upload_failed(upload_id, error)
+            return False, error or "Unknown error"
+
+    def _reset_stale_uploading_rows(self, stale_after_minutes: int = 30) -> int:
+        """
+        Reset rows stuck in status='uploading' back to 'pending' so they're retried.
+
+        retry_single_upload() marks a row 'uploading' before the POST. If the process
+        dies between that mark and the final mark-success/failed (typically a reboot),
+        the row would otherwise be invisible to get_pending_uploads() forever.
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return 0
+                cursor = conn.cursor()
+                # last_attempt_at is always written by production code via
+                # SQLite's `datetime('now')` (UTC, "YYYY-MM-DD HH:MM:SS"),
+                # so the threshold here uses the same clock for an
+                # apples-to-apples lexicographic compare.
+                cursor.execute(
+                    """UPDATE upload_queue
+                       SET status = 'pending'
+                       WHERE status = 'uploading'
+                         AND (
+                              last_attempt_at IS NULL
+                              OR last_attempt_at < datetime('now', ?)
+                         )""",
+                    (f"-{stale_after_minutes} minutes",),
+                )
+                n = cursor.rowcount
+                conn.commit()
+                if n:
+                    self.logger.warning(
+                        f"[Upload] Reset {n} stale 'uploading' row(s) back to 'pending'"
+                    )
+                return n
+        except Exception as e:
+            self.logger.warning(f"[Upload] Failed to reset stale uploading rows: {e}")
+            return 0
+
+    def process_retry_queue(self, force: bool = False) -> Dict[str, Any]:
+        """
+        Process all uploads due for retry.
+
+        Args:
+            force: If True, retry all pending regardless of schedule
+
+        Returns:
+            Summary dict with processed, success, failed counts
+        """
+        results = {"processed": 0, "success": 0, "failed": 0, "skipped": 0, "errors": []}
+
+        # Recover rows stranded in 'uploading' status (e.g. by the reboot cron at 13:00
+        # firing between mark-uploading and the final mark-success/failed).
+        self._reset_stale_uploading_rows(stale_after_minutes=30)
+
+        # force is an explicit "try everything again", which includes rows the
+        # scheduler has already given up on.
+        pending = self.get_pending_uploads(include_failed=force)
+        self.logger.info(f"[Upload] Processing retry queue: {len(pending)} pending uploads")
+
+        for upload in pending:
+            upload_id = upload["id"]
+
+            # Check if due for retry
+            if not force and upload["next_retry_at"]:
+                try:
+                    next_retry = datetime.fromisoformat(upload["next_retry_at"])
+                    if datetime.now() < next_retry:
+                        results["skipped"] += 1
+                        continue
+                except ValueError:
+                    pass  # Invalid date, try anyway
+
+            results["processed"] += 1
+            success, message = self.retry_single_upload(upload_id, force=True)
+
+            if success:
+                results["success"] += 1
+            else:
+                results["failed"] += 1
+                results["errors"].append({"id": upload_id, "error": message})
+
+        self.logger.info(
+            f"[Upload] Queue processing complete: "
+            f"{results['success']} success, {results['failed']} failed, "
+            f"{results['skipped']} skipped"
+        )
+
+        return results
+
+    def get_upload_by_date(self, date: str) -> Optional[Dict]:
+        """
+        Get an upload queue entry by date.
+
+        Args:
+            date: Date string (YYYY-MM-DD)
+
+        Returns:
+            Upload record or None
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return None
+
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM upload_queue WHERE video_date = ?", (date,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+
+        except Exception as e:
+            self.logger.warning(f"[Upload] Failed to get upload for date {date}: {e}")
+            return None
+
+    def record_upload_success(
+        self,
+        video_path: str,
+        keogram_path: Optional[str],
+        slitscan_path: Optional[str],
+        video_date: str,
+        server_response: Optional[str] = None,
+    ) -> bool:
+        """
+        Record a direct upload success in the queue.
+
+        Prevents retry_uploads from re-uploading a file that was already
+        successfully uploaded directly by daily_timelapse.
+
+        Args:
+            video_path: Path to video file
+            keogram_path: Optional path to keogram
+            slitscan_path: Optional path to slitscan
+            video_date: Date string (YYYY-MM-DD)
+            server_response: Optional server response
+
+        Returns:
+            True if successful
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return False
+
+                cursor = conn.cursor()
+                # Ensure a row exists for this date (no-op if already there)
+                cursor.execute(
+                    """INSERT OR IGNORE INTO upload_queue
+                       (video_date, video_path, keogram_path, slitscan_path,
+                        status, created_at)
+                       VALUES (?, ?, ?, ?, 'success', datetime('now'))""",
+                    (video_date, video_path, keogram_path, slitscan_path),
+                )
+                # Mark as success regardless of current state
+                cursor.execute(
+                    """UPDATE upload_queue
+                       SET status = 'success',
+                           completed_at = datetime('now'),
+                           server_response = ?,
+                           last_error = NULL
+                       WHERE video_date = ?""",
+                    (server_response, video_date),
+                )
+                conn.commit()
+
+                self.logger.info(f"[Upload] Recorded direct upload success for {video_date}")
+                return True
+
+        except Exception as e:
+            self.logger.error(f"[Upload] Failed to record upload success: {e}")
+            return False
+
+    def get_queue_stats(self) -> Dict[str, int]:
+        """
+        Get upload queue statistics.
+
+        Returns:
+            Dict with pending, success, failed, total counts
+        """
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return {"pending": 0, "success": 0, "failed": 0, "total": 0}
+
+                cursor = conn.cursor()
+                cursor.execute(
+                    """SELECT status, COUNT(*) as count
+                       FROM upload_queue
+                       GROUP BY status"""
+                )
+
+                stats = {"pending": 0, "uploading": 0, "success": 0, "failed": 0, "total": 0}
+                for row in cursor.fetchall():
+                    stats[row["status"]] = row["count"]
+                    stats["total"] += row["count"]
+
+                return stats
+
+        except Exception as e:
+            self.logger.warning(f"[Upload] Failed to get stats: {e}")
+            return {"pending": 0, "success": 0, "failed": 0, "total": 0}

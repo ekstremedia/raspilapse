@@ -1,0 +1,740 @@
+# Raspilapse configuration reference.
+#
+# Every setting there is, annotated. Values are what a working camera uses;
+# where the code's own default differs, the comment names it. This is
+# documentation, not a template: do not copy it wholesale. Start from
+# config/config.example.yml and copy across only the blocks you want to change
+# -- everything omitted falls back to raspilapse/config.py.
+#
+# Three tests keep this file honest: one fails if it documents a key nothing
+# reads, one if the code starts requiring a key with no default, and one if a
+# key in DEFAULTS goes undocumented here.
+
+location:
+  # Latitude in decimal degrees (negative for South)
+  latitude: 68.7
+  # Longitude in decimal degrees (negative for West)
+  longitude: 15.4
+  # Timezone (for accurate sun calculations)
+  timezone: "Europe/Oslo"
+# Camera Settings
+camera:
+  # Image resolution (width x height)
+  # Common options for Camera V3:
+  # - [4608, 2592] - Full 11.9MP
+  # - [2304, 1296] - 3MP binned
+  # - [1920, 1080] - Full HD
+  # - [1280, 720]  - HD
+  resolution:
+    width: 3840
+    height: 2160
+
+  # Image transforms
+  transforms:
+    horizontal_flip: false
+    vertical_flip: false
+
+  # Camera controls (optional, comment out for auto)
+  controls:
+    # Exposure time in microseconds (e.g., 20000 = 20ms)
+    # exposure_time: 20000
+
+    # Analogue gain (1.0 = normal)
+    # analogue_gain: 1.0
+
+    # Auto white balance enable
+    # awb_enable: true
+
+    # Manual colour gains (if awb disabled)
+    # colour_gains: [1.5, 1.5]
+
+    # Brightness (-1.0 to 1.0, 0 = normal)
+    # brightness: 0.0
+
+    # Contrast (0.0 to 2.0, 1.0 = normal)
+    # contrast: 1.0
+
+    # Autofocus mode (if supported):
+    # 0 = Manual, 1 = Single AF, 2 = Continuous AF
+    # af_mode: 2
+
+    # Lens position (focus) - only used when af_mode = 0 (Manual)
+    # Value in dioptres (1/distance in meters):
+    # 0.0 = infinity focus (distant objects)
+    # 1.0 = focus at 1 meter
+    # 10.0 = focus at 10cm (close-up)
+    # Note: Values are approximate and vary by module/temperature
+    # lens_position: 0.0
+
+# Output Settings
+output:
+  # Base directory for saved images
+  # For production timelapse, use: /var/www/html/images
+  # For testing, use: test_photos
+  directory: "/var/www/html/images"
+
+  # Filename pattern (supports strftime formatting and counter)
+  # Available placeholders:
+  # - {timestamp} - ISO format timestamp
+  # - {counter} - Sequential counter (4 digits, zero-padded)
+  # - {name} - Project name
+  # You can also use strftime directives like %Y%m%d_%H%M%S
+  filename_pattern: "{name}_%Y_%m_%d_%H_%M_%S.jpg"
+
+  # Project name (used in filename)
+  project_name: "timelapse"
+
+  # Image quality (0-100, JPEG compression; 85 is also the code default)
+  # Higher = better quality, larger files
+  quality: 85
+
+  # Create subdirectories by date (YEAR/MONTH/DAY structure)
+  # When enabled, images are organized as: directory/YYYY/MM/DD/filename.jpg
+  # Example: /var/www/html/images/2025/11/05/kringelen_2025_11_05_14_30_00.jpg
+  organize_by_date: true
+
+  # Date format for subdirectories (if organize_by_date is true)
+  # %Y = 4-digit year, %m = 2-digit month, %d = 2-digit day
+  date_format: "%Y/%m/%d"
+
+  # Symlink latest image (for web status display; code default: disabled)
+  symlink_latest:
+    enabled: true
+    path: "/var/www/html/status.jpg"
+
+  # Keep every Nth frame's raw negative (.dng, ~15 MB) beside its JPEG, for
+  # hand-developing special frames in a desktop raw workflow. The cap prunes
+  # the oldest negatives so the collection plateaus at max_files. Works with
+  # any dynamic_range.method except sensor_hdr (its merged binned mode has
+  # no true negative) and skips fused frames.
+  dng_sidecar:
+    enabled: false
+    every_n_frames: 20    # at a 30s interval: one negative every 10 minutes
+    max_files: 200        # ~3 GB plateau
+
+# Video Output Settings
+video:
+  # Base directory for generated timelapse videos
+  directory: "/var/www/html/videos"
+
+  # Create subdirectories by date (YEAR/MONTH structure). The code default is
+  # false -- without this key, videos land flat in the directory above.
+  # When enabled, videos are organized as: directory/YYYY/MM/filename.mp4
+  # Example: /var/www/html/videos/2025/12/timelapse_2025-12-22_0500_to_2025-12-23_0500.mp4
+  # The subfolder comes from the END of the window, so a month's last daily
+  # video files under the following month.
+  organize_by_date: true
+
+  # Date format for subdirectories (if organize_by_date is true)
+  # %Y = 4-digit year, %m = 2-digit month
+  date_format: "%Y/%m"
+
+  # Video filenames are not configurable: {project}_{date}_{HHMM}-{HHMM}.mp4
+  # for a same-day window, {project}_{start}_to_{end}.mp4 across days.
+  # Keograms and slitscans carry the same stem behind keogram_/slitscan_.
+
+  # Video codec settings
+  codec:
+    # Video codec: libx264 (software H.264 encoder)
+    # Note: h264_v4l2m2m hardware encoder doesn't support 4K on Pi
+    name: "libx264"
+
+    # Pixel format (yuv420p for maximum compatibility)
+    pixel_format: "yuv420p"
+
+    # Preset for libx264 (speed vs bits needed for a given quality)
+    # A preset does not set quality -- crf does. A faster preset reaches the
+    # same crf with a bigger file, which on a Pi encoding 4K is the trade you
+    # want: at 3840x2160 the cost is dominated by decode, scale and deflicker
+    # rather than by bitrate, so a slower preset buys very little.
+    # Measured on 60 real 4K frames from this camera:
+    #   fast     crf 25 -> 25.2 Mbit/s, 75 s   (the old setting)
+    #   veryfast crf 20 -> 43.8 Mbit/s, 35 s   SSIM 0.9902 vs 0.9856
+    # i.e. faster AND closer to the source. Disk is what pays, and with
+    # video.retention_days set that is bounded.
+    preset: "veryfast"
+
+    # Thread count (lower = less memory, slower encoding)
+    # 3 on a 4-core Pi leaves a core for the capture loop; 4 measured no faster
+    # here because the job is decode-bound.
+    threads: 3
+
+    # Constant Rate Factor (0-51, lower = better quality)
+    # 18 = visually lossless, 20 = keeps 4K detail, 23 = good, 28 = acceptable
+    # At 4K, crf 25 quantises away the fine texture 4K exists to carry: the
+    # frame is still 3840x2160 but foliage, water and distant edges flatten.
+    crf: 20
+
+    # Bitrate for the hardware encoder, which takes a bitrate rather than a
+    # CRF. Ignored by libx264. Only reachable via --hw, which also needs --hd
+    # (the Pi's V4L2 encoder tops out at 1920x1080).
+    bitrate: "10M"
+
+  # Frame rate (frames per second)
+  # 25 fps = smooth European standard
+  # 30 fps = smooth NTSC standard
+  # 24 fps = cinematic
+  fps: 25
+
+  # Deflicker filter - smooths exposure transitions (like sunrise spikes)
+  # Uses ffmpeg's deflicker filter with Predictive Mean mode
+  deflicker: true
+  # Number of frames to average for deflicker (higher = smoother but may blur fast changes)
+  deflicker_size: 10
+
+  # Delete generated videos, keograms and slitscans older than this many days.
+  # 0 keeps everything forever, which is what happened before this key existed:
+  # cleanup_old_images.sh expires the source JPEGs, and nothing expired what is
+  # made from them, so the video directory grew without bound.
+  #
+  # A file is never deleted while the upload queue still holds a row for it in
+  # any state other than 'success' -- including 'failed', because a video that
+  # nobody managed to upload exists nowhere else. Those are logged as retained
+  # rather than silently skipped. Files the queue has never heard of are not
+  # protected, which is how ad-hoc partial-day renders get cleaned up.
+  #
+  # At 4K/crf 20 a day is roughly 500 MB, so 7 days is ~3.4 GB. The code
+  # default is 0 -- keep everything -- so nothing is deleted until you choose
+  # a window.
+  retention_days: 7
+
+  # Default time range for timelapse generation (used when no --start/--end provided)
+  # Format: HH:MM
+  # If end time <= start time, assumes start is from previous day
+  # Example: start 05:00, end 05:00 = yesterday 05:00 to today 05:00 (24h)
+  default_start_time: "05:00"
+  # End time (comment out or set to null to use current time)
+  default_end_time: "05:00"
+
+# Adaptive Timelapse Settings (for raspilapse.cli.capture)
+adaptive_timelapse:
+  # Enable adaptive exposure based on light conditions
+  enabled: true
+
+  # Interval between captures in seconds
+  interval: 30
+
+  # Total number of frames to capture (0 = unlimited, runs continuously)
+  num_frames: 0
+
+  # How hard the exposure loop corrects toward the brightness target each frame:
+  #     new_exposure = current * (target / measured) ** brightness_damping
+  # Lower is gentler and slower; higher converges faster but can overshoot.
+  #   0.5 = conservative (recommended, converges in 3-5 frames)
+  #   0.7 = balanced
+  #   0.8 = aggressive
+  brightness_damping: 0.5
+
+  # Highlight protection: scale the brightness target down when the top of the
+  # histogram approaches clipping, so bright skies keep detail instead of
+  # blowing out to pure white.
+  #
+  # The scale applies to the *target*, not to the controller's output, so how
+  # much protection you get depends only on the settings below and not on
+  # brightness_damping.
+  #
+  # Set enabled: false to revert to unprotected exposure with no code change.
+  highlight_protection:
+    enabled: true
+
+    # p95 (95th percentile brightness, 0-255) thresholds.
+    # Below safe_p95 there is nothing to protect and the scale is exactly 1.0.
+    safe_p95: 200
+    warning_p95: 220
+    critical_p95: 240
+
+    # Never pull the target below this fraction of its configured value.
+    min_scale: 0.70
+
+    # How fast the scale may move per frame (0-1). Low values stop a single
+    # noisy frame from stepping the target.
+    slew: 0.25
+
+    # Off at night by default: streetlamps and the moon push p95 high while the
+    # frame as a whole is already darker than target, so protecting highlights
+    # there just makes aurora frames worse.
+    apply_in_night: false
+
+  # Night mode settings (for dark conditions - stars, aurora, etc.)
+  night_mode:
+    # Maximum exposure time in seconds (max 20 seconds to avoid star trails)
+    max_exposure_time: 20.0
+
+    # Analogue gain (ISO equivalent)
+    # Higher = brighter but more noise. Range: 1.0-8.0, recommended max: 4.0
+    analogue_gain: 6
+
+    # Use auto white balance in night mode
+    awb_enable: false
+
+    # Manual color gains if awb disabled (red, blue)
+    #colour_gains: [1.8, 1.5]
+    colour_gains: [1.83, 2.02]
+
+  # Day mode settings (for bright daylight conditions)
+  day_mode:
+    # Target exposure time in seconds for bright daylight
+    # Used when smooth_exposure_in_day_mode is enabled
+    exposure_time: 0.01  # 10ms for bright conditions
+
+    # Target analogue gain for daylight (lower = less noise)
+    # Used when smooth_exposure_in_day_mode is enabled
+    analogue_gain: 1.0  # Minimum gain for bright conditions
+
+    # Fixed white balance gains for day mode (red, blue)
+    # When specified, uses these fixed gains instead of learning from AWB
+    # Recommended for consistent color across sessions
+    # Comment out to learn from camera's AWB instead
+    # fixed_colour_gains: [2.5, 1.6]
+
+    # Closed-loop trim on the day white point. Measures near-neutral pixels
+    # (grey cloud, grey water) on every day frame's lores stream and nudges
+    # the rendered white point toward neutral; the fixed/learned gains above
+    # are the anchor it trims around. Off by default. Night and aurora colour
+    # are never touched; the trim survives restarts in data/wb_trim.json.
+    # See docs/EXPOSURE.md, "White balance".
+    # wb_feedback:
+    #   enabled: true
+    #   strength: 0.05              # per-frame step: exponent on the measured ratio
+    #   max_trim: 0.12              # hard clamp around the anchor gains (+/- 12%)
+    #   min_neutral_fraction: 0.02  # skip frames with less grey than this
+
+    # Use auto white balance in day mode
+    awb_enable: true
+
+    # Brightness adjustment (-1.0 to 1.0)
+    # Negative = darker, positive = brighter
+    # 0.0 = no adjustment (camera default auto-exposure)
+    # brightness: 0.0
+
+  # Transition mode settings (dawn/dusk)
+  transition_mode:
+
+
+    # === SMOOTH TRANSITION SETTINGS ===
+    # These settings prevent flickering and ISO jumps during day/night transitions
+
+    # Lux smoothing factor (exponential moving average)
+    # Lower = smoother but slower response (0.1-0.5 recommended)
+    # Higher = faster response but more jitter
+    lux_smoothing_factor: 0.3
+
+    # White balance transition speed (0.0-1.0)
+    # How quickly WB gains change towards target per frame
+    # Lower = smoother color transitions (0.1-0.2 recommended)
+    # Higher = faster but may show color jumps
+    wb_transition_speed: 0.15
+
+    # Exposure time transition speed (0.0-1.0; 0.15 is also the code default)
+    # How quickly exposure changes towards target per frame
+    # Uses logarithmic interpolation for natural brightness changes
+    # Lower = smoother transitions (0.05-0.15 recommended)
+    exposure_transition_speed: 0.15
+
+    # Feed each frame's measured brightness back into the next decision.
+    # This is the control loop itself; leave it on. (The brightness target
+    # lives under adaptive_timelapse.brightness_target below.)
+    brightness_feedback_enabled: true
+
+    # === OVEREXPOSURE FAST RAMP-DOWN ===
+    # When overexposure is detected (brightness > 180 or >10% clipped pixels),
+    # exposure ramps down faster to prevent the "light flash" at dawn.
+    # This speed replaces the normal exposure_transition_speed temporarily.
+    #
+    # fast_rampdown_speed (0.1-0.5), against a normal speed of 0.15:
+    # - 0.30 = 2x faster (the code default)
+    # - 0.50 = 3.3x faster (this camera's choice: quick dawn correction)
+    fast_rampdown_speed: 0.50
+
+    # Severe overexposure (brightness > 200): even faster, to stop a dawn flare
+    # from burning several frames before the loop catches up.
+    critical_rampdown_speed: 0.70
+
+    # The mirror images, for recovering from underexposure at dusk.
+    fast_rampup_speed: 0.50
+    critical_rampup_speed: 0.70
+
+
+  # === DYNAMIC RANGE ===
+  # Gives the pipeline more range than a single exposure holds; without it,
+  # high-contrast scenes trade crushed shadows for protected highlights.
+  # Methods are opt-in and trialable per camera (compare them side by side
+  # with raspilapse-drtest); a method whose optional dependency (OpenCV,
+  # rawpy) is missing logs one warning and runs as "off".
+  # Replaces the old `hdr:` block, which set a control this sensor ignored.
+  dynamic_range:
+    method: off    # off | fusion | sensor_hdr | raw | tone_map
+
+    # Exposure fusion: bracket each slot 2-3 times and merge with Mertens
+    # exposure fusion at full resolution -- shadows and highlights from the
+    # exposures that held them, no "HDR look". The spread narrows smoothly to
+    # zero as exposures lengthen (log ramp from 0.05s), so by
+    # single_shot_above_s the plan IS the plain single shot: the day-night
+    # transition has no seam and long night exposures are untouched. A slot
+    # budget guard drops brackets (over first) sooner than overrun the grid.
+    # While fusion is active, highlight_protection defaults off -- the under
+    # bracket buys ~2 stops of highlight headroom against the ~0.5 the
+    # protection floor could, without darkening the base frame.
+    fusion:
+      brackets: 3              # 3 = under/base/over, 2 = base/under
+      # ev_spread is THE shadow dial, and it is continuous: it decides how
+      # well-exposed the shadows arrive before any blending. Field-tested on
+      # dark foliage against an overcast sky: 2.0 left shadows near-black,
+      # 3.0 opened them dramatically (a touch bright for some tastes), 2.7
+      # sat right -- tune in tenths. At very short base exposures the -3 EV
+      # under-bracket can brush the sensor's minimum exposure and deliver
+      # slightly less protection than commanded; harmless.
+      ev_spread: 2.0           # +/- EV at full spread (clamped to 0..4)
+      single_shot_above_s: 0.5 # base exposure at/above this -> single shot
+
+    # method: raw develops the sensor's 10-bit DNG on the Pi (rawpy, with
+    # the camera's own embedded WB and colour matrices) instead of keeping
+    # the ISP's 8-bit JPEG -- about two extra stops of shadow latitude. The
+    # ISP JPEG is captured alongside as the always-there fallback: night
+    # frames and any failed develop keep it, so expect an ISP-vs-developed
+    # look shift at the nightly handover. No knobs; the fallback rules are
+    # automatic. Needs python3-rawpy and python3-opencv.
+
+    # The imx708's on-chip HDR (Camera Module 3). Zero CPU cost, but the
+    # sensor merges in a binned mode: frames arrive at 2304x1296 and are
+    # upscaled back to the configured size before the overlay -- expect
+    # soft detail relative to a native 4K frame. day_only keeps it off in
+    # transition and night, where the ladder commands exposures the HDR
+    # mode would silently cap (that fight is also why HDR nights are
+    # noisy: the sensor compensates with gain). Switching costs nothing:
+    # the camera reopens every frame. Pi 4 note: this is the V4L2
+    # wide_dynamic_range control, not libcamera's HdrMode.
+    sensor_hdr:
+      day_only: true    # false = HDR through transition/night (exposures cap)
+
+    # Post-process tone mapping: luminance-only CLAHE blended into the frame.
+    # Lifts shadows and adds local contrast without shifting colours; fades
+    # smoothly to nothing on dark frames so night noise is not amplified and
+    # twilight never flickers across an on/off edge. Combines with any capture
+    # method (`method: tone_map` is shorthand for off + enabled).
+    tone_map:
+      enabled: false
+      strength: 0.5    # 0..1 blend of the mapped image into the original
+
+  # === CONTRAST-AWARE BRIGHTNESS TARGET (Overcast Boost) ===
+  # On overcast days, images have low contrast (low std deviation) and look
+  # flat/dark at the normal target of 120. This boosts the brightness target
+  # when contrast is low, making overcast images brighter.
+  # On sunny days (high contrast), the target stays at the base value.
+  # In night mode, always uses the base target to protect aurora/star captures.
+  brightness_target:
+    base: 120                     # Base brightness target (0-255)
+    overcast_boost: 15            # Max boost added when contrast is low
+    max_target: 140               # Absolute cap for boosted target
+    contrast_threshold_low: 25    # Below this std = full boost (overcast)
+    contrast_threshold_high: 40   # Above this std = no boost (sunny)
+
+  # White-balance reference shot (the one frame taken with AWB on, so the
+  # camera can learn the scene's daylight white point). Fires rarely, only
+  # near the bright end of the ladder, and is skipped automatically when
+  # day_mode.fixed_colour_gains is set -- there is nothing for it to learn.
+  test_shot:
+    enabled: true
+
+    # Reference shot exposure time in seconds (quick test)
+    exposure_time: 0.1
+
+    # Reference shot gain
+    analogue_gain: 1.0
+
+  # Diagnostic metadata settings
+  # Adds extra analysis data to each capture's metadata JSON
+  diagnostics:
+    # Enable diagnostic metadata (target vs actual exposure/gain, brightness analysis)
+    # Useful for debugging and tuning transition settings
+    # Adds ~100-300ms processing per capture (image brightness analysis)
+    enabled: false
+
+# System Settings
+system:
+  # Create output directory if it doesn't exist
+  create_directories: true
+
+  # Save metadata with each capture
+  save_metadata: true
+
+  # Metadata filename pattern
+  metadata_filename: "{name}_%Y_%m_%d_%H_%M_%S_metadata.json"
+
+  # Metadata folder for test shots (overwritten each time)
+  metadata_folder: "metadata"
+
+# Overlay Settings
+overlay:
+  # Enable/disable overlay (code default: false)
+  enabled: true
+
+  # Font settings
+  font:
+    # Font family (system font name or path to .ttf file). This is also the
+    # code default. "default" forces PIL's built-in bitmap font, which
+    # ignores the computed size -- 10px text on a 4K frame -- so it is a last
+    # resort, not a default.
+    family: "DejaVuSans-Bold.ttf"
+
+    # Font size relative to image height (code default 0.025; a touch
+    # smaller reads better across a 4K top bar)
+    size_ratio: 0.020
+
+    # Font color (RGB or RGBA)
+    color: [255, 255, 255, 255]  # Pure white with full opacity
+
+  # Background settings for text
+  background:
+    # Enable semi-transparent background behind text
+    enabled: true
+
+    # Background color (RGBA - last value is opacity: 0=transparent, 255=opaque)
+    # For top-bar mode, this creates a gradient that fades out at the bottom
+    color: [0, 0, 30, 70]  # Near-black blue at 27% opacity
+
+    # Padding around text (relative to font size; code default 0.3)
+    padding: 0.6
+
+  # Position presets: "top-bar", "top-left", "top-right", "bottom-left",
+  # "bottom-right", "custom". "top-bar" (the code default) is a full-width
+  # band across the top with built-in content; the corner modes need
+  # overlay.content lines or they draw nothing.
+  position: "top-bar"
+
+  # Custom position (only used if position = "custom")
+  # Values are percentages of image dimensions (0-100)
+  custom_position:
+    x: 5  # 5% from left
+    y: 95  # 95% from top (near bottom)
+
+  # Margin from edges (pixels)
+  margin: 10  # Small margin for top-bar mode
+
+  # Content to display
+  # In top-bar mode: 2 lines with left/right alignment
+  # In corner modes: stacked lines in a box
+  #
+  # Available variables for templates:
+  #   {date} - Date (YYYY-MM-DD)
+  #   {time} - Time (HH:MM:SS)
+  #   {datetime} - Full datetime
+  #   {camera_name} - Camera name from config
+  #   {mode} - Light mode (rendered Day/Night/Transition)
+  #   {exposure} - Exposure time (human readable)
+  #   {exposure_ms} - Exposure time in milliseconds
+  #   {exposure_us} - Exposure time in microseconds
+  #   {iso} - ISO/Analogue gain
+  #   {gain} - Analogue gain (raw value)
+  #   {wb} - White balance mode (auto/manual)
+  #   {wb_gains} - White balance gains (R, B)
+  #   {lux} - Calculated lux value
+  #   {resolution} - Image resolution
+  #   {temperature} - Camera sensor temperature (hardware, NOT ambient)
+  #   {af_mode} - Autofocus mode (Manual/Auto/Continuous)
+  #   {lens_position} - Lens position in dioptres (e.g., "0.00", "10.50")
+  #   {focus_distance} - Calculated focus distance (e.g., "∞", "1.5m", "10cm")
+  #
+  # Weather variables (requires weather.enabled = true):
+  #   {temp} or {temperature_outdoor} - Outdoor temperature
+  #   {humidity} - Outdoor humidity
+  #   {wind} - Wind speed with gust (e.g., "5.2 m/s (gust 8.1)")
+  #   {wind_speed} - Wind speed only
+  #   {wind_gust} - Wind gust speed
+  #   {wind_dir} - Wind direction (N, NE, E, SE, S, SW, W, NW)
+  #   {rain} - Current rain
+  #   {rain_1h} - Rain in last hour
+  #   {rain_24h} - Rain in last 24 hours
+  #   {pressure} - Atmospheric pressure
+  #
+  # System monitoring variables (always available):
+  #   {cpu_temp} - CPU temperature (e.g., "42.5°C")
+  #   {cpu_temp_raw} - CPU temperature raw value (e.g., "42.5")
+  #   {disk} - Disk space formatted (e.g., "50.2 GB free (42% used)")
+  #   {disk_free} - Free disk space (e.g., "50.2 GB")
+  #   {disk_used} - Used disk space (e.g., "36.8 GB")
+  #   {disk_total} - Total disk space (e.g., "116.7 GB")
+  #   {disk_percent} - Disk usage percentage (e.g., "31%")
+  #   {memory} - Memory usage formatted (e.g., "1.2 GB / 4.0 GB (30%)")
+  #   {memory_used} - Used memory (e.g., "1.2 GB")
+  #   {memory_free} - Free memory (e.g., "2.8 GB")
+  #   {memory_total} - Total memory (e.g., "4.0 GB")
+  #   {memory_percent} - Memory usage percentage (e.g., "30%")
+  #   {load} - CPU load averages (e.g., "0.52, 0.48, 0.45")
+  #   {load_1min} - 1-minute load average (e.g., "0.52")
+  #   {load_5min} - 5-minute load average (e.g., "0.48")
+  #   {load_15min} - 15-minute load average (e.g., "0.45")
+  #   {uptime} - System uptime (e.g., "2d 5h 30m")
+  #   {dr_method} - Dynamic-range method that produced the frame (e.g., "fusion")
+  content:
+    # Line 1 - Left side
+    line_1_left: "{camera_name}"
+
+    # Line 1 - Right side
+    line_1_right: "{temp}, humidity: {humidity}, wind: {wind} {wind_dir}, rain: {rain} "
+
+    # Line 2 - Left side
+    line_2_left: "{date} {time}"
+
+    # Line 2 - Right side
+    line_2_right: "Exposure: {exposure}, {iso}, lux: {lux} - CPU: {cpu_temp}, load: {load_1min}, disk: {disk_free}, mem: {memory_percent}"
+
+    # Example with system monitoring:
+    # line_1_right: "CPU: {cpu_temp}, Disk: {disk_free}, Load: {load_1min}"
+    # line_2_right: "Memory: {memory_used}/{memory_total}, Uptime: {uptime}"
+
+  # Camera name (displayed in overlay)
+  camera_name: "Raspberry Pi Timelapse Camera 01"
+
+  # DateTime formatting
+  datetime:
+    # Use localized date/time format (day name, month name in local language)
+    localized: true
+
+    # Locale for date/time formatting (e.g., "nb_NO" for Norwegian, "en_US" for English)
+    # Must be installed on system: locale -a to list available
+    locale: "nb_NO.UTF-8"
+
+    # Show seconds in time
+    show_seconds: false
+
+    # Date format (when localized=false)
+    # Strftime format: %Y-%m-%d = 2025-11-05
+    date_format: "%Y-%m-%d"
+
+    # Time format (when localized=false)
+    # Strftime format: %H:%M:%S = 15:45:30, %H:%M = 15:45
+    time_format: "%H:%M"
+
+  # Layout options
+  layout:
+    # Line spacing multiplier -- corner modes only; the top bar is fixed at
+    # 1.2 (code default here is 1.3)
+    line_spacing: 1.2
+
+    # Bar only: bottom padding as a multiple of the padding unit
+    # (code default 1.3)
+    bottom_padding_multiplier: 0.7
+
+# Logging Settings
+logging:
+  # Enable/disable logging
+  enabled: true
+
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+
+  # Log file path (relative to project root)
+  # Use {script} placeholder for script name
+  log_file: "logs/{script}.log"
+
+  # Log format
+  # Available placeholders: %(asctime)s, %(name)s, %(levelname)s, %(message)s
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # Date format for timestamps
+  date_format: "%Y-%m-%d %H:%M:%S"
+
+  # Console output: auto | true | false
+  #   auto  - skip it under systemd, which already captures stdout into the
+  #           journal. Without this, every line is stored twice.
+  #   true  - always add a console handler
+  #   false - never
+  console: auto
+
+  # Maximum log file size in MB (0 = unlimited)
+  max_size_mb: 5
+
+  # Number of backup log files to keep
+  backup_count: 2
+
+# Video Upload Settings (for raspilapse.cli.daily)
+video_upload:
+  # Enable/disable automatic upload after timelapse creation.
+  # Careful: a video_upload block WITHOUT this key counts as enabled -- set
+  # false explicitly if you are staging the url/api_key ahead of time.
+  enabled: false
+
+  # Server endpoint URL for video uploads
+  url: "https://example.com/api/video/upload"
+
+  # API key for authentication (Bearer token)
+  api_key: "your-api-key-here"
+
+  # Camera ID for the upload (used to identify this camera on the server)
+  camera_id: "camera_01"
+
+# Weather Data Settings
+weather:
+  # Enable/disable weather data fetching
+  enabled: false
+
+  # Netatmo API endpoint URL. Expects JSON with a "modules" array; see docs/WEATHER.md.
+  # Example: "https://example.com/api/netatmo/stations/<your-station-id>"
+  endpoint:
+
+  # Cache duration in seconds (how long to keep weather data before refreshing)
+  cache_duration: 300  # 5 minutes
+
+  # After a failed fetch, wait before trying again, doubling each consecutive
+  # failure up to this cap. Without it, an outage means one request and one
+  # error line per capture, indefinitely.
+  max_backoff_seconds: 900  # 15 minutes
+
+  # Request timeout in seconds
+  timeout: 5
+
+# Database Settings (for capture history storage)
+database:
+  # Enable/disable SQLite database storage for capture metadata
+  # (code default: false; the example config turns it on)
+  enabled: true
+
+  # Path to database file (relative to project root or absolute)
+  path: "data/timelapse.db"
+
+  # Automatically create directories if they don't exist
+  create_directories: true
+
+  # Delete capture rows older than this many days. 0 keeps everything.
+  #
+  # Rows outlive their JPEGs on purpose -- images go after 7 days (see
+  # scripts/cleanup_old_images.sh) while the rows keep the lux, brightness and
+  # weather history the graphs are drawn from, so only image_path goes stale.
+  #
+  # 180 days is a full seasonal cycle, which is what makes the solar-pattern
+  # graphs worth having at high latitudes. At a 30s interval a year is roughly
+  # 1 million rows and about 200 MB.
+  #
+  # Pruning runs from raspilapse-cleanup.timer. Space is only handed back to
+  # the filesystem by an explicit `python3 -m raspilapse.cli.db --vacuum`, which is
+  # slow and needs free disk equal to the database size.
+  # The code default is 0 -- keep every row.
+  retention_days: 180
+
+# Barentswatch Ship Tracking Overlay
+# Shows ships in the camera's field of view (from pi-overlay-data service)
+barentswatch:
+  # Enable/disable ship overlay
+  enabled: false
+
+  # Path to ships_current.json from pi-overlay-data service
+  ships_file: "/home/pi/pi-overlay-data/data/ships_current.json"
+
+# Tide Data Overlay
+# Shows tide information in the overlay (from pi-overlay-data service)
+tide:
+  # Enable/disable tide overlay
+  enabled: false
+
+  # Path to tide.json from pi-overlay-data service
+  tide_file: "/home/pi/pi-overlay-data/data/tide.json"
+
+# Aurora Data Overlay
+# Shows aurora/space weather information in the overlay (from pi-overlay-data service)
+aurora:
+  # Enable/disable aurora overlay
+  enabled: false
+
+  # Path to aurora.json from pi-overlay-data service
+  aurora_file: "/home/pi/pi-overlay-data/data/aurora.json"

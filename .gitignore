@@ -1,5 +1,6 @@
 # Configuration (personal configs not tracked)
 config/config.yml
+config/*.backup*
 
 # Python
 venv/
@@ -15,7 +16,15 @@ build/
 coverage.xml
 htmlcov/
 .mypy_cache/
+.ruff_cache/
 .tox/
+
+# Agent/editor session state
+.claude/
+
+# Rendered by scripts/install.sh before it was fixed to use a temp dir.
+# Kept so an old stray copy can never be committed by accident.
+/raspilapse.service
 
 # Output directories (runtime generated)
 test_photos/

@@ -1,18 +1,13 @@
 """Tests for weather data fetcher module."""
 
 import json
-import sys
-from pathlib import Path
-from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, MagicMock
 import urllib.error
+from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from weather import WeatherData
+from raspilapse.overlay.sources.weather import WeatherData
 
 
 @pytest.fixture
@@ -435,7 +430,7 @@ class TestWeatherDataFormatting:
         weather.get_weather_data()  # Fetch data
 
         assert weather._format_temperature(-0.2) == " -0.2°C"  # Fixed-width: 5.1f + °C
-        assert weather._format_temperature(None) == "  N/A"  # Fixed-width
+        assert weather._format_temperature(None) == "    N/A"  # Fixed-width
 
     @patch("urllib.request.urlopen")
     def test_format_humidity(self, mock_urlopen, weather_config, sample_netatmo_response):
@@ -469,7 +464,7 @@ class TestWeatherDataFormatting:
         assert "5.0 m/s" in formatted
         assert "7.2" in formatted
 
-        assert weather._format_wind(None, None) == "  N/A"  # Fixed-width
+        assert weather._format_wind(None, None) == "     N/A"  # Fixed-width
 
     @patch("urllib.request.urlopen")
     def test_format_wind_direction(self, mock_urlopen, weather_config, sample_netatmo_response):
@@ -503,7 +498,7 @@ class TestWeatherDataFormatting:
         weather.get_weather_data()
 
         assert weather._format_rain(2.3) == " 2.3 mm"  # Fixed-width: 4.1f + mm
-        assert weather._format_rain(None) == "  N/A"  # Fixed-width
+        assert weather._format_rain(None) == "    N/A"  # Fixed-width
 
     @patch("urllib.request.urlopen")
     def test_format_pressure(self, mock_urlopen, weather_config, sample_netatmo_response):
@@ -518,7 +513,7 @@ class TestWeatherDataFormatting:
         weather.get_weather_data()
 
         assert weather._format_pressure(1012) == "1012 hPa"  # Fixed-width: 4.0f + hPa
-        assert weather._format_pressure(None) == "  N/A"  # Fixed-width
+        assert weather._format_pressure(None) == "     N/A"  # Fixed-width
 
 
 class TestWindFormattingEdgeCases:
@@ -864,3 +859,190 @@ class TestPressureFormatting:
         weather = WeatherData(weather_config)
         result = weather._format_pressure(1050)
         assert "1050 hPa" in result
+
+
+@pytest.fixture
+def weather_logs(caplog):
+    """Capture records from the weather logger.
+
+    get_logger() sets propagate=False so lines are not duplicated into the
+    journal, which also means caplog's root handler never sees them.
+    """
+    import logging as _logging
+
+    logger = _logging.getLogger("weather")
+    logger.addHandler(caplog.handler)
+    previous = logger.level
+    logger.setLevel(_logging.WARNING)
+    try:
+        yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
+        logger.setLevel(previous)
+
+
+class TestNegativeCaching:
+    """Failures back off instead of hammering the endpoint every call."""
+
+    @patch("urllib.request.urlopen")
+    def test_failure_suppresses_immediate_refetch(self, mock_urlopen, weather_config):
+        mock_urlopen.side_effect = urllib.error.URLError("name resolution failed")
+
+        weather = WeatherData(weather_config)
+        for _ in range(5):
+            assert weather.get_weather_data() is None
+
+        # One attempt, then backoff. Previously every call hit the network,
+        # which is how one log file collected 72,536 identical DNS errors.
+        assert mock_urlopen.call_count == 1
+
+    @patch("urllib.request.urlopen")
+    def test_backoff_grows_and_is_capped(self, mock_urlopen, weather_config):
+        weather_config["weather"]["cache_duration"] = 100
+        weather_config["weather"]["max_backoff_seconds"] = 250
+        mock_urlopen.side_effect = urllib.error.URLError("down")
+
+        weather = WeatherData(weather_config)
+        delays = []
+        for _ in range(4):
+            before = datetime.now()
+            weather._fetch_weather_data()
+            delays.append((weather._entry.next_attempt_at - before).total_seconds())
+
+        assert round(delays[0]) == 100
+        assert round(delays[1]) == 200
+        assert round(delays[2]) == 250  # capped
+        assert round(delays[3]) == 250
+
+    @patch("urllib.request.urlopen")
+    def test_repeated_identical_errors_log_once(self, mock_urlopen, weather_config, weather_logs):
+        mock_urlopen.side_effect = urllib.error.URLError("same every time")
+        weather = WeatherData(weather_config)
+
+        for _ in range(5):
+            weather._fetch_weather_data()
+
+        assert len(weather_logs.records) == 1
+        assert weather._entry.suppressed == 4
+
+    @patch("urllib.request.urlopen")
+    def test_a_different_error_is_logged(self, mock_urlopen, weather_config, weather_logs):
+        weather = WeatherData(weather_config)
+
+        mock_urlopen.side_effect = urllib.error.URLError("first problem")
+        weather._fetch_weather_data()
+        mock_urlopen.side_effect = urllib.error.URLError("different problem")
+        weather._fetch_weather_data()
+
+        assert len(weather_logs.records) == 2
+
+    @patch("urllib.request.urlopen")
+    def test_success_clears_backoff(self, mock_urlopen, weather_config, sample_netatmo_response):
+        weather = WeatherData(weather_config)
+
+        mock_urlopen.side_effect = urllib.error.URLError("down")
+        weather._fetch_weather_data()
+        assert weather._entry.failures == 1
+
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
+        response.__enter__.return_value = response
+        mock_urlopen.side_effect = None
+        mock_urlopen.return_value = response
+
+        assert weather._fetch_weather_data() is not None
+        assert weather._entry.failures == 0
+        assert weather._entry.next_attempt_at is None
+
+
+class TestSharedCache:
+    """The cache is process-wide, because WeatherData is rebuilt constantly."""
+
+    @patch("urllib.request.urlopen")
+    def test_second_instance_reuses_the_first_fetch(
+        self, mock_urlopen, weather_config, sample_netatmo_response
+    ):
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
+        response.__enter__.return_value = response
+        mock_urlopen.return_value = response
+
+        # ImageOverlay -- and so WeatherData -- is rebuilt inside every
+        # ImageCapture, twice per capture cycle. A per-instance cache meant
+        # cache_duration never had any effect.
+        first = WeatherData(weather_config).get_weather_data()
+        second = WeatherData(weather_config).get_weather_data()
+
+        assert mock_urlopen.call_count == 1
+        assert first == second
+
+    @patch("urllib.request.urlopen")
+    def test_different_endpoints_cache_separately(
+        self, mock_urlopen, weather_config, sample_netatmo_response
+    ):
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = json.dumps(sample_netatmo_response).encode("utf-8")
+        response.__enter__.return_value = response
+        mock_urlopen.return_value = response
+
+        WeatherData(weather_config).get_weather_data()
+
+        other = {"weather": dict(weather_config["weather"], endpoint="https://other.example/api")}
+        WeatherData(other).get_weather_data()
+
+        assert mock_urlopen.call_count == 2
+
+
+class TestNullDataField:
+    """The API sends "data": null when the station is offline."""
+
+    def test_null_data_key(self, weather_config):
+        # dict.get("data", {}) returns None here, not {} -- the default only
+        # applies when the key is absent. This produced 2,204 logged
+        # AttributeErrors on one camera.
+        result = WeatherData(weather_config)._parse_netatmo_data({"data": None})
+        assert result["temperature"] is None
+
+    def test_null_modules_under_data(self, weather_config):
+        result = WeatherData(weather_config)._parse_netatmo_data({"data": {"modules": None}})
+        assert result["temperature"] is None
+
+    def test_null_modules_at_root(self, weather_config):
+        result = WeatherData(weather_config)._parse_netatmo_data({"modules": None})
+        assert result["temperature"] is None
+
+    def test_modules_not_a_list(self, weather_config):
+        result = WeatherData(weather_config)._parse_netatmo_data({"modules": "nonsense"})
+        assert result["temperature"] is None
+
+
+class TestFormatFields:
+    """format_fields replaces twelve reaches into private formatters."""
+
+    def test_all_placeholders_present_without_data(self, weather_config):
+        fields = WeatherData(weather_config).format_fields({})
+        assert set(fields) == set(WeatherData.PLACEHOLDERS)
+        assert set(fields.values()) == {"-"}
+
+    def test_temperature_is_not_a_placeholder(self, weather_config):
+        # In overlay templates "temperature" is the camera sensor temperature,
+        # which comes from capture metadata. Emitting it here would silently
+        # overwrite it with the outdoor reading.
+        assert "temperature" not in WeatherData.PLACEHOLDERS
+
+    def test_temperature_outdoor_alias(self, weather_config):
+        fields = WeatherData(weather_config).format_fields({"temperature": -3.25})
+        assert fields["temp"] == fields["temperature_outdoor"]
+        assert "-3.2" in fields["temp"]
+
+    def test_weather_line_still_understands_temperature(
+        self, weather_config, sample_netatmo_response
+    ):
+        weather = WeatherData(weather_config)
+        weather._cached_data = weather._parse_netatmo_data(sample_netatmo_response)
+        weather._cache_time = datetime.now()
+
+        assert "°C" in weather.format_weather_line("{temperature}")

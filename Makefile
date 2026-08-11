@@ -9,7 +9,7 @@ help:
 	@echo "  make check       - Check if code is formatted correctly"
 	@echo "  make test        - Run all tests"
 	@echo "  make test-cov    - Run tests with coverage report"
-	@echo "  make lint        - Run flake8 linter"
+	@echo "  make lint        - Run ruff linter"
 	@echo "  make all         - Format, check, and test (recommended before commit)"
 	@echo "  make install     - Install production dependencies"
 	@echo "  make dev-install - Install development dependencies"
@@ -17,11 +17,11 @@ help:
 
 format:
 	@echo "🎨 Formatting code with Black..."
-	black src/ tests/ --line-length=100
+	black raspilapse/ scripts/ tests/
 
 check:
 	@echo "✅ Checking code formatting..."
-	black --check src/ tests/ --line-length=100
+	black --check raspilapse/ scripts/ tests/
 
 test:
 	@echo "🧪 Running tests..."
@@ -29,13 +29,13 @@ test:
 
 test-cov:
 	@echo "📊 Running tests with coverage..."
-	python3 -m pytest tests/ -v --cov=src --cov-report=term-missing --cov-report=xml
+	python3 -m pytest tests/ -v --cov=raspilapse --cov-report=term-missing --cov-report=xml
 
 lint:
 	@echo "🔍 Linting code..."
-	flake8 src/ --max-line-length=100 --count --statistics
+	ruff check raspilapse/ scripts/ tests/
 
-all: format check test
+all: format lint check test
 	@echo "✅ All checks passed! Ready to commit."
 
 install:

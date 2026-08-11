@@ -1,0 +1,33 @@
+# Template. Placeholders are substituted by scripts/install.sh.
+[Unit]
+Description=Raspilapse Capture Watchdog
+Documentation=https://github.com/ekstremedia/raspilapse
+After=raspilapse.service
+
+[Service]
+Type=oneshot
+# Runs as root: it calls systemctl restart and, as a last resort, reboot.
+# The previous cron-based version ran as the login user, where polkit denied
+# the restart and reboot needed root -- so it could never actually recover
+# anything.
+User=root
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=/bin/bash @PROJECT_DIR@/scripts/check_service.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raspilapse-watchdog
+
+# A find over a wedged filesystem would otherwise leave this oneshot in
+# 'activating' forever, and a timer will not re-trigger a unit that never
+# finished -- so the watchdog would stop watching, silently.
+TimeoutStartSec=180
+
+# Escalation state must outlive a reboot for the counter to mean anything.
+StateDirectory=raspilapse
+Environment="RASPILAPSE_WATCHDOG_STATE=/var/lib/raspilapse/watchdog_state"
+# Shared with raspilapse-netwatch so the two cannot reboot each other in a loop.
+Environment="RASPILAPSE_LAST_REBOOT=/var/lib/raspilapse/last_reboot"
+Environment="RASPILAPSE_PROJECT_DIR=@PROJECT_DIR@"
+
+# No [Install] section: triggered by raspilapse-watchdog.timer. Without one the
+# service cannot be enabled, which is what install.sh's contract assumes.

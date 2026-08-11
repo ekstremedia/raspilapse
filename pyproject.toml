@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raspilapse"
-version = "1.1.0"
+# raspilapse/__version__.py is the single source of truth. See [tool.setuptools.dynamic].
+dynamic = ["version"]
 description = "A Python library for creating timelapses with Raspberry Pi Camera"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -33,21 +34,53 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+# picamera2 is deliberately absent: it must come from apt, not pip. It brings
+# numpy and Pillow with it, so on a Pi these are already satisfied -- they are
+# declared because this package imports them directly, not because anyone has
+# to install them separately.
 dependencies = [
     "PyYAML>=6.0",
-    "Pillow>=10.0.0",
+    # 11.x, not 12.x: Pillow 12 requires Python 3.10 and this package
+    # supports 3.9. A Pi installs neither -- apt ships 9.4.0 with picamera2.
+    "Pillow>=11.3.0",
+    "numpy>=1.21.0",
 ]
 
 [project.optional-dependencies]
+# Sun elevation: recorded per frame, read only by the graphs. apt ships
+# astral 1.6, whose API predates LocationInfo, hence the pip floor.
+sun = ["astral>=3.2"]
+# Uploading the daily video. requests-toolbelt streams the multipart body
+# instead of buffering ~300 MB in memory.
+upload = ["requests>=2.28.0", "requests-toolbelt>=1.0.0"]
+# Only scripts/db_graphs.py and scripts/graph_solar_patterns.py need these.
+graphs = ["matplotlib>=3.5.0"]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
-    "flake8>=6.0.0",
-    "black>=23.0.0",
-    "pylint>=2.15.0",
+    "ruff>=0.14.0",
+    # Pinned exactly: black's stable style changes between yearly releases, so
+    # a floating version guarantees CI rejects locally-formatted code.
+    "black==25.11.0",
     "mypy>=1.0.0",
+    "packaging>=21.0",
 ]
+
+[project.scripts]
+raspilapse-capture = "raspilapse.cli.capture:main"
+raspilapse-status = "raspilapse.cli.status:main"
+raspilapse-snapshot = "raspilapse.cli.snapshot:main"
+raspilapse-timelapse = "raspilapse.cli.timelapse:main"
+raspilapse-daily = "raspilapse.cli.daily:main"
+raspilapse-overlay = "raspilapse.cli.apply_overlay:main"
+raspilapse-db = "raspilapse.cli.db:main"
+raspilapse-retry-uploads = "raspilapse.cli.retry_uploads:main"
+raspilapse-drtest = "raspilapse.cli.drtest:main"
+raspilapse-prune-videos = "raspilapse.cli.prune_videos:main"
+
+[tool.setuptools.packages.find]
+include = ["raspilapse*"]
 
 [project.urls]
 "Homepage" = "https://github.com/ekstremedia/raspilapse"
@@ -82,6 +115,7 @@ addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
+    "--disable-warnings",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -90,15 +124,57 @@ markers = [
 
 [tool.mypy]
 python_version = "3.9"
+# no-redef used to be disabled here. Every module carried a
+# `try: from src.x / except ImportError: from x` block, because the systemd
+# units ran the modules as scripts, and mypy read the fallback arm as a
+# redefinition at ~40 sites. The package has one import path per module now,
+# so the suppression is gone and redefinitions are real again.
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 no_strict_optional = true
 
-[tool.pylint.messages_control]
-max-line-length = 100
-disable = [
-    "C0103",  # Invalid name
-    "C0114",  # Missing module docstring
-    "R0913",  # Too many arguments
+[tool.coverage.run]
+source = ["raspilapse"]
+omit = [
+    "*/test_*.py",
+    "*/__pycache__/*",
 ]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "def main\\(",
+    "raise NotImplementedError",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "raspilapse.__version__.__version__"}
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I import order, B bugbear.
+#
+# UP (pyupgrade) is deliberately not enabled yet: it wants ~200 changes,
+# mostly typing.Dict -> dict, which is a large mechanical diff worth doing on
+# its own rather than mixed into feature work.
+select = ["E", "W", "F", "I", "B"]
+ignore = [
+    "E501",  # line length is black's job
+    "B008",  # function call in an argument default -- used for timedelta defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+# raspilapse/*.py used to need E402 for the dual-import idiom, which required
+# imports after a sys.path edit. The package no longer edits sys.path, so the
+# exemption is gone and import placement is checked like anywhere else.
+"scripts/*.py" = ["E402"]
+# Tests bind results to names for readability even when only the side effect
+# matters, and often ignore the loop index. Neither is worth flagging there.
+"tests/*.py" = ["E402", "F841", "B007"]

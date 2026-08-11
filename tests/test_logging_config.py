@@ -1,16 +1,13 @@
 """Tests for logging_config module."""
 
+import logging
 import os
 import tempfile
-import logging
-from pathlib import Path
-import yaml
+
 import pytest
-import sys
+import yaml
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from src.logging_config import LoggerConfig, get_logger
+from raspilapse.logging_setup import LoggerConfig, get_logger
 
 
 @pytest.fixture
@@ -102,7 +99,9 @@ class TestLoggerConfig:
         assert "logging" in default_config
         assert default_config["logging"]["enabled"] is True
         assert default_config["logging"]["level"] == "INFO"
-        assert default_config["logging"]["console"] is True
+        # "auto" means: skip the console handler when systemd is already
+        # capturing stdout, so lines aren't stored twice.
+        assert default_config["logging"]["console"] == "auto"
 
     def test_setup_logger_enabled(self, test_config_with_logging, temp_log_dir):
         """Test logger setup when logging is enabled."""
@@ -318,3 +317,105 @@ class TestLoggingIntegration:
         assert "Info message" not in content
         assert "Warning message" in content
         assert "Error message" in content
+
+
+class TestConsoleAuto:
+    """The 'auto' console setting, which keeps lines out of the journal twice."""
+
+    def _config(self, tmp_path, console):
+        path = tmp_path / "config.yml"
+        path.write_text(
+            yaml.dump(
+                {
+                    "logging": {
+                        "enabled": True,
+                        "level": "INFO",
+                        "log_file": str(tmp_path / "{script}.log"),
+                        "console": console,
+                    }
+                }
+            )
+        )
+        return str(path)
+
+    def _console_handlers(self, logger):
+        return [
+            h
+            for h in logger.handlers
+            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+        ]
+
+    def test_auto_adds_console_when_not_under_systemd(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("JOURNAL_STREAM", raising=False)
+        logger = get_logger("auto_off_systemd", self._config(tmp_path, "auto"))
+        assert len(self._console_handlers(logger)) == 1
+
+    def test_auto_skips_console_under_systemd(self, tmp_path, monkeypatch):
+        # systemd sets JOURNAL_STREAM only when stdout is wired to the journal,
+        # which is exactly when a console handler would duplicate every line.
+        monkeypatch.setenv("JOURNAL_STREAM", "8:12345")
+        logger = get_logger("auto_on_systemd", self._config(tmp_path, "auto"))
+        assert self._console_handlers(logger) == []
+
+    def test_explicit_true_is_honoured_under_systemd(self, tmp_path, monkeypatch):
+        # An explicit setting must never be silently reinterpreted.
+        monkeypatch.setenv("JOURNAL_STREAM", "8:12345")
+        logger = get_logger("explicit_true", self._config(tmp_path, True))
+        assert len(self._console_handlers(logger)) == 1
+
+    def test_explicit_false_is_honoured(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("JOURNAL_STREAM", raising=False)
+        logger = get_logger("explicit_false", self._config(tmp_path, False))
+        assert self._console_handlers(logger) == []
+
+
+class TestPathResolution:
+    """Paths resolve against the project root, never the working directory."""
+
+    def test_relative_log_file_uses_log_dir_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RASPILAPSE_LOG_DIR", str(tmp_path / "elsewhere"))
+        config = tmp_path / "config.yml"
+        config.write_text(yaml.dump({"logging": {"log_file": "logs/{script}.log"}}))
+
+        get_logger("relpath", str(config)).warning("hello")
+
+        assert (tmp_path / "elsewhere" / "relpath.log").read_text().endswith("hello\n")
+
+    def test_missing_config_falls_back_to_defaults(self, tmp_path):
+        logger = get_logger("nofile", str(tmp_path / "does-not-exist.yml"))
+        assert logger.level == logging.INFO
+
+    def test_empty_config_file_does_not_raise(self, tmp_path):
+        config = tmp_path / "empty.yml"
+        config.write_text("")
+        # yaml.safe_load("") is None, which used to TypeError into a bare except
+        assert get_logger("emptycfg", str(config)).level == logging.INFO
+
+
+class TestConfigure:
+    """configure_logging() retroactively applies config to already-created loggers."""
+
+    def test_configure_updates_existing_logger(self, tmp_path):
+        from raspilapse import logging_setup as logging_config
+
+        quiet = tmp_path / "quiet.yml"
+        quiet.write_text(
+            yaml.dump(
+                {
+                    "logging": {
+                        "level": "ERROR",
+                        "log_file": str(tmp_path / "{script}.log"),
+                        "console": False,
+                    }
+                }
+            )
+        )
+
+        # Simulates a module-level get_logger() before argparse has run
+        logger = get_logger("late_config")
+        logging_config.configure_logging(str(quiet))
+
+        assert logger.level == logging.ERROR
+
+    def test_get_logger_is_memoised(self):
+        assert get_logger("memo") is get_logger("memo")
