@@ -17,7 +17,7 @@ it to configure for your latitude.
 
 ![Day to night transition in Spjutvika, Norway, from sunset into long-exposure night](demo_images/day_to_night_01.gif)
 
-*Day-to-night transition from a production camera in Spjutvika, Norway. Watch the exposure readout in the overlay: the adaptive ladder ramps smoothly from a 315 µs daylight shutter to 8.4-second night exposures, over four orders of magnitude, with no visible jump between frames.*
+*Day-to-night transition from a production camera in Spjutvika, Norway. Watch the exposure readout in the overlay: the adaptive ladder ramps smoothly from a 210 µs shutter at sunset to 8.4-second night exposures, over four orders of magnitude, with no visible jump between frames.*
 
 ▶️ **[Watch the full timelapse on YouTube](https://youtu.be/AAI5toBP7wc?t=75)** (the link starts right at the sunset)
 
