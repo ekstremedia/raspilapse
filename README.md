@@ -10,7 +10,17 @@ A Python library for creating timelapses with Raspberry Pi Camera. Supports adap
 
 ![Day to night transition in Spjutvika, Norway — sunset into long-exposure night](demo_images/day_to_night_01.gif)
 
-*Day-to-night transition from a production camera in Spjutvika, Norway: adaptive exposure ramps from daylight sunset into long-exposure night.*
+*Day-to-night transition from a production camera in Spjutvika, Norway. Watch the exposure readout in the overlay: the adaptive ladder ramps smoothly from a 315 µs daylight shutter to 8.4-second night exposures — over four orders of magnitude — with no visible jump between frames.*
+
+### Exposure fusion
+
+With `dynamic_range.method: fusion`, each daytime frame is captured as an exposure bracket and merged with Mertens–Kautz–Van Reeth exposure fusion: every pixel is weighted by how well-exposed it is in each bracket and blended through a multi-scale pyramid. There is no radiance map and no HDR look — the result reads as one well-graded photograph, with cloud and shadow detail a single exposure clips away. An optional tone-mapping pass (luminance-only CLAHE) adds shadow lift and local contrast without shifting colors. The bracket spread narrows smoothly to zero as exposures lengthen toward night, so the day-to-night transition above stays flicker-free by construction.
+
+| Single exposure | Exposure fusion + tone mapping |
+| --- | --- |
+| ![Single-exposure frame](demo_images/spjutvika-01-framegrab-day-2026-08-05-00_00_00.jpg) | ![Exposure-fusion frame with tone mapping](demo_images/fusion_tm_spjutvika-01-framegrab-day-2026-08-10-00_00_00.jpg) |
+
+*Same scene on comparable overcast-bright days: the fused frame keeps the cloud structure and mountain-side detail that the single exposure flattens out.*
 
 ## Requirements
 
