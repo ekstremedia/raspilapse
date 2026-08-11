@@ -6,7 +6,7 @@
 ![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A Python library for creating automated timelapses with Raspberry Pi Camera. Supports adaptive day/night exposure, image overlays, and optimized long exposures up to 20 seconds.
+A Python library for creating automated timelapses with Raspberry Pi Camera. Supports adaptive day/night exposure, image overlays, and optimized long exposures up to 20 seconds. Also included are scripts that render the captured frames into finished FFmpeg timelapse videos, deflickered and ready to publish, like the one below.
 
 ![Day to night transition in Spjutvika, Norway, from sunset into long-exposure night](demo_images/day_to_night_01.gif)
 
