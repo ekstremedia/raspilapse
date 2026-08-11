@@ -14,7 +14,7 @@ A Python library for creating automated timelapses with Raspberry Pi Camera. Sup
 
 ▶️ **[Watch the full timelapse on YouTube](https://youtu.be/AAI5toBP7wc?t=75)** (the link starts right at the sunset)
 
-📷 **[See my cameras live!](https://nesthus.no/public/cameras)**
+📷 **[See my cameras live on my website!](https://nesthus.no/public/cameras)**
 
 ### Exposure fusion
 
