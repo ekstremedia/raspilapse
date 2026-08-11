@@ -8,15 +8,15 @@
 
 A Python library for creating automated timelapses with Raspberry Pi Camera. Supports adaptive day/night exposure, image overlays, and optimized long exposures up to 20 seconds.
 
-![Day to night transition in Spjutvika, Norway — sunset into long-exposure night](demo_images/day_to_night_01.gif)
+![Day to night transition in Spjutvika, Norway, from sunset into long-exposure night](demo_images/day_to_night_01.gif)
 
-*Day-to-night transition from a production camera in Spjutvika, Norway. Watch the exposure readout in the overlay: the adaptive ladder ramps smoothly from a 315 µs daylight shutter to 8.4-second night exposures — over four orders of magnitude — with no visible jump between frames.*
+*Day-to-night transition from a production camera in Spjutvika, Norway. Watch the exposure readout in the overlay: the adaptive ladder ramps smoothly from a 315 µs daylight shutter to 8.4-second night exposures, over four orders of magnitude, with no visible jump between frames.*
 
-▶️ **[Watch the full timelapse on YouTube](https://youtu.be/AAI5toBP7wc?t=75)** — the link starts right at the sunset.
+▶️ **[Watch the full timelapse on YouTube](https://youtu.be/AAI5toBP7wc?t=75)** (the link starts right at the sunset)
 
 ### Exposure fusion
 
-With `dynamic_range.method: fusion`, each daytime frame is captured as an exposure bracket and merged with Mertens–Kautz–Van Reeth exposure fusion: every pixel is weighted by how well-exposed it is in each bracket and blended through a multi-scale pyramid. There is no radiance map and no HDR look — the result reads as one well-graded photograph, with cloud and shadow detail a single exposure clips away. An optional tone-mapping pass (luminance-only CLAHE) adds shadow lift and local contrast without shifting colors. The bracket spread narrows smoothly to zero as exposures lengthen toward night, so the day-to-night transition above stays flicker-free by construction.
+With `dynamic_range.method: fusion`, each daytime frame is captured as an exposure bracket and merged with Mertens-Kautz-Van Reeth exposure fusion: every pixel is weighted by how well-exposed it is in each bracket and blended through a multi-scale pyramid. There is no radiance map and no HDR look: the result reads as one well-graded photograph, with cloud and shadow detail a single exposure clips away. An optional tone-mapping pass (luminance-only CLAHE) adds shadow lift and local contrast without shifting colors. The bracket spread narrows smoothly to zero as exposures lengthen toward night, so the day-to-night transition above stays flicker-free by construction.
 
 | Single exposure | Exposure fusion + tone mapping |
 | --- | --- |
