@@ -1,4 +1,4 @@
-# Raspilapse
+# Raspilapse: Automated Day-to-Night Timelapses for Raspberry Pi
 
 ![Tests](https://github.com/ekstremedia/raspilapse/workflows/Tests/badge.svg)
 [![codecov](https://codecov.io/gh/ekstremedia/raspilapse/branch/main/graph/badge.svg)](https://codecov.io/gh/ekstremedia/raspilapse)
