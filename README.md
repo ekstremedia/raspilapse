@@ -14,6 +14,8 @@ A Python library for creating automated timelapses with Raspberry Pi Camera. Sup
 
 ▶️ **[Watch the full timelapse on YouTube](https://youtu.be/AAI5toBP7wc?t=75)** (the link starts right at the sunset)
 
+📷 **[See my cameras live!](https://nesthus.no/public/cameras)**
+
 ### Exposure fusion
 
 With `dynamic_range.method: fusion`, each daytime frame is captured as an exposure bracket and merged with Mertens-Kautz-Van Reeth exposure fusion: every pixel is weighted by how well-exposed it is in each bracket and blended through a multi-scale pyramid. There is no radiance map and no HDR look: the result reads as one well-graded photograph, with cloud and shadow detail a single exposure clips away. An optional tone-mapping pass (luminance-only CLAHE) adds shadow lift and local contrast without shifting colors. The bracket spread narrows smoothly to zero as exposures lengthen toward night, so the day-to-night transition above stays flicker-free by construction.
