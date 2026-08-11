@@ -10,10 +10,6 @@ exposure from daylight through twilight to 20-second night exposures without
 flicker, burns an information overlay into each frame, and assembles a
 deflickered, ready-to-publish video once a day, like the one below.
 
-Built for a camera at 68°N, where "day" and "night" stop meaning what they
-usually do, so the exposure works from the measured brightness of the previous
-frame rather than from the clock, the calendar or the sun. There is nothing in
-it to configure for your latitude.
 
 ![Day to night transition in Spjutvika, Norway, from sunset into long-exposure night](demo_images/day_to_night_01.gif)
 
