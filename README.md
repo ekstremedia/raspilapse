@@ -1,4 +1,4 @@
-# Raspilapse
+# Raspilapse: Automated Day-to-Night Timelapses for Raspberry Pi
 
 ![Tests](https://github.com/ekstremedia/raspilapse/workflows/Tests/badge.svg)
 [![codecov](https://codecov.io/gh/ekstremedia/raspilapse/branch/main/graph/badge.svg)](https://codecov.io/gh/ekstremedia/raspilapse)
@@ -7,13 +7,27 @@
 
 Continuous timelapse capture for the Raspberry Pi camera. Runs 24/7, adapts
 exposure from daylight through twilight to 20-second night exposures without
-flicker, burns an information overlay into each frame, and assembles a video
-once a day.
+flicker, burns an information overlay into each frame, and assembles a
+deflickered, ready-to-publish video once a day, like the one below.
 
-Built for a camera at 68°N, where "day" and "night" stop meaning what they
-usually do, so the exposure works from the measured brightness of the previous
-frame rather than from the clock, the calendar or the sun. There is nothing in
-it to configure for your latitude.
+
+![Day to night transition in Spjutvika, Norway, from sunset into long-exposure night](demo_images/day_to_night_01.gif)
+
+*Day-to-night transition from a production camera in Spjutvika, Norway. Watch the exposure readout in the overlay: the adaptive ladder ramps smoothly from a 210 µs shutter at sunset to 8.4-second night exposures, over four orders of magnitude, with no visible jump between frames.*
+
+▶️ **[Watch the full timelapse on YouTube](https://youtu.be/AAI5toBP7wc?t=75)** (the link starts right at the sunset)
+
+📷 **[See my cameras live on my website!](https://nesthus.no/public/cameras)**
+
+### Exposure fusion
+
+With `dynamic_range.method: fusion`, each daytime frame is captured as an exposure bracket and merged with Mertens-Kautz-Van Reeth exposure fusion: every pixel is weighted by how well-exposed it is in each bracket and blended through a multi-scale pyramid. There is no radiance map and no HDR look: the result reads as one well-graded photograph, with cloud and shadow detail a single exposure clips away. An optional tone-mapping pass (luminance-only CLAHE) adds shadow lift and local contrast without shifting colors. The bracket spread narrows smoothly to zero as exposures lengthen toward night, so the day-to-night transition above stays flicker-free by construction.
+
+| Single exposure | Exposure fusion + tone mapping |
+| --- | --- |
+| ![Single-exposure frame](demo_images/spjutvika-01-framegrab-day-2026-08-05-00_00_00.jpg) | ![Exposure-fusion frame with tone mapping](demo_images/fusion_tm_spjutvika-01-framegrab-day-2026-08-10-00_00_00.jpg) |
+
+*Same scene on comparable overcast-bright days: the fused frame keeps the cloud structure and mountain-side detail that the single exposure flattens out. See [More dynamic range](#more-dynamic-range) below for how to turn this on.*
 
 ## Requirements
 
