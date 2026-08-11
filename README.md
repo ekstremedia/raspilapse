@@ -267,8 +267,6 @@ config/               config.example.yml, a short starter file
 | [docs/TIMELAPSE_VIDEO.md](docs/TIMELAPSE_VIDEO.md) | Video, keogram, slitscan |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | When something is wrong, plus web serving and disk maths |
 | [config/README.md](config/README.md) | Working with config files |
-| [newcam.md](newcam.md) | Setting up a new camera Pi from scratch |
-| [UpgradeOldRaspilapse.md](UpgradeOldRaspilapse.md) | Upgrading a pre-1.5.0 install |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup |
 | [tests/replay/README.md](tests/replay/README.md) | How exposure changes are proved safe |
