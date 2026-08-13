@@ -476,7 +476,13 @@ class ImageCapture:
                 & (y > self.WB_LUMA_MIN)
                 & (y < self.WB_LUMA_MAX)
             )
-            if int(neutral.sum()) >= self.WB_MIN_SAMPLES:
+            # The reported fraction counts every candidate, not just the
+            # bright quartile the stats are read from: it answers "how much
+            # of the scene passed the neutral gates", which is what the
+            # controller's min_neutral_fraction was calibrated against.
+            candidates = int(neutral.sum())
+            fraction = candidates / neutral.size
+            if candidates >= self.WB_MIN_SAMPLES:
                 # Keep only the brightest quartile of the candidates; see the
                 # constants above for why mid-luma "grey" is usually sky. A
                 # cut relative to the candidates themselves keeps the loop
@@ -484,7 +490,6 @@ class ImageCapture:
                 # highlight threshold but the brightest cloud is still cloud.
                 neutral &= y >= np.percentile(y[neutral], self.WB_LUMA_PERCENTILE)
             samples = int(neutral.sum())
-            fraction = samples / neutral.size
             if samples < self.WB_MIN_SAMPLES:
                 # Not enough grey to read anything, but the fraction itself is
                 # the controller's evidence for skipping the frame.

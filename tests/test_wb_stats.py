@@ -129,6 +129,23 @@ class TestNeutralSelection:
         assert mixed["wb_gr"] == pytest.approx(pure["wb_gr"], abs=0.005)
         assert mixed["wb_gb"] == pytest.approx(pure["wb_gb"], abs=0.005)
 
+    def test_too_few_bright_neutrals_reports_only_the_fraction(self, capture):
+        # Enough candidates to attempt the luma cut, but the brightest
+        # quartile lands under WB_MIN_SAMPLES: the stats must hold the trim
+        # (no ratios) while still reporting how much grey the gates saw.
+        buf = np.zeros((H * 3 // 2, W), np.uint8)
+        quarter = H // 4
+        buf[H : H + quarter] = 128
+        buf[H + quarter : H + 2 * quarter] = 128
+        # 120 neutral candidates in the top chroma row: 90 dim, 30 bright.
+        # The 75th-percentile cut lands between the two, keeping only 30.
+        buf[0:2, 0:180] = 120
+        buf[0:2, 180:240] = 200
+        result = stats(capture, buf)
+        assert result["wb_neutral_fraction"] > 0
+        assert "wb_gr" not in result
+        assert "wb_gb" not in result
+
     def test_a_uniform_cast_still_reads_through_the_luma_cut(self, capture):
         # On a flat overcast frame every candidate shares one luma, so the
         # brightest-quartile cut keeps them all and the cast still reports.
