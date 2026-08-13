@@ -408,10 +408,17 @@ class ImageCapture:
     # conversion -- tight enough that vegetation and rust never pass, loose
     # enough that overcast cloud and grey water always do. The luma window
     # drops shadows the sensor renders noisy and highlights near clipping,
-    # where the cast information is gone.
+    # where the cast information is gone. Of what passes, only the brightest
+    # quartile is trusted: clear sky and sky-lit water sit inside the chroma
+    # gate on sunny days but render mid-luma, and reading them as grey once
+    # dragged the blue trim to its rail (measured 2026-08-13: the wide gate
+    # read G/B 0.94 on a sunny frame whose clouds measured 1.02). Highlights
+    # -- cloud, white walls -- are the scene's only honest grey card, and on
+    # overcast days they are the same grey cloud the wide gate already read.
     WB_CHROMA_LIMIT = 12.0
     WB_LUMA_MIN = 30.0
     WB_LUMA_MAX = 215.0
+    WB_LUMA_PERCENTILE = 75.0
     WB_MIN_SAMPLES = 64
 
     def _wb_stats_from_lores(self, lores_array, gray, lores_w: int, lores_h: int) -> Dict:
@@ -422,9 +429,9 @@ class ImageCapture:
         colour measurement this camera can produce: 160x120 chroma samples,
         taken before the overlay is burned in, costing no disk read.
 
-        Near-neutral pixels -- low chroma, mid luminance -- are the scene's
-        own grey card. On them, any distance from (U, V) = (128, 128) is cast,
-        not subject colour. The mean R:G:B of that selection is reported as
+        Near-neutral pixels -- low chroma, and the brightest quartile of what
+        the luma window admits -- are the scene's own grey card. On them, any
+        distance from (U, V) = (128, 128) is cast, not subject colour. The mean R:G:B of that selection is reported as
         two linear-domain ratios, wb_gr = G/R and wb_gb = G/B, which read 1.0
         on a neutral render. The exposure controller steers its day trim on
         them; ExposureController._update_wb_trim explains why that has to be
@@ -469,6 +476,13 @@ class ImageCapture:
                 & (y > self.WB_LUMA_MIN)
                 & (y < self.WB_LUMA_MAX)
             )
+            if int(neutral.sum()) >= self.WB_MIN_SAMPLES:
+                # Keep only the brightest quartile of the candidates; see the
+                # constants above for why mid-luma "grey" is usually sky. A
+                # cut relative to the candidates themselves keeps the loop
+                # alive on dim overcast days, where nothing reaches a fixed
+                # highlight threshold but the brightest cloud is still cloud.
+                neutral &= y >= np.percentile(y[neutral], self.WB_LUMA_PERCENTILE)
             samples = int(neutral.sum())
             fraction = samples / neutral.size
             if samples < self.WB_MIN_SAMPLES:

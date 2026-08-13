@@ -118,6 +118,26 @@ class TestNeutralSelection:
         assert result["wb_neutral_fraction"] == pytest.approx(0.0)
         assert "wb_gr" not in result
 
+    def test_pale_sky_dimmer_than_cloud_is_not_a_grey_card(self, capture):
+        # Clear sky and sky-lit water pass the chroma gate on sunny days but
+        # render mid-luma; reading them as grey once railed the blue trim.
+        # With bright cloud in frame, the cloud alone must set the reading.
+        cloud = (200, 200, 200)
+        sky = (140, 150, 170)  # inside the chroma gate, distinctly blue
+        mixed = stats(capture, i420([(0, W // 2, cloud), (W // 2, W, sky)]))
+        pure = stats(capture, i420([(0, W, cloud)]))
+        assert mixed["wb_gr"] == pytest.approx(pure["wb_gr"], abs=0.005)
+        assert mixed["wb_gb"] == pytest.approx(pure["wb_gb"], abs=0.005)
+
+    def test_a_uniform_cast_still_reads_through_the_luma_cut(self, capture):
+        # On a flat overcast frame every candidate shares one luma, so the
+        # brightest-quartile cut keeps them all and the cast still reports.
+        rgb = (140, 128, 118)
+        result = stats(capture, i420([(0, W, rgb)]))
+        expected_gr = srgb_linear(rgb[1]) / srgb_linear(rgb[0])
+        assert result["wb_neutral_fraction"] == pytest.approx(1.0)
+        assert result["wb_gr"] == pytest.approx(expected_gr, rel=0.02)
+
 
 class TestBufferLayout:
     def test_a_stride_padded_buffer_is_refused(self, capture):
