@@ -5,6 +5,9 @@ letting raspilapse capture only inside configured time windows. It exists so
 the work can be picked up later without re-deriving the reasoning, and so it
 can be shared with the person who asked for it.
 
+See also [PI-ZERO-PLAN.md](PI-ZERO-PLAN.md) for running on a Pi Zero 2 W
+with solar and LTE, which sequences with this plan.
+
 ## Background
 
 A user in Australia is deploying raspilapse at an off-grid grassland site to
