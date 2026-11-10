@@ -13,6 +13,7 @@ from PIL import Image
 
 import raspilapse.dynrange as dynrange_module
 import raspilapse.dynrange.sensor_hdr as sensor_hdr_module
+from raspilapse.codecs import JpegCodec
 from raspilapse.dynrange import DynamicRange
 from raspilapse.dynrange.sensor_hdr import find_wdr_subdev, hdr_main_size, set_wdr, upscale_to
 
@@ -133,7 +134,7 @@ class TestUpscaleTo:
     def test_upscales_and_stays_world_readable(self, tmp_path):
         small = tmp_path / "frame.jpg"
         Image.new("RGB", (230, 130), (90, 120, 150)).save(str(small), quality=90)
-        assert upscale_to(str(small), (460, 260), quality=85) is True
+        assert upscale_to(str(small), (460, 260), JpegCodec()) is True
         with Image.open(str(small)) as result:
             assert result.size == (460, 260)
         assert small.stat().st_mode & 0o644 == 0o644
@@ -143,19 +144,19 @@ class TestUpscaleTo:
         native = tmp_path / "frame.jpg"
         Image.new("RGB", (460, 260), (20, 20, 30)).save(str(native), quality=90)
         before = native.read_bytes()
-        assert upscale_to(str(native), (460, 260)) is True
+        assert upscale_to(str(native), (460, 260), JpegCodec()) is True
         assert native.read_bytes() == before
 
     def test_unreadable_frame_returns_false(self, tmp_path):
         garbage = tmp_path / "corrupt.jpg"
         garbage.write_bytes(b"not a jpeg")
-        assert upscale_to(str(garbage), (460, 260)) is False
+        assert upscale_to(str(garbage), (460, 260), JpegCodec()) is False
         assert garbage.read_bytes() == b"not a jpeg"
 
     def test_no_temp_files_left_behind(self, tmp_path):
         small = tmp_path / "frame.jpg"
         Image.new("RGB", (230, 130)).save(str(small), quality=90)
-        upscale_to(str(small), (460, 260))
+        upscale_to(str(small), (460, 260), JpegCodec())
         leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".upscale-")]
         assert leftovers == []
 

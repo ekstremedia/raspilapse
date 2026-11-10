@@ -19,7 +19,7 @@ the day-to-night transition is smooth by construction, not by switchery.
 """
 
 import math
-from typing import Callable, List
+from typing import Any, Callable, List
 
 from raspilapse.logging_setup import get_logger
 
@@ -32,7 +32,8 @@ FULL_SPREAD_BELOW_S = 0.05
 
 # Estimated non-capture cost of a fused frame: pyramid fusion of three 4K
 # frames plus the JPEG encode and disk write, measured conservatively on a
-# Pi 4. Only the budget guard reads these.
+# Pi 4. Only the budget guard reads these. The encode figure is JPEG's: a
+# JPEG XL frame at high effort takes longer and is not measured yet.
 _FUSE_COST_S = 3.0
 _ENCODE_COST_S = 1.0
 
@@ -109,24 +110,21 @@ def plan_brackets(
     return plan
 
 
-def build_fuse_fn(quality: int) -> Callable[[List], bytes]:
-    """A callable that fuses bracket arrays and returns encoded JPEG bytes.
+def build_fuse_fn() -> Callable[[List], Any]:
+    """A callable that fuses bracket arrays into one uint8 array.
 
-    Returning bytes keeps the capture path free of both cv2 and Pillow: the
-    caller writes bytes to disk and never learns what produced them. cv2 is
-    imported here, on first use, for the usual reasons (import cost, CI).
+    The array keeps the frames' channel order, so the capture path encodes
+    it exactly like a single frame -- same format, same tuning, same EXIF.
+    cv2 is imported here, on first use, for the usual reasons (import cost,
+    CI); the capture path never needs it.
     """
 
-    def fuse(frames: List) -> bytes:
+    def fuse(frames: List) -> Any:
         import cv2
 
         merged = cv2.createMergeMertens().process(frames)
         # Mertens returns float32 in roughly 0..1 but overshoots slightly on
         # saturated pixels; clip before scaling or they wrap to black.
-        eight_bit = (merged.clip(0.0, 1.0) * 255).astype("uint8")
-        ok, encoded = cv2.imencode(".jpg", eight_bit, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
-        if not ok:
-            raise RuntimeError("cv2.imencode refused the fused frame")
-        return encoded.tobytes()
+        return (merged.clip(0.0, 1.0) * 255).astype("uint8")
 
     return fuse

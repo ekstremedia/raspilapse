@@ -9,8 +9,8 @@ one exposure carries:
                    exposure fusion; converges to a plain single shot as
                    exposures lengthen toward night
     sensor_hdr  -- the imx708's on-chip HDR (quarter resolution, day only)
-    raw         -- develop the sensor's DNG instead of keeping the ISP's JPEG
-    tone_map    -- redistribute what the single JPEG already holds
+    raw         -- develop the sensor's DNG instead of keeping the ISP's frame
+    tone_map    -- redistribute what the single frame already holds
 
 ``DynamicRange`` is the seam, mirroring ``build_overlay``: the daemon builds
 one instance and asks it for the post-process chain and per-frame capture
@@ -28,6 +28,7 @@ import importlib.util
 from collections.abc import Mapping
 from typing import Callable, Dict, Optional
 
+from raspilapse import codecs
 from raspilapse.logging_setup import get_logger
 from raspilapse.overlay import build_overlay
 
@@ -153,11 +154,13 @@ class DynamicRange:
         )
 
         # The DNG sidecar is independent of the method: every Nth frame's raw
-        # negative is kept beside its JPEG for hand-developing, retention-
+        # negative is kept beside its frame for hand-developing, retention-
         # capped. Inert under sensor_hdr, whose binned merged mode produces
         # nothing worth calling a negative.
         output_cfg = _mapping(config.get("output"), "output")
-        self._quality = int(output_cfg.get("quality", 85))
+        # Every stage rewrites the frame in the format its extension names,
+        # tuned from this section -- see _codec.
+        self._output_cfg = output_cfg
         sidecar_cfg = _mapping(output_cfg.get("dng_sidecar"), "output.dng_sidecar")
         self._sidecar_enabled = bool(sidecar_cfg.get("enabled", False))
         self._sidecar_every_n = int(sidecar_cfg.get("every_n_frames", 20))
@@ -274,7 +277,7 @@ class DynamicRange:
                 merged["fusion_exposures_us"] = [int(t * 1_000_000) for t in plan]
                 result = capture.capture_bracketed(
                     merged["fusion_exposures_us"],
-                    fusion.build_fuse_fn(self._quality),
+                    fusion.build_fuse_fn(),
                     mode=mode,
                     extra_metadata=merged,
                 )
@@ -344,15 +347,14 @@ class DynamicRange:
         if self.method == "sensor_hdr":
             from raspilapse.dynrange import sensor_hdr
 
-            target, quality = self._resolution, self._quality
-            stages.append(lambda path: sensor_hdr.upscale_to(path, target, quality))
+            target = self._resolution
+            stages.append(lambda path: sensor_hdr.upscale_to(path, target, self._codec(path)))
 
         if self.tone_map_enabled:
             from raspilapse.dynrange import tonemap
 
             strength = self._tone_map_strength
-            quality = config.get("output", {}).get("quality", 85)
-            stages.append(lambda path: tonemap.tone_map_file(path, strength, quality))
+            stages.append(lambda path: tonemap.tone_map_file(path, strength, self._codec(path)))
 
         if not stages:
             return overlay
@@ -366,6 +368,10 @@ class DynamicRange:
             return processed
 
         return chain
+
+    def _codec(self, image_path: str) -> "codecs.FrameCodec":
+        """The codec a stage rewrites this frame with: its own format, tuned."""
+        return codecs.for_path(image_path, self._output_cfg)
 
     def _develop_stage(self, image_path: str) -> bool:
         """Develop and/or dispose of the frame's DNG, before the overlay.
@@ -389,7 +395,7 @@ class DynamicRange:
                 from raspilapse.dynrange import raw_develop
 
                 developed = raw_develop.develop_dng(
-                    dng_tmp, image_path, self._resolution, self._quality
+                    dng_tmp, image_path, self._resolution, self._codec(image_path)
                 )
             if self._keep_dng_this_frame:
                 from raspilapse.dynrange import sidecar

@@ -13,7 +13,11 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from raspilapse.codecs import JpegCodec
 from raspilapse.video.keogram import create_keogram, create_slitscan, create_time_slices
+
+# What the daily job writes by default (video.keogram.jpeg).
+KEOGRAM = JpegCodec({"quality": 95, "optimize": True})
 
 
 def frame(path: Path, width: int, height: int, seed: int):
@@ -37,27 +41,29 @@ class TestFusionMatchesSeparateRuns:
 
     def test_both_outputs_are_unchanged_by_fusing(self, tmp_path, frames):
         sep_k, sep_s = tmp_path / "sep_k.jpg", tmp_path / "sep_s.jpg"
-        create_keogram(frames, sep_k, crop_top_percent=0.0)
-        create_slitscan(frames, sep_s, crop_top_percent=0.0)
+        create_keogram(frames, sep_k, KEOGRAM, crop_top_percent=0.0)
+        create_slitscan(frames, sep_s, KEOGRAM, crop_top_percent=0.0)
 
         fus_k, fus_s = tmp_path / "fus_k.jpg", tmp_path / "fus_s.jpg"
-        create_time_slices(frames, keogram_path=fus_k, slitscan_path=fus_s, crop_top_percent=0.0)
+        create_time_slices(
+            frames, codec=KEOGRAM, keogram_path=fus_k, slitscan_path=fus_s, crop_top_percent=0.0
+        )
 
         assert sep_k.read_bytes() == fus_k.read_bytes()
         assert sep_s.read_bytes() == fus_s.read_bytes()
 
     def test_only_the_requested_output_is_written(self, tmp_path, frames):
         k, s = tmp_path / "k.jpg", tmp_path / "s.jpg"
-        result = create_time_slices(frames, keogram_path=k, crop_top_percent=0.0)
+        result = create_time_slices(frames, codec=KEOGRAM, keogram_path=k, crop_top_percent=0.0)
         assert k.exists() and not s.exists()
         assert result == {"keogram": True}
 
     def test_asking_for_nothing_does_nothing(self, tmp_path, frames):
-        assert create_time_slices(frames) == {}
+        assert create_time_slices(frames, codec=KEOGRAM) == {}
 
     def test_no_images_fails_every_requested_output(self, tmp_path):
         result = create_time_slices(
-            [], keogram_path=tmp_path / "k.jpg", slitscan_path=tmp_path / "s.jpg"
+            [], keogram_path=tmp_path / "k.jpg", slitscan_path=tmp_path / "s.jpg", codec=KEOGRAM
         )
         assert result == {"keogram": False, "slitscan": False}
 
@@ -90,7 +96,7 @@ class TestResizeRules:
             frame(tmp_path / "c.jpg", 40, 20, seed=180),
         ]
         out = tmp_path / "s.jpg"
-        create_time_slices(paths, slitscan_path=out, crop_top_percent=0.0)
+        create_time_slices(paths, codec=KEOGRAM, slitscan_path=out, crop_top_percent=0.0)
 
         # Frame 1 owns columns 13..25 (40/3 = 13.33 per frame).
         with Image.open(paths[1]) as wide:
@@ -117,13 +123,16 @@ class TestResizeRules:
             paths,
             keogram_path=tmp_path / "k.jpg",
             slitscan_path=tmp_path / "s.jpg",
+            codec=KEOGRAM,
             crop_top_percent=0.0,
         )
         assert result == {"keogram": True, "slitscan": True}
 
     def test_the_output_keeps_the_first_frames_geometry(self, tmp_path, frames):
         k, s = tmp_path / "k.jpg", tmp_path / "s.jpg"
-        create_time_slices(frames, keogram_path=k, slitscan_path=s, crop_top_percent=0.0)
+        create_time_slices(
+            frames, codec=KEOGRAM, keogram_path=k, slitscan_path=s, crop_top_percent=0.0
+        )
         with Image.open(k) as img:
             assert img.size == (len(frames), 20)  # one column per frame
         with Image.open(s) as img:
@@ -139,12 +148,12 @@ class TestUnreadableFrames:
         longer lines up with time."""
         paths = [frame(tmp_path / f"f{i}.jpg", 40, 20, seed=i * 20) for i in range(8)]
         good = tmp_path / "good_s.jpg"
-        create_slitscan(paths, good, crop_top_percent=0.0)
+        create_slitscan(paths, good, KEOGRAM, crop_top_percent=0.0)
 
         # Corrupt one frame in the middle and rebuild.
         paths[3].write_bytes(b"not a jpeg")
         broken = tmp_path / "broken_s.jpg"
-        create_slitscan(paths, broken, crop_top_percent=0.0)
+        create_slitscan(paths, broken, KEOGRAM, crop_top_percent=0.0)
 
         with Image.open(good) as a, Image.open(broken) as b:
             assert a.size == b.size
@@ -159,6 +168,7 @@ class TestUnreadableFrames:
             paths,
             keogram_path=tmp_path / "k.jpg",
             slitscan_path=tmp_path / "s.jpg",
+            codec=KEOGRAM,
             crop_top_percent=0.0,
         )
         assert result == {"keogram": True, "slitscan": True}
@@ -167,7 +177,7 @@ class TestUnreadableFrames:
         bad = tmp_path / "bad.jpg"
         bad.write_bytes(b"not a jpeg")
         result = create_time_slices(
-            [bad], keogram_path=tmp_path / "k.jpg", slitscan_path=tmp_path / "s.jpg"
+            [bad], keogram_path=tmp_path / "k.jpg", slitscan_path=tmp_path / "s.jpg", codec=KEOGRAM
         )
         assert result == {"keogram": False, "slitscan": False}
 
@@ -177,7 +187,7 @@ class TestCropping:
 
     def test_the_overlay_bar_is_cropped_off_the_top(self, tmp_path, frames):
         k = tmp_path / "k.jpg"
-        create_time_slices(frames, keogram_path=k, crop_top_percent=10.0)
+        create_time_slices(frames, codec=KEOGRAM, keogram_path=k, crop_top_percent=10.0)
         with Image.open(k) as img:
             assert img.height == 20 - int(20 * 10 / 100)
 
@@ -207,6 +217,7 @@ class TestDegenerateInputs:
             paths,
             keogram_path=tmp_path / "k.jpg",
             slitscan_path=tmp_path / "s.jpg",
+            codec=KEOGRAM,
             crop_top_percent=0.0,
         )
         assert result == {"keogram": False, "slitscan": False}
@@ -219,6 +230,7 @@ class TestDegenerateInputs:
         result = create_time_slices(
             frames,
             keogram_path=tmp_path / "k.jpg",
+            codec=KEOGRAM,
             crop_top_percent=60.0,
             crop_bottom_percent=60.0,
         )

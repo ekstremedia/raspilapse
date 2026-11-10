@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import raspilapse.dynrange as dynrange_module
+from raspilapse.codecs import JpegCodec
 from raspilapse.dynrange import DynamicRange
 from raspilapse.dynrange.raw_develop import DEVELOP_ESTIMATE_S, develop_dng, should_use_raw
 
@@ -45,7 +46,7 @@ class TestDevelopDng:
         jpeg = tmp_path / "frame.jpg"
         jpeg.write_bytes(b"isp jpeg")
         monkeypatch.setitem(sys.modules, "rawpy", None)
-        assert develop_dng(str(tmp_path / "frame.dng"), str(jpeg), (100, 60)) is False
+        assert develop_dng(str(tmp_path / "frame.dng"), str(jpeg), (100, 60), JpegCodec()) is False
         assert jpeg.read_bytes() == b"isp jpeg"
 
     def test_invalid_dng_leaves_the_isp_jpeg(self, tmp_path):
@@ -55,7 +56,7 @@ class TestDevelopDng:
         jpeg.write_bytes(b"isp jpeg")
         bad_dng = tmp_path / "frame.dng"
         bad_dng.write_bytes(b"not a dng at all")
-        assert develop_dng(str(bad_dng), str(jpeg), (100, 60)) is False
+        assert develop_dng(str(bad_dng), str(jpeg), (100, 60), JpegCodec()) is False
         assert jpeg.read_bytes() == b"isp jpeg"
         leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".develop-")]
         assert leftovers == []
@@ -134,7 +135,7 @@ class TestDevelopStage:
         monkeypatch.setattr(
             raw_develop,
             "develop_dng",
-            lambda dng, out, size, quality: calls.append((dng, out)) or develop_result,
+            lambda dng, out, size, codec: calls.append((dng, out)) or develop_result,
         )
         return dr, calls
 

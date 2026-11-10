@@ -21,11 +21,17 @@ from typing import List, Optional
 
 from PIL import Image
 
+from raspilapse import codecs
+from raspilapse.codecs import FrameCodec, open_frame
+from raspilapse.config import load_config, merge_defaults, resolve_config_path
 from raspilapse.console import Colors, print_info, print_section
 from raspilapse.logging_setup import configure_logging, get_logger
 
+# What the CLI searches for without --pattern, spelled out for its messages.
+_ALL_FRAMES = ", ".join(f"*{suffix}" for suffix in codecs.FRAME_SUFFIXES)
 
-def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:
+
+def find_images(directory: Path, pattern: Optional[str] = None) -> List[Path]:
     """
     Find all images in directory matching pattern, sorted by filename.
 
@@ -33,7 +39,8 @@ def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:
 
     Args:
         directory: Directory to search
-        pattern: Glob pattern for images (default: *.jpg)
+        pattern: Glob pattern for images (default: every frame extension in
+            codecs.FRAME_SUFFIXES)
 
     Returns:
         List of image paths sorted by filename (chronological by timestamp)
@@ -41,12 +48,15 @@ def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:
     if not directory.exists():
         raise ValueError(f"Directory not found: {directory}")
 
-    images = []
-    for img in directory.glob(pattern):
-        # Exclude keogram, slitscan files and metadata
-        if img.name.startswith(("keogram", "slitscan")) or "_metadata" in img.name:
-            continue
-        images.append(img)
+    patterns = [pattern] if pattern else [f"*{suffix}" for suffix in codecs.FRAME_SUFFIXES]
+    images = set()
+    for glob_pattern in patterns:
+        for img in directory.glob(glob_pattern):
+            # Exclude keogram, slitscan files and metadata
+            if img.name.startswith(("keogram", "slitscan")) or "_metadata" in img.name:
+                continue
+            images.add(img)
+    images = list(images)
 
     images.sort()  # Sort by filename (which includes timestamp)
     return images
@@ -55,7 +65,7 @@ def find_images(directory: Path, pattern: str = "*.jpg") -> List[Path]:
 def _save_slice(
     canvas: "Image.Image",
     output_path: Path,
-    quality: int,
+    codec: FrameCodec,
     label: str,
     processed: int,
     skipped: int,
@@ -66,7 +76,7 @@ def _save_slice(
     """Write one finished canvas and report on it."""
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        canvas.save(str(output_path), "JPEG", quality=quality, optimize=True)
+        codec.save(canvas, str(output_path))
 
         size_kb = output_path.stat().st_size / 1024
         print(f"\n  {Colors.success('✓')} {label} saved: {Colors.bold(str(output_path))}")
@@ -99,7 +109,8 @@ def create_time_slices(
     image_paths: List[Path],
     keogram_path: Optional[Path] = None,
     slitscan_path: Optional[Path] = None,
-    quality: int = 95,
+    *,
+    codec: FrameCodec,
     crop_top_percent: float = 7.0,
     crop_bottom_percent: float = 0.0,
     logger: Optional[logging.Logger] = None,
@@ -109,7 +120,7 @@ def create_time_slices(
 
     Both outputs are a vertical strip taken from every frame; the only
     difference is which strip and where it lands. Generating them separately
-    meant reading and JPEG-decoding the whole day twice -- on this camera, 2880
+    meant reading and decoding the whole day twice -- on this camera, 2880
     4K frames at ~123 ms a decode, so about five minutes of the daily job spent
     decoding images it had already decoded a moment earlier.
 
@@ -124,7 +135,8 @@ def create_time_slices(
         image_paths: Image paths, sorted chronologically
         keogram_path: Where to write the keogram, or None to skip it
         slitscan_path: Where to write the slitscan, or None to skip it
-        quality: JPEG quality (1-100)
+        codec: Format both outputs are written in; their paths should carry
+            its extension
         crop_top_percent: Percentage of height to crop from the top (overlay bar)
         crop_bottom_percent: Percentage of height to crop from the bottom
         logger: Optional logger
@@ -156,7 +168,7 @@ def create_time_slices(
 
     # Get dimensions from first image
     try:
-        with Image.open(image_paths[0]) as first_img:
+        with open_frame(image_paths[0]) as first_img:
             original_height = first_img.height
             original_width = first_img.width
     except Exception as e:
@@ -215,7 +227,7 @@ def create_time_slices(
 
     for i, img_path in enumerate(image_paths):
         try:
-            with Image.open(img_path) as img:
+            with open_frame(img_path) as img:
                 img_width, img_height = img.size
 
                 if want_keogram:
@@ -286,7 +298,7 @@ def create_time_slices(
             print(f"  {Colors.CYAN}→{Colors.END} Progress: {pct}% ({i + 1}/{num_images})")
 
     if processed == 0:
-        # Image.open only reads the header, so a truncated JPEG gets past the
+        # Image.open only reads the header, so a truncated frame gets past the
         # first-frame dimension read and fails later inside crop(). If every
         # frame fails that way both canvases are still blank, and saving them
         # would report success and feed a black image into the upload queue.
@@ -298,13 +310,13 @@ def create_time_slices(
 
     if want_keogram:
         results["keogram"] = _save_slice(
-            keogram, keogram_path, quality, "Keogram", processed, skipped, keogram_resized, logger
+            keogram, keogram_path, codec, "Keogram", processed, skipped, keogram_resized, logger
         )
     if want_slitscan:
         results["slitscan"] = _save_slice(
             slitscan,
             slitscan_path,
-            quality,
+            codec,
             "Slitscan",
             processed,
             skipped,
@@ -319,7 +331,7 @@ def create_time_slices(
 def create_keogram(
     image_paths: List[Path],
     output_path: Path,
-    quality: int = 95,
+    codec: FrameCodec,
     crop_top_percent: float = 7.0,
     crop_bottom_percent: float = 0.0,
     logger: Optional[logging.Logger] = None,
@@ -337,7 +349,7 @@ def create_keogram(
     Args:
         image_paths: List of image paths (must be sorted chronologically)
         output_path: Path for the output keogram image
-        quality: JPEG quality (1-100, default 95)
+        codec: Format to write it in
         crop_top_percent: Percentage of image height to crop from top (default 7% for overlay bar)
         crop_bottom_percent: Percentage of image height to crop from bottom
         logger: Optional logger instance
@@ -348,7 +360,7 @@ def create_keogram(
     return create_time_slices(
         image_paths,
         keogram_path=output_path,
-        quality=quality,
+        codec=codec,
         crop_top_percent=crop_top_percent,
         crop_bottom_percent=crop_bottom_percent,
         logger=logger,
@@ -358,7 +370,7 @@ def create_keogram(
 def create_slitscan(
     image_paths: List[Path],
     output_path: Path,
-    quality: int = 95,
+    codec: FrameCodec,
     crop_top_percent: float = 7.0,
     crop_bottom_percent: float = 0.0,
     logger: Optional[logging.Logger] = None,
@@ -385,7 +397,7 @@ def create_slitscan(
     Args:
         image_paths: List of image paths (must be sorted chronologically)
         output_path: Path for the output slitscan image
-        quality: JPEG quality (1-100, default 95)
+        codec: Format to write it in
         crop_top_percent: Percentage of image height to crop from top (default 7%)
         crop_bottom_percent: Percentage of image height to crop from bottom
         logger: Optional logger instance
@@ -396,11 +408,42 @@ def create_slitscan(
     return create_time_slices(
         image_paths,
         slitscan_path=output_path,
-        quality=quality,
+        codec=codec,
         crop_top_percent=crop_top_percent,
         crop_bottom_percent=crop_bottom_percent,
         logger=logger,
     ).get("slitscan", False)
+
+
+def _cli_codec(args) -> FrameCodec:
+    """The output format for the CLI: --output's extension, else --format,
+    else video.keogram.format; tuned from video.keogram, --quality on top."""
+    config_path = resolve_config_path(args.config)
+    config = load_config(config_path) if config_path.exists() else merge_defaults({})
+    section = dict(config["video"]["keogram"])
+
+    if args.output:
+        suffix = Path(args.output).suffix.lower()
+        name = next((n for n, c in codecs.CODECS.items() if suffix in c.suffixes), None)
+        if name is None:
+            raise ValueError(
+                f"'{suffix}' is not a supported image extension; supported: "
+                f"{', '.join(s for c in codecs.CODECS.values() for s in c.suffixes)}"
+            )
+        if args.format and args.format != name:
+            raise ValueError(f"--format {args.format} contradicts the extension of {args.output}")
+    else:
+        name = args.format or section["format"]
+
+    cls = codecs.codec_class(name, "video.keogram.format")
+    options = dict(section.get(name) or {})
+    if args.quality is not None:
+        if "quality" not in cls.DEFAULTS:
+            raise ValueError(f"--quality: the {name} format has no quality setting")
+        options["quality"] = args.quality
+    codec = cls(options, f"video.keogram.{name}")
+    codec.require()
+    return codec
 
 
 def main():
@@ -416,10 +459,11 @@ Examples:
   # Create slitscan instead of keogram
   python3 -m raspilapse.video.keogram --dir /var/www/html/images/2025/12/24/ --slitscan
 
-  # Specify output filename
+  # Specify output filename (its extension picks the format)
   python3 -m raspilapse.video.keogram --dir /path/to/images --output keogram_custom.jpg
 
-  # Specify output directory (file will be named keogram_YYYY-MM-DD.jpg)
+  # Specify output directory (file will be named keogram_YYYY-MM-DD.jpg
+  # with the default video.keogram.format)
   python3 -m raspilapse.video.keogram --dir /var/www/html/images/2025/12/24/ --output-dir /var/www/html/keograms/
 
 What is a Keogram?
@@ -444,7 +488,8 @@ What is a Slitscan?
     parser.add_argument(
         "--output",
         "-o",
-        help="Output filename (default: keogram_YYYY-MM-DD.jpg based on directory date)",
+        help="Output filename; its extension picks the format "
+        "(default: keogram_YYYY-MM-DD + the extension of video.keogram.format)",
     )
     parser.add_argument(
         "--output-dir",
@@ -452,14 +497,18 @@ What is a Slitscan?
     )
     parser.add_argument(
         "--pattern",
-        default="*.jpg",
-        help="Glob pattern for finding images (default: *.jpg)",
+        default=None,
+        help=f"Glob pattern for finding images (default: {_ALL_FRAMES})",
+    )
+    parser.add_argument(
+        "--format",
+        choices=list(codecs.CODECS),
+        help="Output format (default: video.keogram.format from the config)",
     )
     parser.add_argument(
         "--quality",
         type=int,
-        default=95,
-        help="JPEG quality 1-100 (default: 95)",
+        help="Quality of the output format, overriding video.keogram.<format>.quality",
     )
     parser.add_argument(
         "--crop-top",
@@ -487,7 +536,7 @@ What is a Slitscan?
         "-c",
         "--config",
         default="config/config.yml",
-        help="Path to configuration file (for logging)",
+        help="Path to configuration file (logging and video.keogram)",
     )
 
     args = parser.parse_args()
@@ -516,7 +565,7 @@ What is a Slitscan?
         return 1
 
     if not images:
-        msg = f"No images found matching '{args.pattern}' in {input_dir}"
+        msg = f"No images found matching '{args.pattern or _ALL_FRAMES}' in {input_dir}"
         print(Colors.error(f"✗ {msg}"))
         logger.error(msg)
         return 1
@@ -524,6 +573,13 @@ What is a Slitscan?
     print(f"  {Colors.success('✓')} Found {Colors.bold(str(len(images)))} images")
     print(f"  {Colors.CYAN}→{Colors.END} First: {Colors.bold(images[0].name)}")
     print(f"  {Colors.CYAN}→{Colors.END} Last:  {Colors.bold(images[-1].name)}")
+
+    try:
+        codec = _cli_codec(args)
+    except (ValueError, RuntimeError) as e:
+        print(Colors.error(f"✗ {e}"))
+        logger.error(str(e))
+        return 1
 
     # Determine output path
     if args.output:
@@ -547,7 +603,7 @@ What is a Slitscan?
         except Exception:
             date_str = datetime.now().strftime("%Y-%m-%d")
 
-        filename = f"{mode}_{date_str}.jpg"
+        filename = f"{mode}_{date_str}{codec.suffix}"
 
         if args.output_dir:
             output_path = Path(args.output_dir) / filename
@@ -566,7 +622,7 @@ What is a Slitscan?
         success = create_slitscan(
             images,
             output_path,
-            quality=args.quality,
+            codec,
             crop_top_percent=crop_top,
             crop_bottom_percent=crop_bottom,
             logger=logger,
@@ -576,7 +632,7 @@ What is a Slitscan?
         success = create_keogram(
             images,
             output_path,
-            quality=args.quality,
+            codec,
             crop_top_percent=crop_top,
             crop_bottom_percent=crop_bottom,
             logger=logger,

@@ -7,9 +7,12 @@ so the camera flow is tested with a scripted fake picam2 and a trivial fuser.
 
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
+from PIL import Image
 
 from raspilapse.camera.capture import ImageCapture
+from raspilapse.codecs import JpegCodec
 from raspilapse.dynrange import DynamicRange
 from raspilapse.dynrange.fusion import (
     FULL_SPREAD_BELOW_S,
@@ -140,7 +143,9 @@ def capture(tmp_path):
     config.get_output_directory.return_value = str(tmp_path)
     config.should_organize_by_date.return_value = False
     config.should_create_directories.return_value = True
-    config.get_filename_pattern.return_value = "test_%Y_%m_%d_%H_%M_%S.jpg"
+    config.get_filename_pattern.return_value = "test_%Y_%m_%d_%H_%M_%S"
+    config.get_codec.return_value = JpegCodec()
+    config.config = {"output": {}}
     config.get_project_name.return_value = "test"
     config.should_save_metadata.return_value = False
     instance = ImageCapture(config)
@@ -148,9 +153,19 @@ def capture(tmp_path):
     return instance
 
 
+FUSED = []
+
+
 def first_frame_fuser(frames):
-    """A fuse_fn that proves which arrays arrived, without any cv2."""
-    return ("+".join(frames)).encode()
+    """A fuse_fn that proves which arrays arrived, without any cv2.
+
+    Records the frames it was handed and returns a small B, G, R array,
+    which the capture path then encodes like any frame.
+    """
+    FUSED.append(list(frames))
+    fused = np.zeros((8, 8, 3), dtype=np.uint8)
+    fused[:, :, 0] = 200  # blue, in picamera2's B, G, R order
+    return fused
 
 
 class TestCaptureBracketed:
@@ -165,11 +180,15 @@ class TestCaptureBracketed:
                 FakeRequest(39_000, "over"),  # within 10% of 40000
             ]
         )
+        FUSED.clear()
         image_path, metadata_path = capture.capture_bracketed(
             [10_000, 2_500, 40_000], first_frame_fuser, mode="day"
         )
-        content = (tmp_path / image_path.split("/")[-1]).read_bytes()
-        assert content == b"base+under+over"
+        assert FUSED == [["base", "under", "over"]]
+        with Image.open(image_path) as written:
+            assert written.format == "JPEG"
+            r, g, b = written.convert("RGB").getpixel((4, 4))
+        assert b > 150 and r < 60, "B, G, R was not turned into R, G, B"
         assert capture.last_settle_frames == [1, 0]
         assert all(r.released for r in capture.picam2.served)
 
@@ -208,7 +227,6 @@ class TestCaptureBracketed:
         capture.config.should_save_metadata.return_value = True
         capture.config.get_metadata_pattern.return_value = "test_%Y_%m_%d_%H_%M_%S_metadata.json"
         capture.config.get_resolution.return_value = [64, 48]
-        capture.config.get_quality.return_value = 85
         capture.picam2 = FakePicam2([FakeRequest(10_000, "base"), FakeRequest(2_500, "under")])
         _, metadata_path = capture.capture_bracketed(
             [10_000, 2_500],
@@ -308,10 +326,8 @@ class TestFuseFn:
         under = np.full(shape, 40, dtype=np.uint8)
         base = np.full(shape, 120, dtype=np.uint8)
         over = np.full(shape, 220, dtype=np.uint8)
-        encoded = build_fuse_fn(90)([base, under, over])
-        import cv2
-
-        decoded = cv2.imdecode(np.frombuffer(encoded, np.uint8), cv2.IMREAD_COLOR)
+        decoded = build_fuse_fn()([base, under, over])
+        assert decoded.dtype == np.uint8
         assert decoded.shape == shape
         # The fused result sits between the extremes, nearer the base.
         assert 40 < decoded.mean() < 220
@@ -322,8 +338,5 @@ class TestFuseFn:
         import numpy as np
 
         white = np.full((32, 32, 3), 255, dtype=np.uint8)
-        encoded = build_fuse_fn(90)([white, white, white])
-        import cv2
-
-        decoded = cv2.imdecode(np.frombuffer(encoded, np.uint8), cv2.IMREAD_COLOR)
+        decoded = build_fuse_fn()([white, white, white])
         assert decoded.min() > 200  # no wrapped-to-black pixels

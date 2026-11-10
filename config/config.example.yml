@@ -20,7 +20,8 @@ location:
   timezone: Europe/Oslo
 
 output:
-  # Frames land here as YYYY/MM/DD/<project_name>_<timestamp>.jpg.
+  # Frames land here as YYYY/MM/DD/<project_name>_<timestamp>.jpg
+  # (.jxl with format: jxl, see docs/CONFIG-REFERENCE.yml).
   # Must exist and be writable by the service user.
   directory: /var/www/html/images
   # Used in every filename, so pick something without spaces.

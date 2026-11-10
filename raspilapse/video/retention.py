@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from raspilapse import codecs
 from raspilapse.config import get_db_path
 from raspilapse.logging_setup import get_logger
 
@@ -35,8 +36,8 @@ def _video_patterns(project_name: str) -> tuple:
     """
     return (
         f"{project_name}_*.mp4",
-        f"keogram_{project_name}_*.jpg",
-        f"slitscan_{project_name}_*.jpg",
+        *(f"keogram_{project_name}_*{suffix}" for suffix in codecs.FRAME_SUFFIXES),
+        *(f"slitscan_{project_name}_*{suffix}" for suffix in codecs.FRAME_SUFFIXES),
     )
 
 

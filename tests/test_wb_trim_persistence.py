@@ -28,9 +28,8 @@ def make_timelapse(tmp_path, enabled=True, state=None):
         },
         "output": {
             "directory": str(tmp_path / "photos"),
-            "filename_pattern": "{name}_{counter}.jpg",
+            "filename_pattern": "{name}_{counter}",
             "project_name": "test_project",
-            "quality": 85,
         },
         "system": {"create_directories": False, "save_metadata": False},
         "overlay": {"enabled": False},

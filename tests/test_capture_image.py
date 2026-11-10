@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
+from PIL import Image
 
 from raspilapse.camera.capture import CameraConfig, ImageCapture, capture_single_image
 
@@ -29,6 +30,8 @@ def mock_picamera2():
     mock_request = MagicMock()
     mock_request.get_metadata.return_value = {"test": "metadata"}
     mock_request.save.return_value = None
+    # A real image, so the codec writes a real file
+    mock_request.make_image.return_value = Image.new("RGB", (64, 48), (90, 120, 150))
     mock_request.release.return_value = None
     mock_camera.capture_request.return_value = mock_request
 
@@ -58,9 +61,8 @@ def test_config_file():
         },
         "output": {
             "directory": "test_photos",
-            "filename_pattern": "{name}_{counter}.jpg",
+            "filename_pattern": "{name}_{counter}",
             "project_name": "test_project",
-            "quality": 85,
             "organize_by_date": False,
             "date_format": "%Y-%m-%d",
             "symlink_latest": {"enabled": False, "path": "/tmp/test_status.jpg"},
@@ -126,17 +128,18 @@ class TestCameraConfig:
     def test_get_filename_pattern(self, test_config_file):
         """Test filename pattern retrieval."""
         config = CameraConfig(test_config_file)
-        assert config.get_filename_pattern() == "{name}_{counter}.jpg"
+        assert config.get_filename_pattern() == "{name}_{counter}"
 
     def test_get_project_name(self, test_config_file):
         """Test project name retrieval."""
         config = CameraConfig(test_config_file)
         assert config.get_project_name() == "test_project"
 
-    def test_get_quality(self, test_config_file):
-        """Test quality setting retrieval."""
+    def test_get_codec(self, test_config_file):
+        """No output.format in the file: the default, JPEG at quality 85."""
         config = CameraConfig(test_config_file)
-        assert config.get_quality() == 85
+        assert config.get_codec().name == "jpeg"
+        assert config.get_codec().options["quality"] == 85
 
     def test_should_create_directories(self, test_config_file):
         """Test directory creation flag."""
@@ -319,9 +322,8 @@ class TestDateOrganization:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "{name}_{counter}.jpg",
+                "filename_pattern": "{name}_{counter}",
                 "project_name": "test_project",
-                "quality": 85,
                 "organize_by_date": True,
                 "date_format": "%Y/%m/%d",
                 "symlink_latest": {"enabled": False, "path": "/tmp/test_status.jpg"},
@@ -390,9 +392,8 @@ class TestDateOrganization:
                 },
                 "output": {
                     "directory": test_output_dir,
-                    "filename_pattern": "test.jpg",
+                    "filename_pattern": "test",
                     "project_name": "test",
-                    "quality": 85,
                     "organize_by_date": True,
                     "date_format": date_format,
                     "symlink_latest": {"enabled": False},
@@ -451,9 +452,8 @@ class TestIntegration:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test_{counter}.jpg",
+                "filename_pattern": "test_{counter}",
                 "project_name": "integration_test",
-                "quality": 85,
             },
             "system": {
                 "create_directories": True,
@@ -664,9 +664,8 @@ class TestOutputPath:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test_%Y%m%d_%H%M%S.jpg",
+                "filename_pattern": "test_%Y%m%d_%H%M%S",
                 "project_name": "test",
-                "quality": 85,
                 "organize_by_date": False,
                 "symlink_latest": {"enabled": False},
             },
@@ -709,9 +708,8 @@ class TestOutputPath:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "{name}_photo.jpg",
+                "filename_pattern": "{name}_photo",
                 "project_name": "myproject",
-                "quality": 85,
                 "organize_by_date": False,
                 "symlink_latest": {"enabled": False},
             },
@@ -755,9 +753,8 @@ class TestMetadataDisabled:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test.jpg",
+                "filename_pattern": "test",
                 "project_name": "test",
-                "quality": 85,
                 "organize_by_date": False,
                 "symlink_latest": {"enabled": False},
             },
@@ -804,9 +801,8 @@ class TestOverlayIntegration:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test.jpg",
+                "filename_pattern": "test",
                 "project_name": "test",
-                "quality": 85,
                 "organize_by_date": False,
                 "symlink_latest": {"enabled": False},
             },
@@ -862,9 +858,8 @@ class TestOverlayIntegration:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test_%Y%m%d.jpg",
+                "filename_pattern": "test_%Y%m%d",
                 "project_name": "test",
-                "quality": 85,
             },
             "system": {"create_directories": True, "save_metadata": False},
         }
@@ -898,9 +893,8 @@ class TestBrightnessComputationBasics:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test.jpg",
+                "filename_pattern": "test",
                 "project_name": "test",
-                "quality": 85,
                 "organize_by_date": False,
             },
             "system": {
@@ -977,9 +971,8 @@ class TestSaveMetadata:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test.jpg",
+                "filename_pattern": "test",
                 "project_name": "test",
-                "quality": 85,
                 "organize_by_date": False,
             },
             "system": {
@@ -1066,9 +1059,8 @@ class TestUpdateControls:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test.jpg",
+                "filename_pattern": "test",
                 "project_name": "test",
-                "quality": 85,
                 "organize_by_date": False,
             },
             "system": {
@@ -1125,9 +1117,8 @@ class TestControlMapping:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test.jpg",
+                "filename_pattern": "test",
                 "project_name": "test",
-                "quality": 85,
                 "organize_by_date": False,
             },
             "system": {
@@ -1211,9 +1202,8 @@ class TestContextManager:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test.jpg",
+                "filename_pattern": "test",
                 "project_name": "test",
-                "quality": 85,
                 "organize_by_date": False,
             },
             "system": {
@@ -1258,9 +1248,8 @@ class TestSymlinkLatest:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test_{timestamp}.jpg",
+                "filename_pattern": "test_{timestamp}",
                 "project_name": "test",
-                "quality": 85,
                 "organize_by_date": False,
                 "symlink_latest": {
                     "enabled": True,
@@ -1308,9 +1297,8 @@ class TestCameraConfigEdgeCases:
             },
             "output": {
                 "directory": test_output_dir,
-                "filename_pattern": "test.jpg",
+                "filename_pattern": "test",
                 "project_name": "test",
-                "quality": 85,
                 "organize_by_date": False,
             },
             "system": {
@@ -1608,6 +1596,104 @@ class TestCameraInitializationErrors:
         # Verify resolution is in the config
         res = config.config.get("camera", {}).get("resolution")
         assert res == [1280, 720]
+
+
+def _frame_config(tmp_path, **output):
+    """A config file writing into tmp_path, with output keys overridden."""
+    config_path = tmp_path / "config.yml"
+    out = {
+        "directory": str(tmp_path / "frames"),
+        "project_name": "cam",
+        "filename_pattern": "{name}_{counter}",
+        "organize_by_date": False,
+    }
+    out.update(output)
+    config_path.write_text(
+        yaml.dump({"output": out, "system": {"metadata_folder": str(tmp_path / "meta")}})
+    )
+    return str(config_path)
+
+
+class TestFrameFormat:
+    """output.format picks the codec; the frame carries the camera's EXIF."""
+
+    METADATA = {"ExposureTime": 10_000, "AnalogueGain": 2.0, "DigitalGain": 1.0}
+
+    def _capture(self, mock_picamera2, config_path, **kwargs):
+        mock_picamera2.camera_properties = {"Model": "imx708"}
+        mock_picamera2.capture_request.return_value.get_metadata.return_value = dict(self.METADATA)
+        capture = ImageCapture(CameraConfig(config_path))
+        capture.initialize_camera()
+        return capture.capture(**kwargs)
+
+    @staticmethod
+    def _exif(path):
+        from raspilapse.codecs import open_frame
+
+        with open_frame(path) as image:
+            exif = image.getexif()
+            return image.format, exif, exif.get_ifd(0x8769)
+
+    def test_default_is_jpeg_with_exif(self, mock_picamera2, tmp_path):
+        image_path, metadata_path = self._capture(mock_picamera2, _frame_config(tmp_path))
+        assert image_path.endswith("cam_0000.jpg")
+        fmt, exif, camera = self._exif(image_path)
+        assert fmt == "JPEG"
+        assert exif[0x0110] == "imx708"
+        assert float(camera[0x829A]) == pytest.approx(0.01)
+        assert camera[0x8827] == 200
+        assert 0x9011 in camera, "the UTC offset is recorded"
+
+    def test_jxl_writes_jpeg_xl_with_exif(self, mock_picamera2, tmp_path):
+        pytest.importorskip("pillow_jxl")
+        config_path = _frame_config(tmp_path, format="jxl", jxl={"effort": 1})
+        image_path, _ = self._capture(mock_picamera2, config_path)
+        assert image_path.endswith("cam_0000.jxl")
+        fmt, exif, camera = self._exif(image_path)
+        assert fmt == "JXL"
+        assert exif[0x0110] == "imx708"
+        assert camera[0x8827] == 200
+
+    def test_sidecar_records_the_format_and_its_tuning(self, mock_picamera2, tmp_path):
+        config_path = _frame_config(tmp_path, jpeg={"quality": 70, "subsampling": "4:4:4"})
+        _, metadata_path = self._capture(mock_picamera2, config_path)
+        with open(metadata_path) as f:
+            image_format = json.load(f)["image_format"]
+        assert image_format["format"] == "jpeg"
+        assert image_format["quality"] == 70
+        assert image_format["subsampling"] == "4:4:4"
+        assert "quality" not in json.load(open(metadata_path))
+
+    def test_a_custom_path_is_written_in_its_own_format(self, mock_picamera2, tmp_path):
+        pytest.importorskip("pillow_jxl")
+        target = tmp_path / "custom.jxl"
+        image_path, _ = self._capture(
+            mock_picamera2, _frame_config(tmp_path), output_path=str(target)
+        )
+        assert self._exif(image_path)[0] == "JXL"
+
+    def test_stale_output_quality_stops_startup(self, tmp_path):
+        with pytest.raises(ValueError, match="output.quality is no longer read"):
+            CameraConfig(_frame_config(tmp_path, quality=85))
+
+    def test_a_pattern_with_an_extension_stops_startup(self, tmp_path):
+        with pytest.raises(ValueError, match="ends in '.jpg'"):
+            CameraConfig(_frame_config(tmp_path, filename_pattern="{name}_{counter}.jpg"))
+
+    def test_an_unknown_format_stops_startup(self, tmp_path):
+        with pytest.raises(ValueError, match="output.format is 'webp'; supported: jpeg, jxl"):
+            CameraConfig(_frame_config(tmp_path, format="webp"))
+
+    def test_a_typo_in_an_unselected_block_stops_startup(self, tmp_path):
+        with pytest.raises(ValueError, match="output.jxl has unknown setting 'efort'"):
+            CameraConfig(_frame_config(tmp_path, jxl={"efort": 3}))
+
+    def test_jxl_without_its_plugin_stops_startup(self, tmp_path, monkeypatch):
+        import sys
+
+        monkeypatch.setitem(sys.modules, "pillow_jxl", None)
+        with pytest.raises(RuntimeError, match="pip3 install --break-system-packages"):
+            CameraConfig(_frame_config(tmp_path, format="jxl"))
 
 
 if __name__ == "__main__":

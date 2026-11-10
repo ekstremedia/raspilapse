@@ -237,12 +237,22 @@ class TestPostProcessComposition:
         monkeypatch.setattr(
             tonemap,
             "tone_map_file",
-            lambda path, strength, quality: seen.update(
-                path=path, strength=strength, quality=quality
+            lambda path, strength, codec: seen.update(
+                path=path, strength=strength, codec=codec.describe()
             )
             or True,
         )
-        dr = DynamicRange.from_config(make_config(method="tone_map", tone_map={"strength": 0.8}))
-        result = dr.build_post_process({"output": {"quality": 92}})("/tmp/frame.jpg", {}, "day")
-        assert result is True
-        assert seen == {"path": "/tmp/frame.jpg", "strength": 0.8, "quality": 92}
+        config = make_config(method="tone_map", tone_map={"strength": 0.8})
+        config["output"] = {"jpeg": {"quality": 92}, "jxl": {"effort": 3}}
+        dr = DynamicRange.from_config(config)
+        chain = dr.build_post_process(config)
+        assert chain("/tmp/frame.jpg", {}, "day") is True
+        assert seen["path"] == "/tmp/frame.jpg"
+        assert seen["strength"] == 0.8
+        assert seen["codec"]["format"] == "jpeg"
+        assert seen["codec"]["quality"] == 92
+
+        # The frame's own extension picks the codec, tuned from its block.
+        assert chain("/tmp/frame.jxl", {}, "day") is True
+        assert seen["codec"]["format"] == "jxl"
+        assert seen["codec"]["effort"] == 3

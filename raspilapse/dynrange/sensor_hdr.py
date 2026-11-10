@@ -21,6 +21,8 @@ import subprocess
 import tempfile
 from typing import Optional, Tuple
 
+from raspilapse.codecs import FrameCodec, open_frame
+from raspilapse.codecs import exif as frame_exif
 from raspilapse.logging_setup import get_logger
 
 logger = get_logger("dynrange")
@@ -107,7 +109,7 @@ def hdr_main_size(configured: Tuple[int, int]) -> Tuple[int, int]:
     return (int(width * scale) // 2 * 2, int(height * scale) // 2 * 2)
 
 
-def upscale_to(image_path: str, size: Tuple[int, int], quality: int = 85) -> bool:
+def upscale_to(image_path: str, size: Tuple[int, int], codec: FrameCodec) -> bool:
     """Resize a frame up to the configured size, atomically, in place.
 
     Runs before the overlay is drawn so its text stays crisp, and before
@@ -116,6 +118,8 @@ def upscale_to(image_path: str, size: Tuple[int, int], quality: int = 85) -> boo
     and mixed sizes corrupt the encode. A frame already at (or above) the
     target passes through untouched, which is what night frames do when
     HDR is off and capture runs at the configured size natively.
+
+    The rewrite uses the frame's own codec and carries its EXIF over.
     """
     try:
         from PIL import Image
@@ -126,18 +130,19 @@ def upscale_to(image_path: str, size: Tuple[int, int], quality: int = 85) -> boo
     target = (int(size[0]), int(size[1]))
     tmp_path: Optional[str] = None
     try:
-        with Image.open(image_path) as image:
+        with open_frame(image_path) as image:
             if image.size[0] >= target[0] and image.size[1] >= target[1]:
                 return True
+            exif = frame_exif.read(image)
             resized = image.resize(target, Image.LANCZOS)
 
         out_dir = os.path.dirname(os.path.abspath(image_path))
-        tmp_fd, tmp_path = tempfile.mkstemp(prefix=".upscale-", suffix=".jpg", dir=out_dir)
+        tmp_fd, tmp_path = tempfile.mkstemp(prefix=".upscale-", suffix=codec.suffix, dir=out_dir)
         # mkstemp's 0600 would ride os.replace onto a frame the webserver
         # answers 403 for.
         os.fchmod(tmp_fd, 0o644)
         with os.fdopen(tmp_fd, "wb") as f:
-            resized.save(f, "JPEG", quality=int(quality))
+            codec.save(resized, f, exif)
         os.replace(tmp_path, image_path)
         tmp_path = None
         logger.debug(f"Upscaled {image_path} to {target[0]}x{target[1]}")

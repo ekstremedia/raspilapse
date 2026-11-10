@@ -177,7 +177,7 @@ When you specify start and end times, the script calculates the datetime range:
 
 The script searches for images:
 1. Looks in date-organized directories (`/var/www/html/images/YYYY/MM/DD/`)
-2. Matches filename pattern: `{project_name}_YYYY_MM_DD_HH_MM_SS.jpg`
+2. Matches filename pattern: `{project_name}_YYYY_MM_DD_HH_MM_SS.jpg` or `.jxl` (both, so a day that changed `output.format` renders whole; `.jxl` frames need an ffmpeg built with libjxl)
 3. Parses timestamps from filenames
 4. Filters images within the specified time range
 5. Sorts images chronologically
@@ -498,6 +498,12 @@ python3 -m raspilapse.video.keogram --dir /path/to/images --no-crop
 
 Keograms are saved alongside videos:
 - `/var/www/html/videos/2025/12/keogram_kringelen_2025-12-24_0500_to_2025-12-25_0500.jpg`
+
+Keograms and slitscans read frames of every format and are written in
+`video.keogram.format` (`jpeg` at quality 95 by default; `jxl` gives `.jxl`
+files), tuned in the block named after it. The standalone tool takes
+`--format` and `--quality`, or picks the format from the extension of
+`--output`.
 
 ## Slitscan Generation
 

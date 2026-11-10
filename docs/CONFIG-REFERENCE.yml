@@ -79,17 +79,58 @@ output:
   # - {counter} - Sequential counter (4 digits, zero-padded)
   # - {name} - Project name
   # You can also use strftime directives like %Y%m%d_%H%M%S
-  filename_pattern: "{name}_%Y_%m_%d_%H_%M_%S.jpg"
+  # No extension: output.format adds it (.jpg, .jxl). A pattern that still
+  # ends in one stops the camera at startup with a message saying so.
+  filename_pattern: "{name}_%Y_%m_%d_%H_%M_%S"
 
   # Project name (used in filename)
   project_name: "timelapse"
 
-  # Image quality (0-100, JPEG compression; 85 is also the code default)
-  # Higher = better quality, larger files
-  quality: 85
+  # Image format every frame is written in: jpeg or jxl (JPEG XL).
+  # Each format is tuned in the block named after it, below; only the
+  # selected one is used, but every block present is checked at startup.
+  # The overlay and the dynamic_range stages rewrite a frame in the format
+  # its extension names, with the same block's tuning, and carry its EXIF
+  # (camera model, capture time and UTC offset, exposure time, ISO) along.
+  #
+  # jxl needs pillow-jxl-plugin, which apt does not ship:
+  #   pip3 install --break-system-packages pillow-jxl-plugin
+  # The daily video then needs an ffmpeg built with libjxl (Debian's is).
+  # Browsers show JPEG XL unevenly, so a webserver serving frames, or
+  # output.symlink_latest, may want jpeg.
+  #
+  # output.quality is no longer read: quality is set per format, because
+  # each format's scale is its own (JPEG 85 and JPEG XL 85 differ).
+  format: jpeg
+
+  jpeg:
+    # 1-100. Above ~95 the file grows fast for no visible gain.
+    quality: 85
+    # Chroma resolution: "4:4:4", "4:2:2" or "4:2:0". 4:4:4 keeps coloured
+    # edges (overlay text, wires against sky) sharp at roughly 15-25% more
+    # bytes than 4:2:0.
+    subsampling: "4:2:0"
+    # Coarse-to-fine rendering in a browser, usually a few percent smaller,
+    # a little slower to encode.
+    progressive: false
+    # An extra Huffman-table pass: a few percent smaller, slower encode.
+    optimize: false
+
+  jxl:
+    # 1-100 on libjxl's own scale; 90 is about "visually lossless".
+    quality: 90
+    # 1 fastest and largest .. 9 slowest and smallest. On a Pi this decides
+    # whether a 4K frame encodes within the capture interval -- measure
+    # before trusting the default with a short interval or with fusion.
+    effort: 7
+    # Mathematically lossless; quality is ignored, files grow several-fold.
+    lossless: false
+    # 0 smallest file .. 4 fastest decode. The video and keogram jobs decode
+    # every frame of the day again.
+    decoding_speed: 0
 
   # Create subdirectories by date (YEAR/MONTH/DAY structure)
-  # When enabled, images are organized as: directory/YYYY/MM/DD/filename.jpg
+  # When enabled, images are organized as: directory/YYYY/MM/DD/filename.<ext>
   # Example: /var/www/html/images/2025/11/05/kringelen_2025_11_05_14_30_00.jpg
   organize_by_date: true
 
@@ -102,7 +143,7 @@ output:
     enabled: true
     path: "/var/www/html/status.jpg"
 
-  # Keep every Nth frame's raw negative (.dng, ~15 MB) beside its JPEG, for
+  # Keep every Nth frame's raw negative (.dng, ~15 MB) beside its frame, for
   # hand-developing special frames in a desktop raw workflow. The cap prunes
   # the oldest negatives so the collection plateaus at max_files. Works with
   # any dynamic_range.method except sensor_hdr (its merged binned mode has
@@ -132,6 +173,18 @@ video:
   # Video filenames are not configurable: {project}_{date}_{HHMM}-{HHMM}.mp4
   # for a same-day window, {project}_{start}_to_{end}.mp4 across days.
   # Keograms and slitscans carry the same stem behind keogram_/slitscan_.
+
+  # Keogram and slitscan images (one per day; see docs/TIMELAPSE_VIDEO.md).
+  # They read frames of every format; this sets the format they are written
+  # in, tuned like output's blocks. jpeg by default because they are
+  # uploaded beside the video and browsers show JPEG XL unevenly.
+  keogram:
+    format: jpeg
+    jpeg:
+      quality: 95
+      optimize: true
+    # jxl:
+    #   quality: 90
 
   # Video codec settings
   codec:

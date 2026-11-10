@@ -1,4 +1,4 @@
-"""Tone mapping: redistribute what the captured JPEG already holds.
+"""Tone mapping: redistribute what the captured frame already holds.
 
 Luminance-only CLAHE, blended into the original at a configurable strength.
 One pass gives both shadow lift and local contrast with a single meaningful
@@ -16,12 +16,17 @@ into something worse than the crushed shadows were.
 cv2 is imported inside the function: it costs over a second on a Pi, CI does
 not have it, and the config seam has already verified it exists before any
 frame gets here.
+
+The frame is read and written through Pillow and the frame's own codec, so
+it keeps its format and its EXIF; OpenCV only does the pixel work.
 """
 
 import os
 import tempfile
 from typing import Optional
 
+from raspilapse.codecs import FrameCodec, open_frame
+from raspilapse.codecs import exif as frame_exif
 from raspilapse.logging_setup import get_logger
 
 logger = get_logger("dynrange")
@@ -49,13 +54,18 @@ def effective_strength(strength: float, mean_luminance: float) -> float:
     return float(strength) * min(max(fade, 0.0), 1.0)
 
 
-def tone_map_file(image_path: str, strength: float, quality: int = 85) -> bool:
-    """Tone-map a JPEG in place. Returns True when the file was processed.
+def tone_map_file(image_path: str, strength: float, codec: FrameCodec) -> bool:
+    """Tone-map a frame in place. Returns True when the file was processed.
 
     "Processed" includes the deliberate no-ops (zero strength, a frame dark
     enough to fade to nothing): the frame is in its intended state. False
     means the frame could not be read or written; the original file is left
     untouched in that case, so a failure costs the polish, never the photo.
+
+    Args:
+        image_path: The frame, rewritten in place
+        strength: Blend of the mapped image over the original, 0-1
+        codec: The frame's format (codecs.for_path), used for the rewrite
     """
     if strength <= 0:
         return True
@@ -68,10 +78,13 @@ def tone_map_file(image_path: str, strength: float, quality: int = 85) -> bool:
 
     tmp_path: Optional[str] = None
     try:
-        image = cv2.imread(image_path, cv2.IMREAD_COLOR)
-        if image is None:
-            logger.warning(f"Tone mapping could not decode {image_path}")
-            return False
+        import numpy as np
+        from PIL import Image
+
+        with open_frame(image_path) as source:
+            exif = frame_exif.read(source)
+            # OpenCV works in B, G, R.
+            image = np.ascontiguousarray(np.asarray(source.convert("RGB"))[:, :, ::-1])
 
         lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
         luminance = lab[:, :, 0]
@@ -92,12 +105,10 @@ def tone_map_file(image_path: str, strength: float, quality: int = 85) -> bool:
         # leave a half-encoded frame, and mkstemp's 0600 would carry through
         # os.replace onto a file a webserver answers 403 for.
         out_dir = os.path.dirname(os.path.abspath(image_path))
-        tmp_fd, tmp_path = tempfile.mkstemp(prefix=".tonemap-", suffix=".jpg", dir=out_dir)
+        tmp_fd, tmp_path = tempfile.mkstemp(prefix=".tonemap-", suffix=codec.suffix, dir=out_dir)
         os.fchmod(tmp_fd, 0o644)
-        os.close(tmp_fd)
-        if not cv2.imwrite(tmp_path, blended, [cv2.IMWRITE_JPEG_QUALITY, int(quality)]):
-            logger.warning(f"Tone mapping could not encode {image_path}")
-            return False
+        with os.fdopen(tmp_fd, "wb") as f:
+            codec.save(Image.fromarray(np.ascontiguousarray(blended[:, :, ::-1])), f, exif)
         os.replace(tmp_path, image_path)
         tmp_path = None
         logger.debug(f"Tone mapped {image_path} at strength {applied:.2f}")

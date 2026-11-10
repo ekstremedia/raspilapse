@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 import yaml
 
+from raspilapse import codecs
 from raspilapse.config import merge_defaults
 from raspilapse.console import Colors
 
@@ -110,22 +111,24 @@ class StatusDisplay:
         if not output_dir.exists():
             return []
 
-        # Find all jpg files recursively
-        jpg_files = list(output_dir.rglob("*.jpg"))
+        # Find all frames recursively, in every frame format
+        frame_files = [
+            f for suffix in codecs.FRAME_SUFFIXES for f in output_dir.rglob(f"*{suffix}")
+        ]
 
         # Filter out metadata directory and symlinks
-        jpg_files = [f for f in jpg_files if "metadata" not in f.parts and not f.is_symlink()]
+        frame_files = [f for f in frame_files if "metadata" not in f.parts and not f.is_symlink()]
 
         # Sort by modification time (newest first)
-        jpg_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        frame_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
 
         # Get file info
         captures = []
-        for jpg_file in jpg_files[:limit]:
-            stat = jpg_file.stat()
+        for frame_file in frame_files[:limit]:
+            stat = frame_file.stat()
             mtime = datetime.fromtimestamp(stat.st_mtime)
             size = stat.st_size
-            captures.append((str(jpg_file), mtime, size))
+            captures.append((str(frame_file), mtime, size))
 
         return captures
 

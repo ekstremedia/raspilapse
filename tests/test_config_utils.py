@@ -114,7 +114,7 @@ class TestLoadConfig:
         config = load_config(str(p))
 
         assert config["output"]["project_name"] == "mycam", "what the file says wins"
-        assert config["output"]["quality"] == 85, "and the rest is filled in"
+        assert config["output"]["format"] == "jpeg", "and the rest is filled in"
         assert config["adaptive_timelapse"]["interval"] == 30
 
     def test_an_empty_file_still_yields_a_usable_config(self, tmp_path):

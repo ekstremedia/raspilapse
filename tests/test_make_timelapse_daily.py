@@ -74,6 +74,8 @@ class TestDefaultTwentyFourHours:
                 "directory": "videos",
                 "fps": 25,
                 "codec": {"name": "libx264", "pixel_format": "yuv420p", "crf": 20},
+                # load_config is mocked, so DEFAULTS never fill this in.
+                "keogram": {"format": "jpeg"},
             },
             "overlay": {"camera_name": "Test"},
         }

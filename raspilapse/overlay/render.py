@@ -18,6 +18,9 @@ except ImportError as e:
         "Pillow is required for overlay functionality. Install with: pip3 install Pillow"
     ) from e
 
+from raspilapse import codecs
+from raspilapse.codecs import exif as frame_exif
+from raspilapse.codecs import open_frame
 from raspilapse.config import PROJECT_ROOT
 from raspilapse.logging_setup import get_logger
 from raspilapse.overlay import formats
@@ -888,8 +891,9 @@ class ImageOverlay:
             return image_path
 
         try:
-            # Load image
-            img = Image.open(image_path)
+            # Load image, keeping its EXIF for the rewrite
+            img = open_frame(image_path)
+            exif = frame_exif.read(img)
             img_width, img_height = img.size
 
             # Calculate font size based on image height
@@ -917,14 +921,14 @@ class ImageOverlay:
             if output_path is None:
                 output_path = image_path
 
-            # 85 matches output.quality's real default; this fallback was 95,
-            # so the one path that bypasses merge_defaults re-encoded at a
-            # different quality from every other frame.
-            output_quality = self.config.get("output", {}).get("quality", 85)
+            # The output's extension names its format; the tuning comes from
+            # the output section, so an overlaid frame is encoded exactly like
+            # one written with the overlay off.
+            codec = codecs.for_path(output_path, self.config.get("output", {}))
             # Write beside the target and rename into place. Image.save opens
             # its destination "w+b", so saving in place truncates the good
             # capture first -- a failure mid-encode (ENOSPC, power loss) left
-            # a partial JPEG that was then symlinked, recorded and uploaded
+            # a partial frame that was then symlinked, recorded and uploaded
             # as if it were a frame. mkstemp, not a predictable ".tmp": two
             # runs on the same target (the daemon plus a hand-run
             # apply_overlay) must not truncate or rename each other's
@@ -937,7 +941,7 @@ class ImageOverlay:
             os.fchmod(tmp_fd, 0o644)
             os.close(tmp_fd)
             try:
-                img.save(tmp_path, format="JPEG", quality=output_quality)
+                codec.save(img, tmp_path, exif)
                 os.replace(tmp_path, output_path)
                 logger.debug(f"Overlay saved to {output_path}")
             except Exception as save_error:
