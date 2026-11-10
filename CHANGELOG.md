@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `output.format` — frames are written as `jpeg` (default) or `jxl`
+  (JPEG XL, needs `pip3 install --break-system-packages pillow-jxl-plugin`).
+  Each format is tuned in its own block: `output.jpeg` (`quality`,
+  `subsampling`, `progressive`, `optimize`) and `output.jxl` (`quality`,
+  `effort`, `lossless`, `decoding_speed`). Formats live in
+  `raspilapse/codecs/`, one class each, so another one is a class and a
+  config block. The overlay and every `dynamic_range` stage rewrite a frame
+  in the format its extension names, and the video, keogram, status,
+  upload, retention and cleanup tools find frames of every format.
+- `video.keogram.format` — the format keograms and slitscans are written in,
+  tuned the same way; defaults to the previous fixed JPEG quality 95.
+  `raspilapse.video.keogram` gains `--format`; `--quality` now overrides the
+  configured quality instead of defaulting to 95.
+- Every frame carries EXIF — camera model, capture time with its UTC offset,
+  exposure time, ISO — in every format and through the overlay and the
+  `dynamic_range` stages. picamera2 used to write it into JPEGs only, and
+  the overlay's re-encode dropped it.
+
+### Changed
+
+- **Breaking:** `output.filename_pattern` no longer ends in an extension;
+  `output.format` adds it. A pattern that still does, and a config still
+  setting `output.quality` (now `output.jpeg.quality`), stop the camera at
+  startup with a message naming the fix.
+- Frames are encoded by Pillow through the selected format instead of by
+  picamera2's `request.save()`, and the fusion, tone mapping and raw stages
+  encode through Pillow instead of OpenCV — same libjpeg, not byte-identical.
+- The metadata sidecar records `image_format` (the format and its tuning)
+  in place of `quality`.
+
 ## [1.8.0] - 2026-08-09
 
 A camera that never looks at its own colours will drift, and this one's

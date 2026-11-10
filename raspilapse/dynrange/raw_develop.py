@@ -1,11 +1,11 @@
-"""Develop the sensor's DNG instead of keeping the ISP's JPEG.
+"""Develop the sensor's DNG instead of keeping the ISP's frame.
 
 libcamera's DNGs embed the white balance and colour matrices the ISP itself
 would have used, so a libraw develop with the camera's own numbers stays
 close to the ISP's colour while skipping its 8-bit quantisation -- roughly
 two extra stops of shadow latitude from the imx708's 10-bit Bayer data.
 
-The ISP JPEG is always captured alongside and is the built-in fallback: the
+The ISP frame is always captured alongside and is the built-in fallback: the
 developed image replaces it only on success (``os.replace``), so a frame
 exists whatever happens here. Long exposures fall back deliberately --
 developing 12 megapixels on a Pi 4 costs real seconds, and a night slot has
@@ -16,6 +16,8 @@ reason the trial may prefer fusion.
 
 from typing import Optional, Tuple
 
+from raspilapse.codecs import FrameCodec, open_frame
+from raspilapse.codecs import exif as frame_exif
 from raspilapse.logging_setup import get_logger
 
 logger = get_logger("dynrange")
@@ -38,15 +40,16 @@ def should_use_raw(mode: Optional[str], exposure_s: float, interval_s: float) ->
 
 def develop_dng(
     dng_path: str,
-    out_jpg_path: str,
+    out_path: str,
     size: Tuple[int, int],
-    quality: int = 85,
+    codec: FrameCodec,
 ) -> bool:
-    """Develop a DNG over its ISP JPEG. False leaves the JPEG untouched.
+    """Develop a DNG over its ISP frame. False leaves the frame untouched.
 
     use_camera_wb and no_auto_bright keep the develop deterministic and
     anchored to what the exposure loop commanded -- auto-brightening would
-    fight the metering and flicker the timelapse.
+    fight the metering and flicker the timelapse. The developed frame is
+    written with the ISP frame's codec and takes over its EXIF.
     """
     try:
         import cv2
@@ -66,25 +69,30 @@ def develop_dng(
                 no_auto_bright=True,
                 output_bps=8,
             )
-        # rawpy hands back RGB; OpenCV encodes BGR.
-        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        del rgb
         target = (int(size[0]), int(size[1]))
-        if (bgr.shape[1], bgr.shape[0]) != target:
-            bgr = cv2.resize(bgr, target, interpolation=cv2.INTER_AREA)
+        if (rgb.shape[1], rgb.shape[0]) != target:
+            rgb = cv2.resize(rgb, target, interpolation=cv2.INTER_AREA)
 
-        out_dir = os.path.dirname(os.path.abspath(out_jpg_path))
-        tmp_fd, tmp_path = tempfile.mkstemp(prefix=".develop-", suffix=".jpg", dir=out_dir)
+        # The ISP frame carries the capture's EXIF; the develop keeps it.
+        exif = None
+        try:
+            with open_frame(out_path) as isp_frame:
+                exif = frame_exif.read(isp_frame)
+        except Exception as e:
+            logger.debug(f"No EXIF to carry over from {out_path}: {e}")
+
+        from PIL import Image
+
+        out_dir = os.path.dirname(os.path.abspath(out_path))
+        tmp_fd, tmp_path = tempfile.mkstemp(prefix=".develop-", suffix=codec.suffix, dir=out_dir)
         # mkstemp's 0600 would ride os.replace onto a frame the webserver
         # answers 403 for.
         os.fchmod(tmp_fd, 0o644)
-        os.close(tmp_fd)
-        if not cv2.imwrite(tmp_path, bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)]):
-            logger.warning(f"Raw develop could not encode {out_jpg_path}")
-            return False
-        os.replace(tmp_path, out_jpg_path)
+        with os.fdopen(tmp_fd, "wb") as f:
+            codec.save(Image.fromarray(rgb), f, exif)
+        os.replace(tmp_path, out_path)
         tmp_path = None
-        logger.debug(f"Developed {dng_path} over {out_jpg_path}")
+        logger.debug(f"Developed {dng_path} over {out_path}")
         return True
     except Exception as e:
         logger.warning(f"Raw develop failed for {dng_path}: {e}")

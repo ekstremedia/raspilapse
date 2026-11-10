@@ -611,9 +611,10 @@ class AdaptiveTimelapse:
         """
         try:
             import numpy as np
-            from PIL import Image
 
-            with Image.open(image_path) as img:
+            from raspilapse.codecs import open_frame
+
+            with open_frame(image_path) as img:
                 # Convert to grayscale for brightness analysis
                 gray = img.convert("L")
                 pixels = np.array(gray)
@@ -1054,7 +1055,7 @@ class AdaptiveTimelapse:
         try:
             metrics = capture.last_brightness_metrics
             if not metrics:
-                # No disk fallback: by now the JPEG has the overlay burned in,
+                # No disk fallback: by now the frame has the overlay burned in,
                 # and metering the info bar biases the loop toward
                 # overexposure. Given nothing, the controller holds its last
                 # measurement -- which is honest; a known-biased one is not.

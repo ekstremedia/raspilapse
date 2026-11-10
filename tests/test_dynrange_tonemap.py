@@ -9,12 +9,15 @@ import sys
 import pytest
 from PIL import Image
 
+from raspilapse.codecs import JpegCodec
 from raspilapse.dynrange.tonemap import (
     _FADE_CEILING,
     _FADE_FLOOR,
     effective_strength,
     tone_map_file,
 )
+
+JPEG = JpegCodec()
 
 
 def write_jpeg(path, color, size=(64, 48)):
@@ -54,7 +57,7 @@ class TestNoOpPaths:
         """Strength 0 must not even decode the image -- byte-identical file."""
         image = write_jpeg(tmp_path / "frame.jpg", (128, 128, 128))
         before = image.read_bytes()
-        assert tone_map_file(str(image), 0.0) is True
+        assert tone_map_file(str(image), 0.0, JPEG) is True
         assert image.read_bytes() == before
 
     def test_missing_cv2_returns_false(self, tmp_path, monkeypatch):
@@ -63,7 +66,7 @@ class TestNoOpPaths:
         image = write_jpeg(tmp_path / "frame.jpg", (128, 128, 128))
         before = image.read_bytes()
         monkeypatch.setitem(sys.modules, "cv2", None)
-        assert tone_map_file(str(image), 0.5) is False
+        assert tone_map_file(str(image), 0.5, JPEG) is False
         assert image.read_bytes() == before
 
 
@@ -76,7 +79,7 @@ class TestPixelWork:
 
     def test_output_is_a_valid_jpeg_of_the_same_size(self, tmp_path):
         image = write_jpeg(tmp_path / "frame.jpg", (180, 160, 140), size=(320, 240))
-        assert tone_map_file(str(image), 0.5) is True
+        assert tone_map_file(str(image), 0.5, JPEG) is True
         with Image.open(str(image)) as reloaded:
             assert reloaded.size == (320, 240)
             assert reloaded.format == "JPEG"
@@ -88,7 +91,7 @@ class TestPixelWork:
         image = tmp_path / "frame.jpg"
         gradient.convert("RGB").save(str(image), quality=90)
         before = image.read_bytes()
-        assert tone_map_file(str(image), 1.0) is True
+        assert tone_map_file(str(image), 1.0, JPEG) is True
         assert image.read_bytes() != before
 
     def test_night_frame_is_left_untouched(self, tmp_path):
@@ -96,24 +99,24 @@ class TestPixelWork:
         a byte-identical no-op, not a quality-losing rewrite."""
         image = write_jpeg(tmp_path / "night.jpg", (8, 8, 12))
         before = image.read_bytes()
-        assert tone_map_file(str(image), 1.0) is True
+        assert tone_map_file(str(image), 1.0, JPEG) is True
         assert image.read_bytes() == before
 
     def test_unreadable_file_returns_false(self, tmp_path):
         garbage = tmp_path / "corrupt.jpg"
         garbage.write_bytes(b"not a jpeg at all")
-        assert tone_map_file(str(garbage), 0.5) is False
+        assert tone_map_file(str(garbage), 0.5, JPEG) is False
         assert garbage.read_bytes() == b"not a jpeg at all"
 
     def test_missing_file_returns_false(self, tmp_path):
-        assert tone_map_file(str(tmp_path / "absent.jpg"), 0.5) is False
+        assert tone_map_file(str(tmp_path / "absent.jpg"), 0.5, JPEG) is False
 
     def test_no_temp_files_left_behind(self, tmp_path):
         image = write_jpeg(tmp_path / "frame.jpg", (180, 160, 140))
-        tone_map_file(str(image), 0.5)
+        tone_map_file(str(image), 0.5, JPEG)
         garbage = tmp_path / "corrupt.jpg"
         garbage.write_bytes(b"junk")
-        tone_map_file(str(garbage), 0.5)
+        tone_map_file(str(garbage), 0.5, JPEG)
         leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".tonemap-")]
         assert leftovers == []
 
@@ -122,5 +125,5 @@ class TestPixelWork:
         a webserver answers 403 for. The overlay's save learned this the
         hard way -- the tone map must not reintroduce it."""
         image = write_jpeg(tmp_path / "frame.jpg", (180, 160, 140))
-        assert tone_map_file(str(image), 0.5) is True
+        assert tone_map_file(str(image), 0.5, JPEG) is True
         assert image.stat().st_mode & 0o644 == 0o644

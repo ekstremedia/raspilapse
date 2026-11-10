@@ -40,9 +40,11 @@ DEFAULTS: Dict = {
     },
     "output": {
         "directory": "images",
-        "filename_pattern": "{name}_%Y_%m_%d_%H_%M_%S.jpg",
+        # No extension: output.format supplies it. Each format's tuning
+        # (output.jpeg, output.jxl, ...) defaults in its codec class.
+        "filename_pattern": "{name}_%Y_%m_%d_%H_%M_%S",
+        "format": "jpeg",
         "project_name": "timelapse",
-        "quality": 85,
         "organize_by_date": True,
         "date_format": "%Y/%m/%d",
     },
@@ -64,6 +66,9 @@ DEFAULTS: Dict = {
         "directory": "videos",
         "fps": 25,
         "codec": {"name": "libx264", "pixel_format": "yuv420p"},
+        # Keogram and slitscan. quality 95 and optimize were hard-coded
+        # before the format became configurable; they stay the default.
+        "keogram": {"format": "jpeg", "jpeg": {"quality": 95, "optimize": True}},
     },
     "logging": {},
 }

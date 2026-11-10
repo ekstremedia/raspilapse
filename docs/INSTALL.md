@@ -53,6 +53,7 @@ as unavailable; nothing else changes.
 | `pip3 install --break-system-packages 'astral>=3.2'` | sun elevation recorded with each frame, for the database and the solar graphs |
 | `sudo apt install -y python3-requests python3-requests-toolbelt` | uploading the daily video |
 | `sudo apt install -y python3-matplotlib` | `scripts/db_graphs.py` and `scripts/graph_solar_patterns.py` |
+| `pip3 install --break-system-packages pillow-jxl-plugin` | JPEG XL frames (`output.format: jxl`) |
 
 `./scripts/install.sh --check` lists which of these you have and what each
 missing one would give you.

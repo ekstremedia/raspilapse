@@ -18,6 +18,7 @@ from typing import List, Tuple
 
 import yaml
 
+from raspilapse import codecs
 from raspilapse.config import load_config as _load_config
 from raspilapse.console import Colors, print_info, print_section, print_subsection
 from raspilapse.logging_setup import configure_logging, get_logger
@@ -98,12 +99,17 @@ def find_images_in_range(
             search_dir = base_path
 
         if search_dir.exists():
-            # Find all images for this date
-            pattern = f"{project_name}_{current_date.strftime('%Y_%m_%d')}_*.jpg"
-            for img_path in search_dir.glob(pattern):
+            # Find all images for this date, in every frame format
+            stem = f"{project_name}_{current_date.strftime('%Y_%m_%d')}_*"
+            candidates = [
+                img_path
+                for suffix in codecs.FRAME_SUFFIXES
+                for img_path in search_dir.glob(f"{stem}{suffix}")
+            ]
+            for img_path in candidates:
                 # Parse timestamp from filename
                 try:
-                    # Extract timestamp from filename: project_YYYY_MM_DD_HH_MM_SS.jpg
+                    # Extract timestamp from filename: project_YYYY_MM_DD_HH_MM_SS.<ext>
                     parts = img_path.stem.split("_")
                     if len(parts) >= 6:
                         img_datetime = datetime(
@@ -716,24 +722,33 @@ Examples:
     keogram_success = True
     slitscan_success = True
 
+    # Keogram and slitscan share one format, chosen by video.keogram.format.
+    slices_codec = None
+    if not args.no_keogram or args.slitscan:
+        try:
+            slices_codec = codecs.from_config(config["video"]["keogram"], "video.keogram")
+            slices_codec.require()
+        except (ValueError, RuntimeError) as e:
+            print(Colors.error(f"✗ {e}"))
+            logger.error(str(e))
+            return 1
+
     keogram_file = None
     if not args.no_keogram:
-        # Generate keogram filename (same as video but with keogram_ prefix and .jpg)
+        # Generate keogram filename (same as video but with keogram_ prefix)
         if args.keogram_only and args.output:
-            # Ensure .jpg extension for keogram
-            custom_output = Path(args.output)
-            if custom_output.suffix.lower() != ".jpg":
-                custom_output = custom_output.with_suffix(".jpg")
+            # The extension is the keogram format's, whatever --output says
+            custom_output = Path(args.output).with_suffix(slices_codec.suffix)
             keogram_file = video_path / custom_output.name
         else:
             # Always the keogram_ prefix: it is the shape daily.py's upload
             # globs and retention's patterns recognise. (An old _daily_ rename
             # branch produced names neither of them matched.)
-            keogram_file = video_path / f"keogram_{output_file.stem}.jpg"
+            keogram_file = video_path / f"keogram_{output_file.stem}{slices_codec.suffix}"
 
     slitscan_file = None
     if args.slitscan:
-        slitscan_file = video_path / f"slitscan_{output_file.stem}.jpg"
+        slitscan_file = video_path / f"slitscan_{output_file.stem}{slices_codec.suffix}"
 
     if keogram_file or slitscan_file:
         wanted = [
@@ -746,7 +761,7 @@ Examples:
             images,
             keogram_path=keogram_file,
             slitscan_path=slitscan_file,
-            quality=95,
+            codec=slices_codec,
             crop_top_percent=7.0,  # Crop overlay bar (2 lines + padding)
             logger=logger,
         )

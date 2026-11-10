@@ -30,9 +30,8 @@ def capture():
         },
         "output": {
             "directory": "test_photos",
-            "filename_pattern": "{name}_{counter}.jpg",
+            "filename_pattern": "{name}_{counter}",
             "project_name": "test_project",
-            "quality": 85,
             "organize_by_date": False,
             "date_format": "%Y-%m-%d",
         },

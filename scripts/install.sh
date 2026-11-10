@@ -75,6 +75,7 @@ declare -A PY_OPTIONAL=(
     [requests]="video upload           sudo apt install -y python3-requests"
     [requests_toolbelt]="streamed upload        sudo apt install -y python3-requests-toolbelt"
     [matplotlib]="scripts/db_graphs.py   sudo apt install -y python3-matplotlib"
+    [pillow_jxl]="JPEG XL frames         pip3 install --break-system-packages pillow-jxl-plugin"
 )
 
 components=()

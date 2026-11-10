@@ -25,9 +25,8 @@ def test_config_file():
         },
         "output": {
             "directory": "test_photos",
-            "filename_pattern": "{name}_{counter}.jpg",
+            "filename_pattern": "{name}_{counter}",
             "project_name": "test_project",
-            "quality": 85,
             "symlink_latest": {"enabled": True, "path": "/tmp/test_status.jpg"},
         },
         "system": {
@@ -1202,9 +1201,8 @@ def direct_control_config_file():
         },
         "output": {
             "directory": "test_photos",
-            "filename_pattern": "{name}_{counter}.jpg",
+            "filename_pattern": "{name}_{counter}",
             "project_name": "test_project",
-            "quality": 85,
         },
         "system": {"create_directories": True, "save_metadata": False},
         "overlay": {"enabled": False},

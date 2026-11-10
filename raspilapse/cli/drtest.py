@@ -136,9 +136,9 @@ def light_mode_for(exposure_us: int) -> str:
 
 def brightness_stats(image_path: str) -> Tuple[float, float, float]:
     """Mean, p5 and p95 of the frame's luminance, for the summary table."""
-    from PIL import Image
+    from raspilapse.codecs import open_frame
 
-    with Image.open(image_path) as image:
+    with open_frame(image_path) as image:
         histogram = image.convert("L").histogram()
     total = sum(histogram)
     if total == 0:
@@ -177,7 +177,7 @@ def run_method(
     camera_config = CameraConfig(config_path)
     camera_config.config["output"]["directory"] = str(outdir)
     camera_config.config["output"]["organize_by_date"] = False
-    camera_config.config["output"]["filename_pattern"] = f"{stamp}_{token.replace('+', '_')}.jpg"
+    camera_config.config["output"]["filename_pattern"] = f"{stamp}_{token.replace('+', '_')}"
     camera_config.config["system"][
         "metadata_filename"
     ] = f"{stamp}_{token.replace('+', '_')}_metadata.json"

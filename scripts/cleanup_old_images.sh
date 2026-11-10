@@ -53,14 +53,19 @@ fi
 
 log "Starting automatic cleanup of images older than $KEEP_DAYS days..."
 
+# Every extension raspilapse writes frames with (raspilapse/codecs: one per
+# format). A format added there must be added here too, or its frames are
+# never cleaned up.
+FRAME_NAMES=( \( -name "*.jpg" -o -name "*.jxl" \) )
+
 # Count files before cleanup
-BEFORE_COUNT=$(find "$IMAGE_DIR" -name "*.jpg" -type f | wc -l)
+BEFORE_COUNT=$(find "$IMAGE_DIR" "${FRAME_NAMES[@]}" -type f | wc -l)
 BEFORE_SIZE=$(du -sh "$IMAGE_DIR" 2>/dev/null | cut -f1)
 
 log "Before cleanup: $BEFORE_COUNT images, total size: $BEFORE_SIZE"
 
-# Delete old JPG images
-DELETED_IMAGES=$(find "$IMAGE_DIR" -name "*.jpg" -type f -mtime +$KEEP_DAYS -delete -print | wc -l)
+# Delete old images
+DELETED_IMAGES=$(find "$IMAGE_DIR" "${FRAME_NAMES[@]}" -type f -mtime +$KEEP_DAYS -delete -print | wc -l)
 log "Deleted $DELETED_IMAGES old images"
 
 # Delete old metadata JSON files
@@ -72,7 +77,7 @@ DELETED_DIRS=$(find "$IMAGE_DIR" -type d -empty -delete -print 2>/dev/null | wc 
 log "Deleted $DELETED_DIRS empty directories"
 
 # Count files after cleanup
-AFTER_COUNT=$(find "$IMAGE_DIR" -name "*.jpg" -type f | wc -l)
+AFTER_COUNT=$(find "$IMAGE_DIR" "${FRAME_NAMES[@]}" -type f | wc -l)
 AFTER_SIZE=$(du -sh "$IMAGE_DIR" 2>/dev/null | cut -f1)
 
 log "After cleanup: $AFTER_COUNT images, total size: $AFTER_SIZE"

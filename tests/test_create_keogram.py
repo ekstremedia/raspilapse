@@ -20,6 +20,7 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
+from raspilapse.codecs import JpegCodec
 from raspilapse.video.keogram import (
     Colors,
     create_keogram,
@@ -29,6 +30,9 @@ from raspilapse.video.keogram import (
     print_info,
     print_section,
 )
+
+# What the daily job writes by default (video.keogram.jpeg).
+KEOGRAM = JpegCodec({"quality": 95, "optimize": True})
 
 
 @pytest.fixture
@@ -209,7 +213,7 @@ class TestCreateKeogram:
     def test_create_keogram_basic(self, sample_images, temp_dir):
         """Test basic keogram creation."""
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram(sample_images, output_path)
+        result = create_keogram(sample_images, output_path, KEOGRAM)
 
         assert result is True
         assert output_path.exists()
@@ -228,7 +232,7 @@ class TestCreateKeogram:
     def test_create_keogram_empty_list(self, temp_dir, capsys):
         """Test keogram creation with empty image list."""
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram([], output_path)
+        result = create_keogram([], output_path, KEOGRAM)
 
         assert result is False
         assert not output_path.exists()
@@ -241,7 +245,7 @@ class TestCreateKeogram:
         logger = logging.getLogger("test")
 
         with patch.object(logger, "info") as mock_info:
-            result = create_keogram(sample_images, output_path, logger=logger)
+            result = create_keogram(sample_images, output_path, KEOGRAM, logger=logger)
 
         assert result is True
         assert mock_info.called
@@ -251,8 +255,8 @@ class TestCreateKeogram:
         low_quality = temp_dir / "low_quality.jpg"
         high_quality = temp_dir / "high_quality.jpg"
 
-        create_keogram(sample_images, low_quality, quality=50)
-        create_keogram(sample_images, high_quality, quality=95)
+        create_keogram(sample_images, low_quality, JpegCodec({"quality": 50}))
+        create_keogram(sample_images, high_quality, JpegCodec({"quality": 95}))
 
         # Higher quality should produce larger file
         assert high_quality.stat().st_size > low_quality.stat().st_size
@@ -261,7 +265,7 @@ class TestCreateKeogram:
         """Test keogram without cropping."""
         output_path = temp_dir / "keogram.jpg"
         result = create_keogram(
-            sample_images, output_path, crop_top_percent=0.0, crop_bottom_percent=0.0
+            sample_images, output_path, KEOGRAM, crop_top_percent=0.0, crop_bottom_percent=0.0
         )
 
         assert result is True
@@ -274,7 +278,7 @@ class TestCreateKeogram:
         """Test keogram with bottom crop."""
         output_path = temp_dir / "keogram.jpg"
         result = create_keogram(
-            sample_images, output_path, crop_top_percent=7.0, crop_bottom_percent=5.0
+            sample_images, output_path, KEOGRAM, crop_top_percent=7.0, crop_bottom_percent=5.0
         )
 
         assert result is True
@@ -291,7 +295,7 @@ class TestCreateKeogram:
     ):
         """Test keogram handles images with different resolutions."""
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram(sample_images_varying_resolutions, output_path)
+        result = create_keogram(sample_images_varying_resolutions, output_path, KEOGRAM)
 
         assert result is True
 
@@ -306,7 +310,7 @@ class TestCreateKeogram:
         invalid_path.write_bytes(b"not an image")
 
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram([invalid_path], output_path)
+        result = create_keogram([invalid_path], output_path, KEOGRAM)
 
         assert result is False
         captured = capsys.readouterr()
@@ -319,7 +323,7 @@ class TestCreateKeogram:
         corrupt_path.write_bytes(b"corrupted image data")
 
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram(sample_images, output_path)
+        result = create_keogram(sample_images, output_path, KEOGRAM)
 
         assert result is True
         captured = capsys.readouterr()
@@ -328,7 +332,7 @@ class TestCreateKeogram:
     def test_create_keogram_creates_output_directory(self, sample_images, temp_dir):
         """Test keogram creates output directory if it doesn't exist."""
         output_path = temp_dir / "nested" / "directory" / "keogram.jpg"
-        result = create_keogram(sample_images, output_path)
+        result = create_keogram(sample_images, output_path, KEOGRAM)
 
         assert result is True
         assert output_path.exists()
@@ -341,7 +345,7 @@ class TestCreateKeogramFromImages:
     def test_wrapper_function(self, sample_images, temp_dir):
         """Test the convenience wrapper function."""
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram(sample_images, output_path)
+        result = create_keogram(sample_images, output_path, KEOGRAM)
 
         assert result is True
         assert output_path.exists()
@@ -354,7 +358,7 @@ class TestCreateKeogramFromImages:
         result = create_keogram(
             sample_images,
             output_path,
-            quality=90,
+            JpegCodec({"quality": 90}),
             crop_top_percent=5.0,
             crop_bottom_percent=3.0,
             logger=logger,
@@ -369,7 +373,7 @@ class TestCreateSlitscan:
     def test_create_slitscan_basic(self, sample_images, temp_dir):
         """Test basic slitscan creation."""
         output_path = temp_dir / "slitscan.jpg"
-        result = create_slitscan(sample_images, output_path)
+        result = create_slitscan(sample_images, output_path, KEOGRAM)
 
         assert result is True
         assert output_path.exists()
@@ -387,7 +391,7 @@ class TestCreateSlitscan:
     def test_create_slitscan_empty_list(self, temp_dir, capsys):
         """Test slitscan creation with empty image list."""
         output_path = temp_dir / "slitscan.jpg"
-        result = create_slitscan([], output_path)
+        result = create_slitscan([], output_path, KEOGRAM)
 
         assert result is False
         assert not output_path.exists()
@@ -400,7 +404,7 @@ class TestCreateSlitscan:
         logger = logging.getLogger("test")
 
         with patch.object(logger, "info") as mock_info:
-            result = create_slitscan(sample_images, output_path, logger=logger)
+            result = create_slitscan(sample_images, output_path, KEOGRAM, logger=logger)
 
         assert result is True
         assert mock_info.called
@@ -409,7 +413,7 @@ class TestCreateSlitscan:
         """Test slitscan without cropping."""
         output_path = temp_dir / "slitscan.jpg"
         result = create_slitscan(
-            sample_images, output_path, crop_top_percent=0.0, crop_bottom_percent=0.0
+            sample_images, output_path, KEOGRAM, crop_top_percent=0.0, crop_bottom_percent=0.0
         )
 
         assert result is True
@@ -425,7 +429,7 @@ class TestCreateSlitscan:
     ):
         """Test slitscan handles images with different resolutions."""
         output_path = temp_dir / "slitscan.jpg"
-        result = create_slitscan(sample_images_varying_resolutions, output_path)
+        result = create_slitscan(sample_images_varying_resolutions, output_path, KEOGRAM)
 
         assert result is True
 
@@ -440,7 +444,7 @@ class TestCreateSlitscan:
         invalid_path.write_bytes(b"not an image")
 
         output_path = temp_dir / "slitscan.jpg"
-        result = create_slitscan([invalid_path], output_path)
+        result = create_slitscan([invalid_path], output_path, KEOGRAM)
 
         assert result is False
         captured = capsys.readouterr()
@@ -453,7 +457,7 @@ class TestCreateSlitscan:
         corrupt_path.write_bytes(b"corrupted image data")
 
         output_path = temp_dir / "slitscan.jpg"
-        result = create_slitscan(sample_images, output_path)
+        result = create_slitscan(sample_images, output_path, KEOGRAM)
 
         assert result is True
         captured = capsys.readouterr()
@@ -462,7 +466,7 @@ class TestCreateSlitscan:
     def test_create_slitscan_creates_output_directory(self, sample_images, temp_dir):
         """Test slitscan creates output directory if it doesn't exist."""
         output_path = temp_dir / "nested" / "directory" / "slitscan.jpg"
-        result = create_slitscan(sample_images, output_path)
+        result = create_slitscan(sample_images, output_path, KEOGRAM)
 
         assert result is True
         assert output_path.exists()
@@ -479,7 +483,7 @@ class TestCreateSlitscan:
             images.append(img_path)
 
         output_path = temp_dir / "slitscan.jpg"
-        result = create_slitscan(images, output_path, crop_top_percent=0.0)
+        result = create_slitscan(images, output_path, KEOGRAM, crop_top_percent=0.0)
 
         assert result is True
         with Image.open(output_path) as slitscan:
@@ -498,7 +502,7 @@ class TestCreateSlitscan:
             images.append(img_path)
 
         output_path = temp_dir / "slitscan.jpg"
-        result = create_slitscan(images, output_path, crop_top_percent=0.0)
+        result = create_slitscan(images, output_path, KEOGRAM, crop_top_percent=0.0)
 
         assert result is True
         with Image.open(output_path) as slitscan:
@@ -513,7 +517,7 @@ class TestCreateSlitscanFromImages:
     def test_wrapper_function(self, sample_images, temp_dir):
         """Test the convenience wrapper function."""
         output_path = temp_dir / "slitscan.jpg"
-        result = create_slitscan(sample_images, output_path)
+        result = create_slitscan(sample_images, output_path, KEOGRAM)
 
         assert result is True
         assert output_path.exists()
@@ -526,7 +530,7 @@ class TestCreateSlitscanFromImages:
         result = create_slitscan(
             sample_images,
             output_path,
-            quality=90,
+            JpegCodec({"quality": 90}),
             crop_top_percent=5.0,
             crop_bottom_percent=3.0,
             logger=logger,
@@ -762,7 +766,7 @@ class TestEdgeCases:
         img.save(img_path, "JPEG")
 
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram([img_path], output_path)
+        result = create_keogram([img_path], output_path, KEOGRAM)
 
         assert result is True
         with Image.open(output_path) as keogram:
@@ -778,7 +782,7 @@ class TestEdgeCases:
             images.append(img_path)
 
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram(images, output_path)
+        result = create_keogram(images, output_path, KEOGRAM)
 
         assert result is True
 
@@ -792,7 +796,7 @@ class TestEdgeCases:
             images.append(img_path)
 
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram(images, output_path)
+        result = create_keogram(images, output_path, KEOGRAM)
 
         assert result is True
 
@@ -806,7 +810,7 @@ class TestEdgeCases:
             images.append(img_path)
 
         output_path = temp_dir / "keogram.jpg"
-        result = create_keogram(images, output_path)
+        result = create_keogram(images, output_path, KEOGRAM)
 
         assert result is True
         with Image.open(output_path) as keogram:
@@ -827,7 +831,7 @@ class TestProgressOutput:
             images.append(img_path)
 
         output_path = temp_dir / "keogram.jpg"
-        create_keogram(images, output_path)
+        create_keogram(images, output_path, KEOGRAM)
 
         captured = capsys.readouterr()
         assert "Progress:" in captured.out

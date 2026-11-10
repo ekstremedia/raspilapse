@@ -4,10 +4,12 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import yaml
 
+from raspilapse import codecs
+from raspilapse.codecs import exif as frame_exif
 from raspilapse.config import merge_defaults
 from raspilapse.logging_setup import configure_logging, get_logger
 from raspilapse.overlay import build_overlay
@@ -29,6 +31,10 @@ class CameraConfig:
         self.config_path = config_path
         logger.info(f"Loading configuration from: {config_path}")
         self.config = self._load_config()
+        # Checked here, at startup: an unknown format, a stale output.quality
+        # or a missing plugin must stop the camera before the first frame,
+        # not fail every frame afterwards.
+        self.codec = codecs.output_codec(self.config["output"])
         logger.debug("Configuration loaded successfully")
 
     def _load_config(self) -> Dict:
@@ -66,9 +72,9 @@ class CameraConfig:
         """Get project name."""
         return self.config["output"]["project_name"]
 
-    def get_quality(self) -> int:
-        """Get JPEG quality setting."""
-        return self.config["output"]["quality"]
+    def get_codec(self) -> codecs.FrameCodec:
+        """The frame format selected by output.format, with its tuning."""
+        return self.codec
 
     def should_create_directories(self) -> bool:
         """Check if directories should be auto-created."""
@@ -247,12 +253,6 @@ class ImageCapture:
             # Allow camera to stabilize
             logger.debug("Waiting for camera to stabilize (2 seconds)...")
             time.sleep(2)
-
-            # request.save() encodes at picamera2's own default (90) unless
-            # told otherwise -- without this line output.quality only ever
-            # applied to the overlay's re-encode, and not at all with the
-            # overlay off.
-            self.picam2.options["quality"] = self.config.get_quality()
 
             logger.debug("Camera initialization complete")
 
@@ -554,6 +554,24 @@ class ImageCapture:
             logger.debug(f"Applying controls to camera: {control_map}")
             self.picam2.set_controls(control_map)
 
+    def _camera_model(self) -> Optional[str]:
+        """The sensor's model name ("imx708"), for EXIF; None when unknown."""
+        properties = getattr(self.picam2, "camera_properties", None)
+        model = properties.get("Model") if isinstance(properties, dict) else None
+        return model if isinstance(model, str) else None
+
+    def _write_frame(self, image, output_path: Path, metadata: Dict, timestamp) -> None:
+        """Encode a frame in the format its extension names, EXIF included.
+
+        The codec is chosen by the path, not taken from the config directly,
+        so a custom output path (``capture(output_path=...)``) is written in
+        the format its own extension says -- tuned from the same output
+        section.
+        """
+        codec = codecs.for_path(output_path, self.config.config["output"])
+        exif = frame_exif.build(metadata, timestamp, self._camera_model())
+        codec.save(image, str(output_path), exif)
+
     def _resolve_output_path(self, timestamp, output_path: Optional[str] = None) -> Path:
         """Where this capture's image belongs, directories created.
 
@@ -582,8 +600,8 @@ class ImageCapture:
             counter=f"{self._counter:04d}",
             timestamp=timestamp.isoformat(),
         )
-        # Support strftime formatting
-        filename = timestamp.strftime(filename)
+        # Support strftime formatting; the format supplies the extension.
+        filename = timestamp.strftime(filename) + self.config.get_codec().suffix
         output_path = output_dir / filename
         if output_path.exists():
             # Only reachable when local wall time repeats (the DST
@@ -613,7 +631,7 @@ class ImageCapture:
             mode: Optional light mode (day/night/transition) for overlay display
             extra_metadata: Optional dict of extra metadata to merge (e.g., calculated lux)
             save_dng: Also write the frame's raw data as ``<image>.dng.tmp``
-                beside the JPEG. Requires initialize_camera(enable_raw=True).
+                beside the frame. Requires initialize_camera(enable_raw=True).
                 The dynamic-range post-process develops or promotes it; the
                 .tmp suffix means a crash leaves nothing that looks like a
                 finished negative.
@@ -646,16 +664,18 @@ class ImageCapture:
                 # Compute brightness from lores BEFORE saving (no overlay contamination)
                 self.last_brightness_metrics = self._compute_brightness_from_lores(request)
 
-                # Save the image
-                request.save("main", str(output_path))
+                # Get metadata from request (always, for overlay and EXIF)
+                metadata_dict = request.get_metadata()
+
+                # Encoded here rather than by request.save(): picamera2 only
+                # passes a quality through, so per-format tuning (JPEG XL's
+                # effort, JPEG's subsampling) would never reach the encoder.
+                self._write_frame(request.make_image("main"), output_path, metadata_dict, timestamp)
                 logger.info(f"Image captured successfully: {output_path}")
 
                 if save_dng:
                     request.save_dng(f"{output_path}.dng.tmp")
                     logger.debug(f"Raw data saved: {output_path}.dng.tmp")
-
-                # Get metadata from request (always, for overlay)
-                metadata_dict = request.get_metadata()
 
                 # Merge extra metadata (e.g., calculated lux) - overrides camera values
                 if extra_metadata:
@@ -724,7 +744,7 @@ class ImageCapture:
     def capture_bracketed(
         self,
         bracket_exposures_us: list,
-        fuse_fn: Callable[[list], bytes],
+        fuse_fn: Callable[[list], Any],
         mode: Optional[str] = None,
         extra_metadata: Optional[Dict] = None,
         settle_frames_max: int = 10,
@@ -737,13 +757,14 @@ class ImageCapture:
         decided, untouched by fusion. The remaining brackets only differ in
         ExposureTime; gain is never changed mid-bracket.
 
-        fuse_fn turns the list of frame arrays into encoded JPEG bytes.
-        Injected so this module needs neither cv2 nor Pillow -- the caller
-        (the dynrange package) owns the pixel mathematics.
+        fuse_fn turns the list of frame arrays into one array in the same
+        channel order (picamera2's RGB888 is B, G, R in memory). Injected so
+        this module needs no cv2 -- the caller (the dynrange package) owns
+        the pixel mathematics; encoding stays here, like every other frame.
 
         Args:
             bracket_exposures_us: Exposure times in microseconds, base first
-            fuse_fn: Callable merging the captured arrays into JPEG bytes
+            fuse_fn: Callable merging the captured arrays into one array
             mode: Light mode, passed through to post-processing
             extra_metadata: Extra keys merged into the metadata sidecar
             settle_frames_max: Discard cap per bracket while controls land
@@ -784,14 +805,19 @@ class ImageCapture:
                 frames.append(frame)
                 self.last_settle_frames.append(discarded)
 
-            encoded = fuse_fn(frames)
+            fused = fuse_fn(frames)
             bracket_count = len(frames)
             # Release ~25 MB per 4K bracket before post-processing decodes
-            # the JPEG on top of them.
+            # the frame on top of them.
             del frames
 
-            with open(output_path, "wb") as f:
-                f.write(encoded)
+            import numpy as np
+            from PIL import Image
+
+            # B, G, R (and X) in memory; Pillow wants R, G, B.
+            image = Image.fromarray(np.ascontiguousarray(fused[..., 2::-1]))
+            del fused
+            self._write_frame(image, output_path, metadata_dict, timestamp)
             logger.info(
                 f"Image captured successfully: {output_path} ({bracket_count} brackets fused)"
             )
@@ -840,7 +866,7 @@ class ImageCapture:
         metadata["capture_timestamp"] = timestamp.isoformat()
         metadata["image_path"] = str(image_path)
         metadata["resolution"] = self.config.get_resolution()
-        metadata["quality"] = self.config.get_quality()
+        metadata["image_format"] = self.config.get_codec().describe()
 
         # Generate metadata filename
         metadata_filename = self.config.get_metadata_pattern().format(

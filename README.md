@@ -61,6 +61,9 @@ pip3 install --break-system-packages 'astral>=3.2'
 
 sudo apt install -y python3-requests python3-requests-toolbelt  # video upload
 sudo apt install -y python3-matplotlib                          # scripts/db_graphs.py
+
+# JPEG XL frames (output.format: jxl). Not packaged by apt.
+pip3 install --break-system-packages pillow-jxl-plugin
 ```
 
 Check everything is in place before installing any services:
@@ -136,6 +139,7 @@ The settings most worth understanding:
 |---------|----------------|
 | `location.latitude` / `longitude` | Recorded with each frame and plotted by the graph scripts. Nothing decides from it. |
 | `output.directory` | Where frames land. Needs to exist and be writable. |
+| `output.format` | `jpeg` or `jxl` (JPEG XL), each tuned in its own block (`output.jpeg`, `output.jxl`). Frames keep their EXIF through the overlay. |
 | `adaptive_timelapse.interval` | Seconds between frames. 30 is a good default. |
 | `adaptive_timelapse.brightness_target.base` | What the exposure loop aims for, 0-255 (an overcast boost is added on top). Raise for brighter frames. |
 | `adaptive_timelapse.night_mode.max_exposure_time` | The dark end of the ladder. 20s suits aurora; lower it if you want shorter nights. |

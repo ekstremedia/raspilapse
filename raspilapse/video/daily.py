@@ -21,6 +21,7 @@ from pathlib import Path
 
 import yaml
 
+from raspilapse import codecs
 from raspilapse.config import PROJECT_ROOT, load_config
 from raspilapse.logging_setup import configure_logging, get_logger
 from raspilapse.storage.upload import UploadService
@@ -42,14 +43,17 @@ def _find_dated_file(video_dir: Path, patterns: list, date_str: str) -> Path:
     Returns:
         The matching path, or None
     """
-    for pattern in patterns:
-        matches = [m for m in video_dir.glob(pattern) if date_str in m.name]
+    for tier in patterns:
+        # A tier is one glob, or several equally specific ones -- the same
+        # name in each image format -- whose matches compete on mtime.
+        globs = [tier] if isinstance(tier, str) else tier
+        matches = [m for g in globs for m in video_dir.glob(g) if date_str in m.name]
         if matches:
             return max(matches, key=lambda p: p.stat().st_mtime)
     return None
 
 
-def _dated_patterns(prefix: str, project_name: str, date_str: str, suffix: str) -> list:
+def _dated_patterns(prefix: str, project_name: str, date_str: str, suffixes) -> list:
     """Build the glob list for a prefixed, date-stamped file.
 
     Anchored on prefix, project and date. `**/` also matches the directory
@@ -58,11 +62,17 @@ def _dated_patterns(prefix: str, project_name: str, date_str: str, suffix: str) 
     `keogram*2026-08-08*` happily matches *yesterday's*
     `keogram_..._2026-08-07_0500_to_2026-08-08_0500.jpg` — and a night where
     the keogram failed would silently upload the previous day's file.
+
+    ``suffixes`` is one extension or several; with several, each tier holds
+    the same glob once per extension, so a keogram re-rendered in another
+    format after a format change still wins on mtime.
     """
+    if isinstance(suffixes, str):
+        suffixes = (suffixes,)
     stem = f"{prefix}_{project_name}_{date_str}" if prefix else f"{project_name}_{date_str}"
     return [
-        f"**/{stem}_*{suffix}",
-        f"**/{stem}*{suffix}",
+        [f"**/{stem}_*{suffix}" for suffix in suffixes],
+        [f"**/{stem}*{suffix}" for suffix in suffixes],
     ]
 
 
@@ -79,7 +89,9 @@ def find_keogram_file(video_dir: Path, project_name: str, date: datetime.date) -
     """Find the generated keogram file for a given date."""
     date_str = date.strftime("%Y-%m-%d")
     return _find_dated_file(
-        video_dir, _dated_patterns("keogram", project_name, date_str, ".jpg"), date_str
+        video_dir,
+        _dated_patterns("keogram", project_name, date_str, codecs.FRAME_SUFFIXES),
+        date_str,
     )
 
 
@@ -87,7 +99,9 @@ def find_slitscan_file(video_dir: Path, project_name: str, date: datetime.date) 
     """Find the generated slitscan file for a given date."""
     date_str = date.strftime("%Y-%m-%d")
     return _find_dated_file(
-        video_dir, _dated_patterns("slitscan", project_name, date_str, ".jpg"), date_str
+        video_dir,
+        _dated_patterns("slitscan", project_name, date_str, codecs.FRAME_SUFFIXES),
+        date_str,
     )
 
 

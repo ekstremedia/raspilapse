@@ -49,3 +49,11 @@ matplotlib>=3.5.0
 # Installed in CI so the pixel paths are tested there, not just on cameras.
 opencv-python-headless>=4.6.0
 rawpy>=0.21.0
+
+# output.format: jxl (JPEG XL frames). apt does not ship it; on a Pi:
+#     pip3 install --break-system-packages pillow-jxl-plugin
+# 1.3.0 is the first release with lossless_jpeg and EXIF on save. Newer
+# releases publish no Python 3.9 wheel, and pip would rather build the
+# newest sdist (a Rust toolchain) than take an older wheel -- so CI's 3.9
+# job goes without, and its JPEG XL tests skip.
+pillow-jxl-plugin>=1.3.0; python_version >= "3.10"

@@ -38,6 +38,18 @@ OPTIONAL = {
         "raspilapse.video.timelapse",
         "raspilapse.video.daily",
     ],
+    # JPEG XL: only output.format: jxl needs it, and only when a frame is
+    # written or read. A JPEG camera must start without it.
+    "pillow_jxl": [
+        "raspilapse.codecs",
+        "raspilapse.camera.capture",
+        "raspilapse.daemon",
+        "raspilapse.overlay.render",
+        "raspilapse.dynrange",
+        "raspilapse.video.keogram",
+        "raspilapse.video.timelapse",
+        "raspilapse.cli.status",
+    ],
 }
 
 
